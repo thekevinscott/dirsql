@@ -1288,20 +1288,11 @@ impl DirSQL {
         // (and that pass the racy-window check) are trusted instead of
         // re-parsed.
         let (scanned_files, deleted) = match &persist_ctx {
-            None => {
-                let files = scanned
-                    .into_iter()
-                    .map(|found| ScannedFile {
-                        abs_path: found.path,
-                        rel_path: found.rel_path,
-                        table_name: found.table_name,
-                        stat: None,
-                        trusted: false,
-                    })
-                    .collect();
-                (files, Vec::new())
+            None => (Scanned::Found(scanned), Vec::new()),
+            Some(ctx) => {
+                let (files, deleted) = reconcile_scan(scanned, ctx, &RealFs)?;
+                (Scanned::Files(files), deleted)
             }
-            Some(ctx) => reconcile_scan(scanned, ctx, &RealFs)?,
         };
 
         Ok(PreparedBuild {
@@ -1482,17 +1473,22 @@ impl DirSQL {
         let mut batch_files: HashMap<String, Vec<String>> = HashMap::new();
 
         // Grouping walks every scanned file, so it runs beside the early
-        // hooks' inserts instead of ahead of them.
+        // hooks' inserts instead of ahead of them, and settles the early
+        // tables' file lists there too.
+        let early_tables: HashSet<String> = early.keys().cloned().collect();
         let (grouped, streamed) = std::thread::scope(|scope| {
-            let grouping = scope.spawn(|| group_scanned(scanned_files, &on_file_map));
+            let grouping = scope.spawn(|| {
+                group_scanned(scanned_files.into_files(), &on_file_map)
+                    .map(|(per_file, batches)| (per_file, split_streamed(batches, &early_tables)))
+            });
             let streamed = stream_early(&db, early, &strict_map);
             (
                 grouping.join().expect("grouping scanned files panicked"),
                 streamed,
             )
         });
-        let streamed = streamed?;
-        let (per_file, batches) = grouped?;
+        streamed?;
+        let (per_file, (batches, streamed)) = grouped?;
 
         // The phase a user actually waits on: one `on_file` round trip per
         // file or per table, plus whatever the table's DDL triggers on insert.
@@ -1501,8 +1497,15 @@ impl DirSQL {
             + batches
                 .iter()
                 .map(|(_, _, files)| files.len())
-                .sum::<usize>()) as u64;
+                .sum::<usize>()
+            + streamed.iter().map(|(_, rel)| rel.len()).sum::<usize>())
+            as u64;
         let mut done: u64 = 0;
+        for (table_name, rel_paths) in streamed {
+            progress.update(done, Some(total_files));
+            done += rel_paths.len() as u64;
+            batch_files.insert(table_name, rel_paths);
+        }
         for (
             ScannedFile {
                 rel_path,
@@ -1580,7 +1583,7 @@ impl DirSQL {
             let current = persist_ready.as_ref().is_some_and(|(deleted, _, _)| {
                 files.iter().all(|f| f.trusted) && !deleted.iter().any(|(_, t)| *t == table_name)
             });
-            if !current && !streamed.contains(&table_name) {
+            if !current {
                 let table_root = anchors.of(&table_name);
                 let production = start_hook(hook, abs_paths.into_iter());
                 let outcome = stream_table_rows(&db, &table_name, production, strict)
@@ -2004,6 +2007,33 @@ pub struct ScannedFile {
     pub trusted: bool,
 }
 
+/// The files the startup scan found: as the walk found them, or already
+/// reconciled against the persistent cache.
+enum Scanned {
+    Found(Vec<Found>),
+    Files(Vec<ScannedFile>),
+}
+
+impl Scanned {
+    /// Every file as a [`ScannedFile`]. A fresh walk's are made here rather
+    /// than in prepare, so the copy runs off the thread that inserts rows.
+    fn into_files(self) -> Vec<ScannedFile> {
+        match self {
+            Self::Found(found) => found
+                .into_iter()
+                .map(|found| ScannedFile {
+                    abs_path: found.path,
+                    rel_path: found.rel_path,
+                    table_name: found.table_name,
+                    stat: None,
+                    trusted: false,
+                })
+                .collect(),
+            Self::Files(files) => files,
+        }
+    }
+}
+
 /// Intermediate state produced by [`DirSQL::prepare_resolved`] and consumed
 /// by [`DirSQL::finish_build`]. Opaque on purpose; fields are only visible
 /// to the in-workspace bindings.
@@ -2020,7 +2050,7 @@ pub struct PreparedBuild {
     /// The configured skip rules, carried through so path-table scans apply
     /// the same ones declared tables do.
     ignore: Vec<String>,
-    scanned_files: Vec<ScannedFile>,
+    scanned_files: Scanned,
     /// Per-table hooks already running over the paths the scan found, by table.
     early: HashMap<String, Production>,
     persist: Option<PreparedPersist>,
@@ -2437,9 +2467,10 @@ fn collect_table_rows(
 
 /// Replace a per-table hook's rows under [`BATCH_OWNER`], storing each chunk
 /// the hook emits while the hook, on its own thread, goes on producing the
-/// next. The caller's open transaction keeps a failure from being seen: the
-/// outer `Err` is SQLite's, the inner one the hook's or a row's. A hook
-/// failure outranks a row that failed to shape.
+/// next. Chunks are shaped on a thread of their own, in order, so shaping one
+/// overlaps inserting the last. The caller's open transaction keeps a failure
+/// from being seen: the outer `Err` is SQLite's, the inner one the hook's or a
+/// row's. A hook failure outranks a row that failed to shape.
 fn stream_table_rows(
     db: &Db,
     table: &str,
@@ -2447,17 +2478,32 @@ fn stream_table_rows(
     strict: bool,
 ) -> db::Result<std::result::Result<(), String>> {
     db.delete_rows_by_file(table, BATCH_OWNER)?;
-    let mut shaped = Ok(());
-    for chunk in production.chunks {
-        if shaped.is_err() {
-            continue;
+    let columns = db.get_table_columns(table)?;
+    let Production { chunks, handle } = production;
+    let (shaped_tx, shaped_rx) = std::sync::mpsc::channel();
+    let shaper = std::thread::spawn({
+        let table = table.to_string();
+        move || {
+            for chunk in chunks {
+                let shaped = db::shape_json_rows(&table, columns.clone(), chunk, strict);
+                if shaped_tx.send(shaped).is_err() {
+                    return;
+                }
+            }
         }
-        match db.shape_rows(table, chunk, strict) {
+    });
+    let mut shaped = Ok(());
+    for rows in shaped_rx {
+        match rows {
             Ok(rows) => db.insert_rows(table, &rows, BATCH_OWNER)?,
-            Err(e) => shaped = Err(e.to_string()),
+            Err(e) => {
+                shaped = Err(e.to_string());
+                break;
+            }
         }
     }
-    let produced = production.handle.join().expect("per-table hook panicked");
+    shaper.join().expect("shaping a hook's rows panicked");
+    let produced = handle.join().expect("per-table hook panicked");
     Ok(produced.and(shaped))
 }
 
@@ -2591,14 +2637,12 @@ fn group_scanned(
     Ok((per_file, batches))
 }
 
-/// Insert the rows of every hook started before the scan, returning the
-/// tables streamed.
+/// Insert the rows of every hook started before the scan.
 fn stream_early(
     db: &Db,
     early: HashMap<String, Production>,
     strict_map: &HashMap<String, bool>,
-) -> Result<HashSet<String>> {
-    let mut streamed = HashSet::new();
+) -> Result<()> {
     for (table_name, production) in early {
         let strict = *strict_map.get(&table_name).unwrap_or(&false);
         if let Err(message) =
@@ -2609,9 +2653,30 @@ fn stream_early(
                 message,
             });
         }
-        streamed.insert(table_name);
     }
-    Ok(streamed)
+    Ok(())
+}
+
+/// Split off the batches of tables whose hooks already ran, keeping only
+/// each one's relative paths in scan order.
+#[allow(clippy::type_complexity)]
+fn split_streamed(
+    batches: Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)>,
+    streamed: &HashSet<String>,
+) -> (
+    Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)>,
+    Vec<(String, Vec<String>)>,
+) {
+    let mut rest = Vec::new();
+    let mut done = Vec::new();
+    for (table_name, hook, mut files) in batches {
+        if streamed.contains(&table_name) {
+            done.push((table_name, batch_paths(&mut files, false).0));
+        } else {
+            rest.push((table_name, hook, files));
+        }
+    }
+    (rest, done)
 }
 
 fn batch_paths(files: &mut [ScannedFile], keep_rel: bool) -> (Vec<String>, Vec<PathBuf>) {
@@ -3154,7 +3219,7 @@ mod internal_tests {
             0,
             "zero tables can match nothing, so the startup walk is pure waste"
         );
-        assert!(prepared.scanned_files.is_empty());
+        assert!(prepared.scanned_files.into_files().is_empty());
     }
 
     /// The skip is narrow: one declared table still walks, and prepare still
@@ -3175,10 +3240,11 @@ mod internal_tests {
         .unwrap();
 
         assert_eq!(scan.calls.get(), 1);
-        let found: Vec<&str> = prepared
+        let found: Vec<String> = prepared
             .scanned_files
-            .iter()
-            .map(|f| f.rel_path.as_str())
+            .into_files()
+            .into_iter()
+            .map(|f| f.rel_path)
             .collect();
         assert_eq!(found, vec!["a.txt"]);
     }
@@ -3295,13 +3361,13 @@ mod internal_tests {
             functions: Vec::new(),
             groups: Vec::new(),
             anchors: TableAnchors::at_root(dir.path()),
-            scanned_files: vec![ScannedFile {
+            scanned_files: Scanned::Files(vec![ScannedFile {
                 abs_path: PathBuf::new(),
                 rel_path: "ghost.txt".into(),
                 table_name: "ghost".into(),
                 stat: None,
                 trusted: false,
-            }],
+            }]),
             early: HashMap::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
@@ -5367,13 +5433,15 @@ mod internal_tests {
         scanned_files: Vec<ScannedFile>,
         persist: Option<PreparedPersist>,
     ) -> PreparedBuild {
-        let scanned_files = scanned_files
-            .into_iter()
-            .map(|mut file| {
-                file.abs_path = root.join(&file.rel_path);
-                file
-            })
-            .collect();
+        let scanned_files = Scanned::Files(
+            scanned_files
+                .into_iter()
+                .map(|mut file| {
+                    file.abs_path = root.join(&file.rel_path);
+                    file
+                })
+                .collect(),
+        );
         PreparedBuild {
             ignore: Vec::new(),
             root: root.to_path_buf(),
@@ -5705,6 +5773,48 @@ mod internal_tests {
             "dirsql: indexing 1/4 files (25%)",
             "dirsql: indexing 3/4 files (75%)",
             "dirsql: indexed 4 files in",
+        ] {
+            assert!(text.contains(line), "missing {line:?} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn finish_build_counts_the_files_of_a_hook_started_before_the_scan_toward_the_ingest_total() {
+        let dir = TempDir::new().unwrap();
+        let out = Captured::default();
+        let progress = Progress::new(
+            "indexing",
+            "indexed",
+            "files",
+            Box::new(out.clone()),
+            Box::new(progress::SystemClock),
+            progress::Mode::Always,
+            false,
+        );
+        let notes = Table::new("notes", "CREATE TABLE notes (name TEXT)", "*.md", |_| {
+            Vec::new()
+        });
+        let (items, _) = recording_per_table("items", "*.txt");
+        let (feeds, early) = start_per_table_hooks(std::slice::from_ref(&items));
+        for name in ["a.txt", "b.txt"] {
+            feeds["items"].send(dir.path().join(name)).unwrap();
+        }
+        drop(feeds);
+        let scanned = vec![
+            scanned("a.txt", "items", false),
+            scanned("b.txt", "items", false),
+            scanned("n.md", "notes", false),
+        ];
+        let mut prepared = prepared_build(dir.path(), vec![notes, items], scanned, None);
+        prepared.early = early;
+
+        DirSQL::finish_build_with_fs(prepared, Arc::new(FakeFs::default()), progress).unwrap();
+
+        let text = out.text();
+        for line in [
+            "dirsql: indexing 0/3 files (0%)",
+            "dirsql: indexing 2/3 files (66%)",
+            "dirsql: indexed 3 files in",
         ] {
             assert!(text.contains(line), "missing {line:?} in {text:?}");
         }

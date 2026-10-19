@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792159274,
+  "exit_code": 0,
+  "commit": "9cdbfeabf2b256d17a51bdc00b161efe438f5dd5",
+  "branch": "bot/1480-matcher-speed-1015"
+}

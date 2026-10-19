@@ -18,6 +18,7 @@ import subprocess
 import pytest
 
 from .speed_of_light import (
+    FASTEST,
     Native,
     agreed_rows,
     assert_speed_of_light,
@@ -103,7 +104,7 @@ def describe_gitignore_glob_speed_of_light():
 
     def it_matches_native_files_within_the_bar(root):
         startup = startup_seconds()
-        natives = shell_natives(root, NATIVE)
+        natives = shell_natives(root, NATIVE, bar=FASTEST)
         n = grow_until_native_takes_a_second(
             lambda lo, hi: build_tree(root, lo, hi),
             baseline(natives),

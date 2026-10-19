@@ -125,6 +125,7 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         root,
         start,
         walker,
+        &|_| true,
         &|_| false,
         &|rel_path, parent| parent.join(rel_path.file_name().unwrap_or_default()),
         &mut |dir| dirs.push(dir),
@@ -162,6 +163,7 @@ fn scan_below(
         root,
         start,
         walker,
+        &|_| true,
         &|rel_path| !matcher.is_ignored(rel_path),
         // Matching and the relative path are made on the worker that found
         // the file: the calling thread hands out every file in turn, so any
@@ -266,6 +268,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         root,
         root,
         walker,
+        &|name| glob.may_match_name(name),
         &|rel_path| is_wanted(glob, ignore, rel_path),
         &|rel_path, _| row(rel_path),
         visit,
@@ -303,6 +306,8 @@ pub struct PathGlob {
     components: Vec<Component>,
     /// Where each word's components begin.
     starts: Vec<usize>,
+    /// Where each word's closing `End` sits.
+    ends: Vec<usize>,
     /// Whether any word spells a `.` or `..` component, which the walk has to
     /// enter itself: a directory listing never names them.
     spells_relative: bool,
@@ -359,6 +364,18 @@ impl PathGlob {
                 .map(|c| c.as_os_str())
                 .filter(|name| is_dot_named(name))
                 .all(|name| self.spells_dot_name(name))
+    }
+
+    /// Whether a file named `name` may match: false when no word could match
+    /// it, since only `**` crosses a `/` and so a word's last component, unless
+    /// it is `**`, has to match the name alone.
+    pub(crate) fn may_match_name(&self, name: &OsStr) -> bool {
+        self.ends
+            .iter()
+            .any(|&end| match &self.components[end - 1] {
+                Component::Name(p) | Component::DotName(p) => p.is_match(Path::new(name)),
+                Component::AnyDepth | Component::End => true,
+            })
     }
 
     fn has_components(&self) -> bool {
@@ -464,10 +481,12 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         .collect();
     let mut components = Vec::new();
     let mut starts = Vec::new();
+    let mut ends = Vec::new();
     for word in &words {
         let word_components = compile_components(word)?;
         starts.push(components.len());
         components.extend(word_components);
+        ends.push(components.len());
         components.push(Component::End);
     }
     Ok(PathGlob {
@@ -475,6 +494,7 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         spelled_dot_names,
         components,
         starts,
+        ends,
         spells_relative,
         named,
     })
@@ -546,6 +566,7 @@ fn walk<L: Send>(
     root: &Path,
     start: &Path,
     walker: Walk<'_>,
+    keep_name: &(dyn Fn(&OsStr) -> bool + Sync),
     keep: &(dyn Fn(&Path) -> bool + Sync),
     leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
     visit: &mut dyn FnMut(L),
@@ -566,7 +587,7 @@ fn walk<L: Send>(
     };
     walk_in_order(
         Box::new(place),
-        &|place: Box<Place<'_>>| (*place).explore(keep, leaf),
+        &|place: Box<Place<'_>>| (*place).explore(keep_name, keep, leaf),
         visit,
     );
 }
@@ -602,26 +623,29 @@ const PART_ENTRIES: usize = 8192;
 impl<'a> Place<'a> {
     /// The directory's entries in walk order: each file `keep` takes, made
     /// into a `leaf` with the directory it sits in, and each directory to
-    /// enter. A directory wider than [`PART_ENTRIES`] yields its parts to
-    /// enter instead, and a part yields what its own entries make.
+    /// enter. A regular file whose name `keep_name` rejects is dropped before
+    /// its path is built. A directory wider than [`PART_ENTRIES`] yields its
+    /// parts to enter instead, and a part yields what its own entries make.
     fn explore<L: Send>(
         mut self,
+        keep_name: &(dyn Fn(&OsStr) -> bool + Sync),
         keep: &(dyn Fn(&Path) -> bool + Sync),
         leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
     ) -> Vec<Step<Box<Place<'a>>, L>> {
         if let Some(Part { listing, range }) = self.part.take() {
-            return self.judge(&listing, &listing.entries()[range], keep, leaf);
+            return self.judge(&listing, &listing.entries()[range], keep_name, keep, leaf);
         }
-        if self.walk.gitignore && holds_git(&self.dir) {
+        let listing = Listing::read(&self.dir);
+        if self.walk.gitignore && listing.holds(OsStr::new(".git")) && holds_git(&self.dir) {
             self.walk.in_repo = true;
             self.walk.frames.clear();
         }
         if self.walk.in_repo
+            && listing.holds(OsStr::new(".gitignore"))
             && let Some(frame) = Frame::load(&self.dir)
         {
             self.walk.frames.push(Arc::new(frame));
         }
-        let listing = Listing::read(&self.dir);
         let mut steps = self.relative();
         let len = listing.entries().len();
         if len > PART_ENTRIES {
@@ -637,7 +661,7 @@ impl<'a> Place<'a> {
             }));
             return steps;
         }
-        let judged = self.judge(&listing, listing.entries(), keep, leaf);
+        let judged = self.judge(&listing, listing.entries(), keep_name, keep, leaf);
         if steps.is_empty() {
             return judged;
         }
@@ -666,12 +690,13 @@ impl<'a> Place<'a> {
     }
 
     /// What `entries` of the directory's `listing` make, in order: with
-    /// `dirs`, each directory taken as a leaf first; then each file `keep`
-    /// takes, as a `leaf`, and each directory to enter.
+    /// `dirs`, each directory taken as a leaf first; then each file `keep_name`
+    /// and `keep` take, as a `leaf`, and each directory to enter.
     fn judge<L>(
         &self,
         listing: &Listing,
         entries: &[Listed],
+        keep_name: &(dyn Fn(&OsStr) -> bool + Sync),
         keep: &(dyn Fn(&Path) -> bool + Sync),
         leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
     ) -> Vec<Step<Box<Place<'a>>, L>> {
@@ -686,7 +711,11 @@ impl<'a> Place<'a> {
         let taken: Vec<_> = entries
             .iter()
             .map(|listed| {
-                walk.take(dir, listing.name(listed), listed.seen, rel, states, *linked)
+                let name = listing.name(listed);
+                if listed.seen == Seen::File && !keep_name(name) {
+                    return None;
+                }
+                walk.take(dir, name, listed.seen, rel, states, *linked)
                     .and_then(|taken| match taken {
                         Taken::File(child) => keep(&child).then(|| Taken::File(leaf(child, dir))),
                         Taken::Dir {
@@ -1216,7 +1245,7 @@ mod tests {
 
     fn explored_dirs(place: Place<'_>) -> Vec<Place<'_>> {
         place
-            .explore(&|_| true, &|_, _| ())
+            .explore(&|_| true, &|_| true, &|_, _| ())
             .into_iter()
             .filter_map(|step| match step {
                 Step::Dir(child) => Some(*child),
@@ -1248,6 +1277,67 @@ mod tests {
             scan_dirs(root.path(), root.path(), &ignore),
             vec![root.path().to_path_buf()]
         );
+    }
+
+    #[test]
+    fn explore_drops_a_file_whose_name_is_rejected_before_judging_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a.md"), "").unwrap();
+        fs::write(root.path().join("b.md"), "").unwrap();
+        fs::create_dir(root.path().join("d")).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, None, Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            states: Vec::new(),
+            linked: false,
+            part: None,
+        };
+        let judged = std::sync::Mutex::new(Vec::new());
+        let steps = top.explore(
+            &|name| name != OsStr::new("b.md"),
+            &|rel| {
+                judged.lock().unwrap().push(rel.to_path_buf());
+                true
+            },
+            &|rel, _| rel,
+        );
+        let leaves: Vec<PathBuf> = steps
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Leaf(rel) => Some(rel),
+                Step::Dir(_) => None,
+            })
+            .collect();
+        assert_eq!(leaves, vec![PathBuf::from("a.md")]);
+        assert_eq!(judged.into_inner().unwrap(), vec![PathBuf::from("a.md")]);
+    }
+
+    #[test]
+    fn explore_outside_gitignore_mode_ignores_a_repo_it_enters() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::write(root.path().join(".gitignore"), "x.md\n").unwrap();
+        fs::write(root.path().join("x.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, None, Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            states: Vec::new(),
+            linked: false,
+            part: None,
+        };
+        let leaves: Vec<PathBuf> = top
+            .explore(&|_| true, &|_| true, &|rel, _| rel)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Leaf(rel) => Some(rel),
+                Step::Dir(_) => None,
+            })
+            .collect();
+        assert!(leaves.contains(&PathBuf::from("x.md")), "{leaves:?}");
     }
 
     #[test]
@@ -1288,7 +1378,7 @@ mod tests {
 
     fn explored_leaves(place: Place<'_>) -> Vec<PathBuf> {
         place
-            .explore(&|_| true, &|child, _| child)
+            .explore(&|_| true, &|_| true, &|child, _| child)
             .into_iter()
             .filter_map(|step| match step {
                 Step::Leaf(child) => Some(child),
@@ -1306,17 +1396,6 @@ mod tests {
             linked: false,
             part: None,
         }
-    }
-
-    #[test]
-    fn explore_keeps_what_a_repo_s_gitignore_names_when_gitignore_is_off() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join(".git")).unwrap();
-        fs::write(root.path().join(".gitignore"), "x.md\n").unwrap();
-        fs::File::create(root.path().join("x.md")).unwrap();
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let leaves = explored_leaves(place_at(walk_with(&ignore, None, Vec::new()), root.path()));
-        assert!(leaves.contains(&PathBuf::from("x.md")), "{leaves:?}");
     }
 
     #[test]
@@ -1726,6 +1805,21 @@ mod tests {
         names.iter().fold(glob.start(), |states, (name, kind)| {
             glob.step(&states, OsStr::new(name), *kind)
         })
+    }
+
+    #[test]
+    fn a_name_may_match_only_when_some_word_ends_in_a_component_matching_it() {
+        let glob = compile_glob("./**/{a,b}*.md").unwrap();
+        assert!(glob.may_match_name(OsStr::new("a1.md")));
+        assert!(glob.may_match_name(OsStr::new("b1.md")));
+        assert!(!glob.may_match_name(OsStr::new("c1.md")));
+        assert!(!glob.may_match_name(OsStr::new("a1.txt")));
+    }
+
+    #[test]
+    fn a_word_ending_in_a_double_star_may_match_any_name() {
+        let glob = compile_glob("{docs/**,*.md}").unwrap();
+        assert!(glob.may_match_name(OsStr::new("a.txt")));
     }
 
     #[test]
