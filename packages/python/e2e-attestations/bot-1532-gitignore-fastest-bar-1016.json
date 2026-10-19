@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py -x -q -s",
+  "ran_at": 1792155745,
+  "exit_code": 0,
+  "commit": "fb06f3cf1239d66c0cc2fff6a297448cbd12365a",
+  "branch": "bot/1532-gitignore-fastest-bar-1016"
+}
