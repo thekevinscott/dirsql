@@ -100,6 +100,13 @@ impl Listing {
         });
     }
 
+    /// Whether an entry is named `name`; the listing must be sorted.
+    pub(crate) fn holds(&self, name: &OsStr) -> bool {
+        self.entries
+            .binary_search_by(|listed| self.name(listed).cmp(name))
+            .is_ok()
+    }
+
     pub(crate) fn name(&self, listed: &Listed) -> &OsStr {
         self.names.get(listed.start, listed.end)
     }
@@ -138,46 +145,17 @@ fn open_dir(dir: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
     rustix::fs::open(dir, flags, Mode::empty())
 }
 
-#[cfg(target_os = "linux")]
-thread_local! {
-    /// Where a walk thread reads its directories' entries: big enough that a
-    /// directory of millions takes few `getdents` calls, and reused so a deep
-    /// tree of small directories pays for it once.
-    static ENTRY_BUFFER: std::cell::RefCell<Vec<u8>> =
-        std::cell::RefCell::new(Vec::with_capacity(1 << 20));
-}
-
-/// Reads entries straight out of the kernel's buffer, where `Dir` would copy
-/// each name into its own allocation.
-#[cfg(target_os = "linux")]
+/// Uses `Dir`, not `RawDir`: on a deep tree of small directories the walk ran
+/// about twice as slow reading through `RawDir`, with no gain on a flat
+/// directory of a million entries.
+#[cfg(unix)]
 fn read_into(dir: &Path, listing: &mut Listing) {
-    use rustix::fs::RawDir;
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(fd) = open_dir(dir) else {
-        return;
-    };
-    ENTRY_BUFFER.with_borrow_mut(|buffer| {
-        let mut entries = RawDir::new(&fd, buffer.spare_capacity_mut());
-        while let Some(Ok(entry)) = entries.next() {
-            let name = entry.file_name().to_bytes();
-            if name == b"." || name == b".." {
-                continue;
-            }
-            listing.push(OsStr::from_bytes(name), seen(entry.file_type()));
-        }
-    });
-}
-
-/// `read_into` for Unix systems without `RawDir`. Built under test too, so the
-/// Linux unit run covers it.
-#[cfg(all(unix, any(test, not(target_os = "linux"))))]
-fn read_dir_with_copies_into(dir: &Path, listing: &mut Listing) {
     use rustix::fs::Dir;
     use std::os::unix::ffi::OsStrExt;
     let Ok(fd) = open_dir(dir) else {
         return;
     };
-    let Ok(mut entries) = Dir::read_from(&fd) else {
+    let Ok(mut entries) = Dir::new(fd) else {
         return;
     };
     while let Some(Ok(entry)) = entries.read() {
@@ -214,8 +192,6 @@ fn seen_flags(symlink: bool, dir: bool, file: bool) -> Seen {
 
 #[cfg(not(unix))]
 use read_dir_into as read_into;
-#[cfg(all(unix, not(target_os = "linux")))]
-use read_dir_with_copies_into as read_into;
 
 /// A name's first eight bytes as a big-endian word, which orders names as
 /// their bytes do as far as those bytes go.
@@ -269,6 +245,19 @@ mod tests {
         listing.push(OsStr::new("first"), Seen::File);
         listing.push(OsStr::new("second"), Seen::Other);
         assert_eq!(names(&listing), ["first", "second"]);
+    }
+
+    #[test]
+    fn a_sorted_listing_holds_exactly_the_names_pushed() {
+        let mut listing = Listing::default();
+        for name in [".gitignore", "b", ".git", "a"] {
+            listing.push(OsStr::new(name), Seen::File);
+        }
+        listing.sort();
+        assert!(listing.holds(OsStr::new(".git")));
+        assert!(listing.holds(OsStr::new("a")));
+        assert!(!listing.holds(OsStr::new(".gi")));
+        assert!(!Listing::default().holds(OsStr::new(".git")));
     }
 
     #[test]
@@ -342,16 +331,6 @@ mod tests {
     fn read_into_lists_the_entries_without_dot_and_dot_dot() {
         let dir = fixture();
         assert_eq!(read_with(read_into, dir.path()), fixture_entries());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn read_dir_with_copies_into_lists_the_entries_without_dot_and_dot_dot() {
-        let dir = fixture();
-        assert_eq!(
-            read_with(read_dir_with_copies_into, dir.path()),
-            fixture_entries()
-        );
     }
 
     #[test]
