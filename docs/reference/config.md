@@ -360,9 +360,11 @@ foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project
   the child's table and file. The database stays as it was before the batch.
   The rejected changes are retried with each later batch, as the files stand
   then, and land with the first batch that resolves them, such as one that
-  repoints or deletes the orphaned child. Until then each batch also applies
-  on its own, so changes elsewhere are not held up, and the error is reported
-  again.
+  repoints or deletes the orphaned child. Until then each later batch is also
+  tried on its own and lands if it leaves no orphan, and the error is reported
+  again. A table's `on-file` command re-reads all of its files, so a later
+  batch that touches the same table carries the orphaning change and waits
+  too.
 
 `ON DELETE` and `ON UPDATE` actions are not deferred. `dirsql` applies a changed
 file as a delete and an insert, so `ON DELETE CASCADE` deletes the children of a
