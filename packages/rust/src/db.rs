@@ -41,6 +41,9 @@ pub enum DbError {
 
     #[error("{0}")]
     PathTable(String),
+
+    #[error("{}", .0.message)]
+    ForeignKey(crate::foreign_key::ForeignKeyViolation),
 }
 
 /// The reserved namespace for dirsql's internal bookkeeping tables. Every
