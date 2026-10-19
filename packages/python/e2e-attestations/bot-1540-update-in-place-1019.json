@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/server_speed_test.py -q -p no:cacheprovider",
+  "ran_at": 1792408921,
+  "exit_code": 0,
+  "commit": "f7fe7d6ee94aee82bb4ed855a360c2ef95385ba4",
+  "branch": "bot/1540-update-in-place-1019"
+}
