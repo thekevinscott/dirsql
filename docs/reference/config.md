@@ -302,11 +302,14 @@ dirsql query "SELECT text FROM messages_fts WHERE messages_fts MATCH 'deploy'" \
   -c ./.dirsql.toml
 ```
 
-Those two triggers are all a keyword index needs. dirsql writes file rows with
-plain `INSERT` and `DELETE` — an update is a delete and an insert in one
-transaction, and there is no `UPDATE` path on user rows — so triggers you
-declare here stay current through the initial load and every
-[watcher](../howto/react-to-changes.md) event. The same shape with a `vec0`
+Those two triggers are all a keyword index needs. `messages` declares no key,
+so dirsql writes its rows with plain `INSERT` and `DELETE` — a changed row is a
+delete and an insert in one transaction — and triggers you declare here stay
+current through the initial load and every
+[watcher](../howto/react-to-changes.md) event. A table with a `PRIMARY KEY` or
+`UNIQUE` column the command fills has its changed rows `UPDATE`d in place
+instead (see [hooks](./hooks.md#on-file-contract)); give it an
+`AFTER UPDATE` trigger too. The same shape with a `vec0`
 virtual table and an [`embed()`](#dirsql-function) call in the trigger gives
 you stored vectors.
 
