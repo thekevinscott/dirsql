@@ -1,4 +1,5 @@
-"""Glob speed: recursive `'./**/*.md'` and the literal prefix `'./a/b/**/*.md'`.
+"""Glob speed: recursive `'./**/*.md'`, the literal prefix `'./a/b/**/*.md'`,
+and one equality lookup on `path` over that prefix.
 
 A deep, wide tree of markdown files mixed with other files, dotfiles and
 dot-named directories that globstar with dotglob off must not return. A
@@ -52,6 +53,15 @@ PREFIX_NATIVE = [
     fd("--glob '*.md' a/b"),
     rg("-g '*.md' -g '!.*' a/b"),
     *suite_only(globstar("./a/b/**/*.md")),
+]
+LOOKUP = "a/b/x1/y0/z0/n4.md"
+LOOKUP_NATIVE = [
+    Native(
+        "find",
+        ("find",),
+        f"{{bin}} a/b -mindepth 1 -name '.*' -prune -o -type f -path '{LOOKUP}' -print",
+    ),
+    fd(f"--full-path --glob '**/{LOOKUP}' a/b"),
 ]
 CASES = [
     ("./**/*.md", "./**/*.md", ALL_NATIVE, "", FASTEST),
@@ -131,4 +141,26 @@ def describe_recursive_glob_speed_of_light():
         assert len(expected) == matched(n, prefix)
 
         assert actual == expected
+        assert_speed_of_light(name, result, startup)
+
+    def it_finds_one_path_by_equality_within_the_bar(tree):
+        root, _, startup = tree
+        name = "./a/b/**/*.md WHERE path ="
+
+        def dirsql(timeout):
+            proc, seconds = timed(
+                [
+                    cli(),
+                    "query",
+                    f"SELECT path FROM './a/b/**/*.md' WHERE path = '{LOOKUP}'",
+                ],
+                root,
+                timeout=timeout,
+            )
+            return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
+
+        result = paired(shell_natives(root, LOOKUP_NATIVE), dirsql, startup)
+
+        assert agreed_rows(result) == [LOOKUP]
+        assert result.dirsql_rows == [LOOKUP]
         assert_speed_of_light(name, result, startup)

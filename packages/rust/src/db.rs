@@ -312,6 +312,63 @@ impl ShapedRows {
     }
 }
 
+/// [`Db::shape_rows`] against `columns`, the table's columns in DDL order,
+/// so rows can be shaped off the connection's thread.
+pub(crate) fn shape_json_rows(
+    table: &str,
+    columns: Vec<String>,
+    rows: Vec<JsonRow>,
+    strict: bool,
+) -> Result<ShapedRows> {
+    let mut cells = Vec::with_capacity(rows.len());
+    for row in rows {
+        if strict {
+            for (key, _) in &row.0 {
+                validate_identifier(key)?;
+            }
+            let extra: Vec<&str> = row
+                .0
+                .iter()
+                .map(|(key, _)| &**key)
+                .filter(|key| !columns.iter().any(|c| c == key))
+                .collect();
+            if !extra.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "extra columns not in table {}: {}",
+                    table,
+                    extra.join(", ")
+                )));
+            }
+            let missing: Vec<&str> = columns
+                .iter()
+                .map(String::as_str)
+                .filter(|c| !row.0.iter().any(|(key, _)| **key == **c))
+                .collect();
+            if !missing.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "missing columns for table {}: {}",
+                    table,
+                    missing.join(", ")
+                )));
+            }
+        }
+        let in_order = row.0.len() == columns.len()
+            && row.0.iter().zip(&columns).all(|((key, _), c)| **key == **c);
+        if in_order {
+            cells.push(row.0.into_iter().map(|(_, v)| json_into_value(v)).collect());
+            continue;
+        }
+        let mut shaped = vec![Value::Null; columns.len()];
+        for (key, value) in row.0 {
+            if let Some(i) = columns.iter().position(|c| **c == *key) {
+                shaped[i] = json_into_value(value);
+            }
+        }
+        cells.push(shaped);
+    }
+    Ok(ShapedRows { columns, cells })
+}
+
 fn json_into_value(value: serde_json::Value) -> Value {
     match value {
         serde_json::Value::String(s) => Value::Text(s),
@@ -566,9 +623,10 @@ impl Db {
     /// Return the column names declared in `table`'s DDL.
     pub fn get_table_columns(&self, table: &str) -> Result<Vec<String>> {
         validate_identifier(table)?;
-        let mut stmt = self
-            .conn
-            .prepare(&format!("PRAGMA table_info({})", table))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "PRAGMA table_info({})",
+            crate::sql_literal::quote_identifier(table)
+        ))?;
         let columns: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))?
             .filter_map(|r| r.ok())
@@ -714,54 +772,7 @@ impl Db {
     /// a less-actionable "extra columns" mismatch. Every row is shaped before
     /// any is returned, so a hook that got one row wrong fails as a unit.
     pub fn shape_rows(&self, table: &str, rows: Vec<JsonRow>, strict: bool) -> Result<ShapedRows> {
-        let columns = self.get_table_columns(table)?;
-        let mut cells = Vec::with_capacity(rows.len());
-        for row in rows {
-            if strict {
-                for (key, _) in &row.0 {
-                    validate_identifier(key)?;
-                }
-                let extra: Vec<&str> = row
-                    .0
-                    .iter()
-                    .map(|(key, _)| &**key)
-                    .filter(|key| !columns.iter().any(|c| c == key))
-                    .collect();
-                if !extra.is_empty() {
-                    return Err(DbError::SchemaMismatch(format!(
-                        "extra columns not in table {}: {}",
-                        table,
-                        extra.join(", ")
-                    )));
-                }
-                let missing: Vec<&str> = columns
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|c| !row.0.iter().any(|(key, _)| **key == **c))
-                    .collect();
-                if !missing.is_empty() {
-                    return Err(DbError::SchemaMismatch(format!(
-                        "missing columns for table {}: {}",
-                        table,
-                        missing.join(", ")
-                    )));
-                }
-            }
-            let in_order = row.0.len() == columns.len()
-                && row.0.iter().zip(&columns).all(|((key, _), c)| **key == **c);
-            if in_order {
-                cells.push(row.0.into_iter().map(|(_, v)| json_into_value(v)).collect());
-                continue;
-            }
-            let mut shaped = vec![Value::Null; columns.len()];
-            for (key, value) in row.0 {
-                if let Some(i) = columns.iter().position(|c| **c == *key) {
-                    shaped[i] = json_into_value(value);
-                }
-            }
-            cells.push(shaped);
-        }
-        Ok(ShapedRows { columns, cells })
+        shape_json_rows(table, self.get_table_columns(table)?, rows, strict)
     }
 
     /// Insert every row of `rows` under `file_path`, in order, through one
@@ -2689,6 +2700,15 @@ mod tests {
         let db = Db::new().unwrap();
         let result = db.delete_rows_by_file("nonexistent", "f.json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_table_columns_reads_a_table_named_by_a_keyword() {
+        let db = Db::new().unwrap();
+        db.create_table("order", "CREATE TABLE \"order\" (name TEXT)")
+            .unwrap();
+        let cols = db.get_table_columns("order").unwrap();
+        assert!(cols.contains(&"name".to_string()), "{cols:?}");
     }
 
     #[test]

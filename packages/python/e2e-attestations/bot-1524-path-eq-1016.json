@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_recursive_test.py tests/e2e/use_case_join_test.py -x -q",
+  "ran_at": 1792151597,
+  "exit_code": 0,
+  "commit": "05acaa67201b49a50f43b35cd3f3204d13a6a544",
+  "branch": "bot/1524-path-eq-1016"
+}

@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792158571,
+  "exit_code": 0,
+  "commit": "0a2890d6a76b9fc650854796bc4375220fbbd792",
+  "branch": "bot/1534-fm-native-1016"
+}
