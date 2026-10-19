@@ -3620,6 +3620,178 @@ mod tests {
         assert_eq!(db.conn().total_changes(), before);
     }
 
+    fn experiments_db() -> Db {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "experiments",
+            "CREATE TABLE experiments \
+             (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)",
+        )
+        .unwrap();
+        let rows = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Beta"}
+            ]),
+        );
+        db.insert_rows("experiments", &rows, "").unwrap();
+        db
+    }
+
+    fn experiment_rows(db: &Db) -> Vec<(i64, String, String)> {
+        db.conn()
+            .prepare("SELECT id, folder_name, name FROM experiments ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_updates_a_changed_row_in_place_by_its_unique_key() {
+        let db = experiments_db();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"0","name":"Zero"},
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Renamed"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (1, "a".into(), "Alpha".into()),
+                (2, "b".into(), "Renamed".into()),
+                (3, "0".into(), "Zero".into()),
+            ]
+        );
+        assert!(changes.removed.is_empty(), "got: {:?}", changes.removed);
+        assert_eq!(changes.added.len(), 1, "got: {:?}", changes.added);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_writes_nothing_for_an_unchanged_keyed_table() {
+        let db = experiments_db();
+        let same = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Beta"}
+            ]),
+        );
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("experiments", "", &same).unwrap();
+
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(db.conn().total_changes(), before);
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (1, "a".into(), "Alpha".into()),
+                (2, "b".into(), "Beta".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconcile_batch_rows_ignores_a_generated_id_the_command_does_not_emit() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"name":"x"},{"name":"y"}])),
+            "",
+        )
+        .unwrap();
+        let same = shaped(&db, "t", serde_json::json!([{"name":"x"},{"name":"y"}]));
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("t", "", &same).unwrap();
+
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(db.conn().total_changes(), before);
+        let ids: Vec<i64> = db
+            .conn()
+            .prepare("SELECT id FROM t ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_matches_rows_by_a_populated_primary_key() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (slug TEXT PRIMARY KEY, title TEXT)")
+            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(
+                &db,
+                "t",
+                serde_json::json!([{"slug":"x","title":"X"},{"slug":"y","title":"Y"}]),
+            ),
+            "",
+        )
+        .unwrap();
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"slug":"x","title":"X2"},{"slug":"y","title":"Y"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        let rows: Vec<(i64, String)> = db
+            .conn()
+            .prepare("SELECT rowid, title FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, vec![(1, "X2".into()), (2, "Y".into())]);
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_deletes_a_vanished_key_and_inserts_a_new_one() {
+        let db = experiments_db();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"b","name":"Beta"},
+                {"folder_name":"c","name":"Gamma"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (2, "b".into(), "Beta".into()),
+                (3, "c".into(), "Gamma".into()),
+            ]
+        );
+        assert_eq!(changes.removed.len(), 1, "got: {:?}", changes.removed);
+        assert_eq!(changes.added.len(), 1, "got: {:?}", changes.added);
+    }
+
     #[test]
     fn reconcile_batch_rows_refits_the_owners_range_to_the_table() {
         let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"},{"id":"c"}]));
