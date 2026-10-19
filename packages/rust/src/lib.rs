@@ -5613,6 +5613,14 @@ mod internal_tests {
     }
 
     #[test]
+    fn declared_position_is_a_tables_index_in_declaration_order() {
+        let declared = ["zeta".to_string(), "alpha".to_string()];
+        assert_eq!(declared_position(&declared, "zeta"), Some(0));
+        assert_eq!(declared_position(&declared, "alpha"), Some(1));
+        assert_eq!(declared_position(&declared, "beta"), None);
+    }
+
+    #[test]
     fn finish_build_runs_a_per_table_hook_once_over_its_files_in_scan_order() {
         let dir = TempDir::new().unwrap();
         let (items, calls) = recording_per_table("items", "*.txt");
