@@ -4794,14 +4794,17 @@ mod internal_tests {
         chunks: Vec<Vec<infer::JsonRow>>,
         outcome: std::result::Result<(), String>,
     ) -> Production {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        for chunk in chunks {
-            sender.send(chunk).unwrap();
-        }
-        Production {
-            chunks: receiver,
-            handle: std::thread::spawn(move || outcome),
-        }
+        let hook: Arc<OnFilesFn> = Arc::new(move |_paths, sink| {
+            for chunk in chunks.clone() {
+                sink(chunk);
+            }
+            outcome.clone().map_err(BoxError::from)
+        });
+        start_hook(
+            hook,
+            std::iter::once(PathBuf::from("rows.json")),
+            Turn::default(),
+        )
     }
 
     fn stored_experiments() -> Db {
