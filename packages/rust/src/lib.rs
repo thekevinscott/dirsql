@@ -946,7 +946,17 @@ impl DirSQL {
             changes
         };
 
-        differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
+        if changes.keyed {
+            differ::diff_keyed(
+                table,
+                &changes.removed,
+                &changes.updated,
+                &changes.added,
+                trigger,
+            )
+        } else {
+            differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
+        }
     }
 
     /// Record in the table's file set whether `abs_path` is, now, one of the

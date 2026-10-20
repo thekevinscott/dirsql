@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::db::Value;
+use crate::db::{RowUpdate, Value};
 
 /// Events produced by comparing old and new file content.
 ///
@@ -134,6 +134,38 @@ pub fn diff_unordered(
     events.extend(unmatched_new[paired..].iter().map(|row| RowEvent::Insert {
         table: table.to_string(),
         row: (*row).clone(),
+        file_path: file_path.to_string(),
+    }));
+    events
+}
+
+/// Events for a table whose rows were matched by key: each row that left is a
+/// delete, each matched row that changed an update, and each new key an
+/// insert, in that order.
+pub fn diff_keyed(
+    table: &str,
+    removed: &[HashMap<String, Value>],
+    updated: &[RowUpdate],
+    added: &[HashMap<String, Value>],
+    file_path: &str,
+) -> Vec<RowEvent> {
+    let mut events: Vec<RowEvent> = removed
+        .iter()
+        .map(|row| RowEvent::Delete {
+            table: table.to_string(),
+            row: row.clone(),
+            file_path: file_path.to_string(),
+        })
+        .collect();
+    events.extend(updated.iter().map(|(old_row, new_row)| RowEvent::Update {
+        table: table.to_string(),
+        old_row: old_row.clone(),
+        new_row: new_row.clone(),
+        file_path: file_path.to_string(),
+    }));
+    events.extend(added.iter().map(|row| RowEvent::Insert {
+        table: table.to_string(),
+        row: row.clone(),
         file_path: file_path.to_string(),
     }));
     events
@@ -341,6 +373,42 @@ mod tests {
                 new_row: after,
                 file_path: "trigger".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn diff_keyed_deletes_then_updates_then_inserts_without_pairing() {
+        let gone = row(&[("k", text("a"))]);
+        let old = row(&[("k", text("b")), ("v", int(1))]);
+        let new = row(&[("k", text("b")), ("v", int(2))]);
+        let fresh = row(&[("k", text("c"))]);
+        let events = diff_keyed(
+            "t",
+            std::slice::from_ref(&gone),
+            &[(old.clone(), new.clone())],
+            std::slice::from_ref(&fresh),
+            "f",
+        );
+        assert_eq!(
+            events,
+            vec![
+                RowEvent::Delete {
+                    table: "t".into(),
+                    row: gone,
+                    file_path: "f".into(),
+                },
+                RowEvent::Update {
+                    table: "t".into(),
+                    old_row: old,
+                    new_row: new,
+                    file_path: "f".into(),
+                },
+                RowEvent::Insert {
+                    table: "t".into(),
+                    row: fresh,
+                    file_path: "f".into(),
+                },
+            ]
         );
     }
 
