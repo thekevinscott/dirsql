@@ -282,15 +282,13 @@ impl<S: TableSource> Held for RowCache<S> {
             return false;
         }
         let rows = self.rows();
-        let mut n = 0;
-        while let Some(chunk) = rows.chunk(n) {
+        for chunk in (0..).map_while(|n| rows.chunk(n)) {
             let mut cells = Vec::with_capacity(columns.len());
             for row in chunk.iter() {
                 cells.clear();
                 cells.extend(columns.iter().map(|&i| self.source.cell(row, i)));
                 on_row(&cells);
             }
-            n += 1;
         }
         true
     }
