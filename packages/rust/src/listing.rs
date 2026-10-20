@@ -178,16 +178,36 @@ impl Listing {
         read: impl FnOnce(&mut dyn FnMut(Chunk)),
         sort: &(dyn Fn(&mut Chunk) + Sync),
     ) -> Listing {
-        let mut chunks = Vec::new();
-        read(&mut |chunk| chunks.push(chunk));
-        if chunks.len() < 2 {
-            let mut listing = Listing::default();
-            chunks.into_iter().for_each(|chunk| listing.add(chunk));
-            listing.sort();
-            return listing;
-        }
-        chunks.iter_mut().for_each(sort);
-        merge(chunks)
+        let (send, receive) = std::sync::mpsc::channel::<Chunk>();
+        let mut receive = Some(receive);
+        let mut first = None;
+        std::thread::scope(|scope| {
+            let mut sorter = None;
+            read(&mut |chunk| {
+                if sorter.is_none() {
+                    let Some(earlier) = first.take() else {
+                        first = Some(chunk);
+                        return;
+                    };
+                    let receive = receive.take().expect("one sorter is started");
+                    sorter = Some(scope.spawn(move || sort_each(receive, sort)));
+                    send.send(earlier).expect("the sorter is waiting");
+                }
+                send.send(chunk).expect("the sorter is waiting");
+            });
+            drop(send);
+            match sorter {
+                Some(sorter) => merge(sorter.join().expect("sorting does not panic")),
+                None => {
+                    let mut listing = Listing::default();
+                    if let Some(first) = first {
+                        listing.add(first);
+                    }
+                    listing.sort();
+                    listing
+                }
+            }
+        })
     }
 
     pub(crate) fn entries(&self) -> &[Listed] {
@@ -224,6 +244,20 @@ impl Listing {
 /// large directory.
 fn by_name<'n>(a: &Listed, b: &Listed, name: impl Fn(&Listed) -> &'n OsStr) -> std::cmp::Ordering {
     a.prefix.cmp(&b.prefix).then_with(|| name(a).cmp(name(b)))
+}
+
+/// Each chunk `receive` hands over, sorted by `sort`, in the order handed.
+fn sort_each(
+    receive: std::sync::mpsc::Receiver<Chunk>,
+    sort: &(dyn Fn(&mut Chunk) + Sync),
+) -> Vec<Chunk> {
+    receive
+        .into_iter()
+        .map(|mut chunk| {
+            sort(&mut chunk);
+            chunk
+        })
+        .collect()
 }
 
 /// The entries of `sorted`, a sample of a directory, that split it into
