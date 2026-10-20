@@ -712,7 +712,9 @@ impl<'a> Place<'a> {
             .iter()
             .map(|listed| {
                 let name = listing.name(listed);
-                if listed.seen == Seen::File && !keep_name(name) {
+                // No entry is named ""; joining one would re-enter this
+                // directory without end.
+                if name.is_empty() || (listed.seen == Seen::File && !keep_name(name)) {
                     return None;
                 }
                 walk.take(dir, name, listed.seen, rel, states, *linked)

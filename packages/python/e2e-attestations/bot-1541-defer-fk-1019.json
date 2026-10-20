@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/use_case_join_test.py tests/e2e/fanout_test.py tests/e2e/query_contract_test.py tests/e2e/declared_table_name_test.py tests/e2e/watch_speed_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1792409673,
+  "exit_code": 0,
+  "commit": "7f1424e753767b1d0a996aec8f0bdf9a1194c9ef",
+  "branch": "bot/1541-defer-fk-1019"
+}

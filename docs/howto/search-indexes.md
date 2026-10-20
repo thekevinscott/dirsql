@@ -12,12 +12,16 @@ as in [Define tables for your files](./define-tables.md).
 
 ## Why triggers, and why only two
 
-`dirsql` writes file rows with plain `INSERT` and `DELETE`; an update is a
-delete and an insert in one transaction, and there is no `UPDATE` path on user
-rows. So an insert trigger and a delete trigger cover every way a row can
+`dirsql` writes the rows of a table with no key with plain `INSERT` and
+`DELETE`; a changed row is a delete and an insert in one transaction. So an
+insert trigger and a delete trigger cover every way a row can
 change — during the initial build, on each [watcher](./react-to-changes.md)
 event, and when a [persistent cache](./persist.md) reconciles a tree that
 moved on. There is no third trigger to write and no maintenance command to run.
+A table with a `PRIMARY KEY`, or a `UNIQUE` column the command fills, has its
+changed rows `UPDATE`d in place instead
+([hooks](../reference/hooks.md#on-file-contract)); give it an `AFTER UPDATE`
+trigger as well.
 
 The triggers are also the part that goes wrong, which is why the templates
 spell them out rather than hiding them behind an abstraction.

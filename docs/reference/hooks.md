@@ -128,7 +128,22 @@ for path in sys.argv[1:]:
 There is no row-to-file attribution: dirsql does not know which file a row
 came from, and a row that needs the path carries it as a column the command
 emitted. In watch mode a change to any file under the table's glob re-runs
-the command over all of the table's files and replaces the table's rows.
+the command over all of the table's files and writes only the difference,
+comparing just the columns the command emits:
+
+- A table with a key matches old and new rows by it. The key is the
+  `PRIMARY KEY`, or else a `UNIQUE` constraint (or unique index) whose columns
+  the command fills, non-NULL, in every row. A matched row that changed is
+  `UPDATE`d in place, so its rowid and every column the command leaves out (a
+  generated `INTEGER PRIMARY KEY`, a default) keep their values, and the watch
+  stream carries an `update`. A key that disappears is deleted and a new key is
+  inserted.
+- A table without one has no row identity: a row the command still emits
+  stays put, and every other row is deleted or inserted.
+
+With `CREATE TABLE experiments (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)`
+and a command that emits `folder_name` and `name`, renaming an experiment keeps
+its `id`, so a table that stores that `id` still points at it.
 
 The same command is attachable two ways, over the same contract: the
 `on-file` config key on a `[[table]]`, and the

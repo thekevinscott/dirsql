@@ -41,6 +41,9 @@ pub enum DbError {
 
     #[error("{0}")]
     PathTable(String),
+
+    #[error("{}", .0.message)]
+    ForeignKey(crate::foreign_key::ForeignKeyViolation),
 }
 
 /// The reserved namespace for dirsql's internal bookkeeping tables. Every
@@ -279,21 +282,29 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
     )
 }
 
+/// A row updated in place, as its `(old, new)` column maps.
+pub type RowUpdate = (HashMap<String, Value>, HashMap<String, Value>);
+
 /// The rows a [`Db::reconcile_batch_rows`] did not carry over: those only the
-/// table held (`removed`) and those only the new rows hold (`added`), each in
-/// its original order.
+/// table held (`removed`), those only the new rows hold (`added`), and, when
+/// the table has a key (`keyed`), the stored rows updated in place as
+/// `(old, new)` pairs, each in its original order.
 #[derive(Debug, Default)]
 pub struct RowChanges {
     pub removed: Vec<HashMap<String, Value>>,
     pub added: Vec<HashMap<String, Value>>,
+    pub updated: Vec<RowUpdate>,
+    pub keyed: bool,
 }
 
 /// A batch of rows laid out in a table's DDL column order, so each row binds
-/// positionally with no per-cell lookup.
+/// positionally with no per-cell lookup. `emitted` marks the columns at least
+/// one row carried; the rest are NULL in every row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapedRows {
     pub columns: Vec<String>,
     pub cells: Vec<Vec<Value>>,
+    pub emitted: Vec<bool>,
 }
 
 impl ShapedRows {
@@ -321,6 +332,7 @@ pub(crate) fn shape_json_rows(
     strict: bool,
 ) -> Result<ShapedRows> {
     let mut cells = Vec::with_capacity(rows.len());
+    let mut emitted = vec![false; columns.len()];
     for row in rows {
         if strict {
             for (key, _) in &row.0 {
@@ -355,18 +367,24 @@ pub(crate) fn shape_json_rows(
         let in_order = row.0.len() == columns.len()
             && row.0.iter().zip(&columns).all(|((key, _), c)| **key == **c);
         if in_order {
+            emitted.fill(true);
             cells.push(row.0.into_iter().map(|(_, v)| json_into_value(v)).collect());
             continue;
         }
         let mut shaped = vec![Value::Null; columns.len()];
         for (key, value) in row.0 {
             if let Some(i) = columns.iter().position(|c| **c == *key) {
+                emitted[i] = true;
                 shaped[i] = json_into_value(value);
             }
         }
         cells.push(shaped);
     }
-    Ok(ShapedRows { columns, cells })
+    Ok(ShapedRows {
+        columns,
+        cells,
+        emitted,
+    })
 }
 
 fn json_into_value(value: serde_json::Value) -> Value {
@@ -817,11 +835,18 @@ impl Db {
     }
 
     /// Make the table's rows, all owned by the batch `owner`, equal `rows`,
-    /// writing only the difference. The rows are compared as a multiset (a
-    /// batch has no row identity): an equal row already stored is left in
-    /// place, a stored row with no match is deleted, and a new row with no
-    /// match is inserted. The owner's rowid range is then re-fitted to the
-    /// table. Run it inside the caller's transaction.
+    /// writing only the difference. Only the columns the rows emit are
+    /// compared or written, so a column the command leaves out (a generated
+    /// `INTEGER PRIMARY KEY`, a default) is never overwritten.
+    ///
+    /// A table with a key (see [`Self::row_key`]) matches stored and new rows
+    /// by it: a matched row that differs is updated in place, keeping its
+    /// rowid, a stored key with no match is deleted, and a new key is
+    /// inserted. A table without one compares rows as a multiset (it has no
+    /// row identity): an equal row already stored is left in place, a stored
+    /// row with no match is deleted, and a new row with no match is inserted.
+    /// The owner's rowid range is then re-fitted to the table. Run it inside
+    /// the caller's transaction.
     pub fn reconcile_batch_rows(
         &self,
         table: &str,
@@ -850,33 +875,58 @@ impl Db {
                 stored.push((row.get(0)?, cells));
             }
         }
+        let compared: Vec<usize> = (0..columns.len()).filter(|&i| rows.emitted[i]).collect();
+        let ident = |cells: &[Value], at: &[usize]| {
+            format!("{:?}", at.iter().map(|&i| &cells[i]).collect::<Vec<_>>())
+        };
+        let key = self.row_key(table, rows)?;
+        let match_on = key.as_deref().unwrap_or(&compared);
         let mut unclaimed: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, (_, cells)) in stored.iter().enumerate().rev() {
             unclaimed
-                .entry(format!("{cells:?}"))
+                .entry(ident(cells, match_on))
                 .or_default()
                 .push(index);
         }
+        let mut claimed = vec![false; stored.len()];
         let mut added = Vec::new();
+        let mut updated: Vec<(usize, usize)> = Vec::new();
         for (index, cells) in rows.cells.iter().enumerate() {
-            match unclaimed.get_mut(&format!("{cells:?}")) {
-                Some(indexes) if !indexes.is_empty() => {
-                    indexes.pop();
+            match unclaimed
+                .get_mut(&ident(cells, match_on))
+                .and_then(Vec::pop)
+            {
+                Some(at) => {
+                    claimed[at] = true;
+                    if ident(&stored[at].1, &compared) != ident(cells, &compared) {
+                        updated.push((at, index));
+                    }
                 }
-                _ => added.push(index),
+                None => added.push(index),
             }
         }
-        let mut removed: Vec<usize> = unclaimed.into_values().flatten().collect();
-        removed.sort_unstable();
+        let removed: Vec<usize> = (0..stored.len()).filter(|&i| !claimed[i]).collect();
 
         let to_map = |cells: &[Value]| -> HashMap<String, Value> {
             columns.iter().cloned().zip(cells.iter().cloned()).collect()
         };
+        let merged = |at: usize, index: usize| -> Vec<Value> {
+            let mut cells = stored[at].1.clone();
+            for &i in &compared {
+                cells[i] = rows.cells[index][i].clone();
+            }
+            cells
+        };
         let changes = RowChanges {
             removed: removed.iter().map(|&i| to_map(&stored[i].1)).collect(),
             added: added.iter().map(|&i| to_map(&rows.cells[i])).collect(),
+            updated: updated
+                .iter()
+                .map(|&(at, index)| (to_map(&stored[at].1), to_map(&merged(at, index))))
+                .collect(),
+            keyed: key.is_some(),
         };
-        if removed.is_empty() && added.is_empty() {
+        if removed.is_empty() && added.is_empty() && updated.is_empty() {
             return Ok(changes);
         }
         let mut delete = self
@@ -884,6 +934,25 @@ impl Db {
             .prepare_cached(&format!("DELETE FROM \"{table}\" WHERE rowid = ?1"))?;
         for &index in &removed {
             delete.execute([stored[index].0])?;
+        }
+        if !updated.is_empty() {
+            let sets: Vec<String> = compared
+                .iter()
+                .enumerate()
+                .map(|(n, &i)| format!("\"{}\" = ?{}", columns[i], n + 1))
+                .collect();
+            let mut update = self.conn.prepare_cached(&format!(
+                "UPDATE \"{table}\" SET {} WHERE rowid = ?{}",
+                sets.join(", "),
+                compared.len() + 1
+            ))?;
+            for &(at, index) in &updated {
+                for (n, &i) in compared.iter().enumerate() {
+                    update.raw_bind_parameter(n + 1, &rows.cells[index][i])?;
+                }
+                update.raw_bind_parameter(compared.len() + 1, stored[at].0)?;
+                update.raw_execute()?;
+            }
         }
         let mut insert = self.conn.prepare_cached(&insert_sql(table, columns))?;
         for &index in &added {
@@ -907,6 +976,52 @@ impl Db {
                 .execute(rusqlite::params![table, owner, first, last])?;
         }
         Ok(changes)
+    }
+
+    /// The positions in `rows.columns` of `table`'s key: its `PRIMARY KEY`,
+    /// else the first `UNIQUE` index whose columns `rows` emits non-NULL in
+    /// every row. A key the rows leave unset (a generated `INTEGER PRIMARY
+    /// KEY`) cannot match anything, so it is passed over.
+    fn row_key(&self, table: &str, rows: &ShapedRows) -> Result<Option<Vec<usize>>> {
+        let mut candidates: Vec<Vec<Option<String>>> = vec![
+            self.conn
+                .prepare_cached("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")?
+                .query_map([table], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?,
+        ];
+        let indexes: Vec<String> = self
+            .conn
+            .prepare_cached(
+                "SELECT name FROM pragma_index_list(?1) \
+                 WHERE \"unique\" AND NOT partial AND origin != 'pk' ORDER BY name",
+            )?
+            .query_map([table], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut index_columns = self
+            .conn
+            .prepare_cached("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+        for index in indexes {
+            candidates.push(
+                index_columns
+                    .query_map([index], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?,
+            );
+        }
+        Ok(candidates.into_iter().find_map(|names| {
+            let at = names
+                .iter()
+                .map(|name| {
+                    let name = name.as_ref()?;
+                    rows.columns.iter().position(|c| c == name)
+                })
+                .collect::<Option<Vec<usize>>>()?;
+            let populated = !at.is_empty()
+                && rows
+                    .cells
+                    .iter()
+                    .all(|cells| at.iter().all(|&i| cells[i] != Value::Null));
+            populated.then_some(at)
+        }))
     }
 
     /// Both the table name and every user-provided column name are validated
@@ -3489,6 +3604,17 @@ mod tests {
     }
 
     #[test]
+    fn shape_rows_marks_the_columns_some_row_emitted() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER, z TEXT)")
+            .unwrap();
+        let out = shaped(&db, "t", serde_json::json!([{"name":"a"},{"n":1}]));
+        assert_eq!(out.emitted, vec![true, true, false]);
+        let all = shaped(&db, "t", serde_json::json!([{"name":"a","n":1,"z":"q"}]));
+        assert_eq!(all.emitted, vec![true, true, true]);
+    }
+
+    #[test]
     fn shape_rows_strict_accepts_every_column_in_any_order() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
@@ -3620,6 +3746,7 @@ mod tests {
         let rows = ShapedRows {
             columns: vec![],
             cells: vec![vec![], vec![]],
+            emitted: vec![],
         };
         db.insert_rows("t", &rows, "x.json").unwrap();
         assert_eq!(db.get_rows_by_file("t", "x.json").unwrap().len(), 2);
@@ -3835,6 +3962,263 @@ mod tests {
         assert_eq!(db.conn().total_changes(), before);
     }
 
+    fn experiments_db() -> Db {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "experiments",
+            "CREATE TABLE experiments \
+             (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)",
+        )
+        .unwrap();
+        let rows = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Beta"}
+            ]),
+        );
+        db.insert_rows("experiments", &rows, "").unwrap();
+        db
+    }
+
+    fn experiment_rows(db: &Db) -> Vec<(i64, String, String)> {
+        db.conn()
+            .prepare("SELECT id, folder_name, name FROM experiments ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_updates_a_changed_row_in_place_by_its_unique_key() {
+        let db = experiments_db();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"0","name":"Zero"},
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Renamed"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (1, "a".into(), "Alpha".into()),
+                (2, "b".into(), "Renamed".into()),
+                (3, "0".into(), "Zero".into()),
+            ]
+        );
+        assert!(changes.removed.is_empty(), "got: {:?}", changes.removed);
+        assert_eq!(changes.added.len(), 1, "got: {:?}", changes.added);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_writes_nothing_for_an_unchanged_keyed_table() {
+        let db = experiments_db();
+        let same = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Beta"}
+            ]),
+        );
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("experiments", "", &same).unwrap();
+
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(db.conn().total_changes(), before);
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (1, "a".into(), "Alpha".into()),
+                (2, "b".into(), "Beta".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconcile_batch_rows_ignores_a_generated_id_the_command_does_not_emit() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"name":"x"},{"name":"y"}])),
+            "",
+        )
+        .unwrap();
+        let same = shaped(&db, "t", serde_json::json!([{"name":"x"},{"name":"y"}]));
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("t", "", &same).unwrap();
+
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(db.conn().total_changes(), before);
+        let ids: Vec<i64> = db
+            .conn()
+            .prepare("SELECT id FROM t ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_matches_rows_by_a_populated_primary_key() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (slug TEXT PRIMARY KEY, title TEXT)")
+            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(
+                &db,
+                "t",
+                serde_json::json!([{"slug":"x","title":"X"},{"slug":"y","title":"Y"}]),
+            ),
+            "",
+        )
+        .unwrap();
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"slug":"x","title":"X2"},{"slug":"y","title":"Y"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        let rows: Vec<(i64, String)> = db
+            .conn()
+            .prepare("SELECT rowid, title FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, vec![(1, "X2".into()), (2, "Y".into())]);
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_deletes_a_vanished_key_and_inserts_a_new_one() {
+        let db = experiments_db();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"b","name":"Beta"},
+                {"folder_name":"c","name":"Gamma"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert_eq!(
+            experiment_rows(&db),
+            vec![
+                (2, "b".into(), "Beta".into()),
+                (3, "c".into(), "Gamma".into()),
+            ]
+        );
+        assert_eq!(changes.removed.len(), 1, "got: {:?}", changes.removed);
+        assert_eq!(changes.added.len(), 1, "got: {:?}", changes.added);
+    }
+
+    fn keyed_on(ddl: &str, first: serde_json::Value, next: serde_json::Value) -> RowChanges {
+        let db = Db::new().unwrap();
+        db.create_table("t", ddl).unwrap();
+        db.insert_rows("t", &shaped(&db, "t", first), "").unwrap();
+        let next = shaped(&db, "t", next);
+        db.reconcile_batch_rows("t", "", &next).unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_reports_an_update_with_the_columns_the_command_left_out() {
+        let db = experiments_db();
+        db.conn()
+            .execute("ALTER TABLE experiments ADD COLUMN note TEXT", [])
+            .unwrap();
+        db.conn()
+            .execute("UPDATE experiments SET note = 'kept'", [])
+            .unwrap();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Renamed"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert!(changes.keyed);
+        let [(old, new)] = changes.updated.as_slice() else {
+            panic!("got: {:?}", changes.updated);
+        };
+        assert_eq!(old["name"], Value::Text("Beta".into()));
+        assert_eq!(new["name"], Value::Text("Renamed".into()));
+        assert_eq!(new["id"], Value::Integer(2));
+        assert_eq!(new["note"], Value::Text("kept".into()));
+        let note: String = db
+            .conn()
+            .query_row("SELECT note FROM experiments WHERE id = 2", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(note, "kept");
+    }
+
+    #[test]
+    fn reconcile_batch_rows_has_no_key_when_some_row_leaves_it_null() {
+        let changes = keyed_on(
+            "CREATE TABLE t (k TEXT UNIQUE, v TEXT)",
+            serde_json::json!([{"k":"a","v":"1"}]),
+            serde_json::json!([{"k":"a","v":"2"},{"v":"3"}]),
+        );
+        assert!(!changes.keyed);
+        assert!(changes.updated.is_empty());
+        assert_eq!(changes.removed.len(), 1);
+        assert_eq!(changes.added.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_matches_on_a_multi_column_unique_index() {
+        let changes = keyed_on(
+            "CREATE TABLE t (a TEXT, b TEXT, v TEXT); CREATE UNIQUE INDEX t_ab ON t(a, b)",
+            serde_json::json!([{"a":"x","b":"1","v":"old"},{"a":"x","b":"2","v":"same"}]),
+            serde_json::json!([{"a":"x","b":"1","v":"new"},{"a":"x","b":"2","v":"same"}]),
+        );
+        assert!(changes.keyed);
+        assert_eq!(changes.updated.len(), 1, "got: {:?}", changes.updated);
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_passes_over_partial_and_expression_indexes() {
+        for index in [
+            "CREATE UNIQUE INDEX t_k ON t(k) WHERE k IS NOT NULL",
+            "CREATE UNIQUE INDEX t_k ON t(lower(k))",
+        ] {
+            let changes = keyed_on(
+                &format!("CREATE TABLE t (k TEXT, v TEXT); {index}"),
+                serde_json::json!([{"k":"a","v":"1"}]),
+                serde_json::json!([{"k":"a","v":"2"}]),
+            );
+            assert!(!changes.keyed, "{index}");
+        }
+    }
+
     #[test]
     fn reconcile_batch_rows_refits_the_owners_range_to_the_table() {
         let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"},{"id":"c"}]));
@@ -3863,6 +4247,7 @@ mod tests {
         let rows = ShapedRows {
             columns: vec![],
             cells: vec![vec![]],
+            emitted: vec![],
         };
         db.reconcile_batch_rows("t", "", &rows).unwrap();
         assert_eq!(table_rows_count(&db), 1);
@@ -3880,6 +4265,7 @@ mod tests {
         let rows = ShapedRows {
             columns: vec![],
             cells: vec![],
+            emitted: vec![],
         };
         let err = db.reconcile_batch_rows("bad name", "", &rows).unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
@@ -3891,6 +4277,7 @@ mod tests {
         let rows = ShapedRows {
             columns: vec![],
             cells: vec![],
+            emitted: vec![],
         };
         let err = db.insert_rows("bad name", &rows, "a.json").unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
