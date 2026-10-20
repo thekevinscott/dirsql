@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792409739,
+  "exit_code": 0,
+  "commit": "89f3c6d753aef9c72cce9241539b805d0157d310",
+  "branch": "bot/1541-defer-fk-1019"
+}

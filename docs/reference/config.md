@@ -345,6 +345,39 @@ Two consequences of `ddl` running **once, when the table is created**:
   That is the only invalidation lane: dirsql tracks no ownership of what the
   batch made.
 
+### Foreign keys
+
+SQLite enforces a `REFERENCES` clause in a table's `ddl`. Tables fill in no
+fixed order, so `dirsql` checks foreign keys once per unit of work rather than
+per row: every constraint is deferred to the end of the unit, as if declared
+`DEFERRABLE INITIALLY DEFERRED`. A unit is the initial build, or one batch of
+[watcher](../howto/react-to-changes.md) events across all tables. A child may
+land before its parent, and a parent's file may change while its children
+point at it.
+
+A row that still references nothing when the unit ends fails the whole unit,
+and the error names each offending row, the file that produced it, and the
+values that match nothing:
+
+```text
+foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project_id = 2, which matches no row in `project`
+```
+
+- **Build:** the build fails and nothing is written.
+- **Watch:** the batch is rolled back and reported as one error event, against
+  the child's table and file. The database stays as it was before the batch.
+  The rejected changes are retried with each later batch, as the files stand
+  then, and land with the first batch that resolves them, such as one that
+  repoints or deletes the orphaned child. Until then each later batch is also
+  tried on its own and lands if it leaves no orphan, and the error is reported
+  again. A table's `on-file` command re-reads all of its files, so a later
+  batch that touches the same table carries the orphaning change and waits
+  too.
+
+`ON DELETE` and `ON UPDATE` actions are not deferred. `dirsql` applies a changed
+file as a delete and an insert, so `ON DELETE CASCADE` deletes the children of a
+parent whose file is edited or renamed, even though their files still exist.
+
 ### `on-file` row mapping
 
 The command prints one JSON object per line (NDJSON); each line becomes one

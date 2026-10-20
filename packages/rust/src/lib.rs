@@ -19,6 +19,8 @@ pub mod differ;
 #[doc(hidden)]
 pub mod extension_resolution;
 #[doc(hidden)]
+pub mod foreign_key;
+#[doc(hidden)]
 pub mod functions;
 mod gitignore_frame;
 #[doc(hidden)]
@@ -424,6 +426,9 @@ struct DirSqlInner {
     /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
     /// deleted directory is traced back to the tables it fed.
     batch_files: Mutex<HashMap<String, Vec<String>>>,
+    /// The file events of watch batches a foreign key rejected, replayed
+    /// with every later batch until one lands them.
+    held: Mutex<Vec<FileEvent>>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Watcher>>,
@@ -705,12 +710,62 @@ impl DirSQL {
         events: Vec<FileEvent>,
         mut late: impl FnMut() -> Vec<FileEvent>,
     ) -> Vec<RowEvent> {
+        if events.is_empty() {
+            return Vec::new();
+        }
+        let held = self.take_held();
+        if held.is_empty() {
+            return match self.apply_batch(events, &mut late) {
+                Ok(out) => out,
+                Err(rejected) => {
+                    self.hold(rejected.events);
+                    rejected.errors
+                }
+            };
+        }
+        // An orphan the held events left may be resolved by this batch, so
+        // they go first, together. When they still can't land, this batch
+        // is tried alone, so a change elsewhere is not held up behind them.
+        let held_len = held.len();
+        let mut rejected =
+            match self.apply_batch(held.into_iter().chain(events).collect(), &mut late) {
+                Ok(out) => return out,
+                Err(rejected) => rejected,
+            };
+        let fresh = rejected.events.split_off(held_len);
+        self.hold(rejected.events);
+        match self.apply_batch(fresh, &mut Vec::new) {
+            Ok(out) => rejected
+                .errors
+                .split_off(rejected.errors.len() - 1)
+                .into_iter()
+                .chain(out)
+                .collect(),
+            Err(fresh) => {
+                self.hold(fresh.events);
+                rejected.errors
+            }
+        }
+    }
+
+    /// Apply `events`, and those `late` reports while they are routed, in one
+    /// transaction whose foreign keys are checked at its end.
+    fn apply_batch(
+        &self,
+        events: Vec<FileEvent>,
+        late: &mut impl FnMut() -> Vec<FileEvent>,
+    ) -> std::result::Result<Vec<RowEvent>, RejectedBatch> {
+        let mut applied = Vec::new();
+        if let Err(e) = self.with_db(|db| Ok(foreign_key::begin(db.conn())?)) {
+            return Ok(vec![batch_error(e)]);
+        }
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         let mut rescan = false;
         let mut batch = events;
         while !batch.is_empty() {
             for fe in batch {
+                applied.push(fe.clone());
                 if fe == FileEvent::Rescan {
                     rescan = true;
                     continue;
@@ -723,7 +778,66 @@ impl DirSQL {
             out.extend(self.rescan(&mut pending));
         }
         out.extend(self.refresh_pending(pending));
-        out
+        match self.with_db(|db| foreign_key::commit(db.conn())) {
+            Ok(()) => Ok(out),
+            Err(e) => {
+                let mut errors: Vec<RowEvent> = out
+                    .into_iter()
+                    .filter(|event| matches!(event, RowEvent::Error { .. }))
+                    .collect();
+                errors.push(batch_error(e));
+                Err(RejectedBatch {
+                    events: applied,
+                    errors,
+                })
+            }
+        }
+    }
+
+    /// Keep `events` to replay with the next batch, once per path.
+    fn hold(&self, events: Vec<FileEvent>) {
+        let Ok(mut held) = self.inner.held.lock() else {
+            return;
+        };
+        for event in events {
+            if !held.contains(&event) {
+                held.push(event);
+            }
+        }
+    }
+
+    /// The held events, each restated as the path's state now: a path that
+    /// exists is re-read (or, for a directory, walked), and one that doesn't
+    /// is deleted. A replay then can't undo a later change to the same path.
+    fn take_held(&self) -> Vec<FileEvent> {
+        let held = match self.inner.held.lock() {
+            Ok(mut held) => std::mem::take(&mut *held),
+            Err(_) => return Vec::new(),
+        };
+        let mut restated: Vec<FileEvent> = Vec::new();
+        for event in held {
+            let event = match event {
+                FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => {
+                    if self.inner.fs.is_file(&p).unwrap_or(false)
+                        || self.inner.fs.is_dir(&p).unwrap_or(false)
+                    {
+                        FileEvent::Created(p)
+                    } else {
+                        FileEvent::Deleted(p)
+                    }
+                }
+                FileEvent::Rescan => FileEvent::Rescan,
+            };
+            if !restated.contains(&event) {
+                restated.push(event);
+            }
+        }
+        restated
+    }
+
+    fn with_db<T>(&self, f: impl FnOnce(&Db) -> std::result::Result<T, DbError>) -> Result<T> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        Ok(f(&db)?)
     }
 
     /// Channel-based watch API. Spawns a background thread that pushes
@@ -932,18 +1046,12 @@ impl DirSQL {
                 Ok(rows) => rows,
                 Err(message) => return vec![error_event(Some(table), trigger, message)],
             };
-            let _tx = match db.conn().unchecked_transaction() {
-                Ok(tx) => tx,
-                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
-            };
-            let changes = match db.reconcile_batch_rows(table, BATCH_OWNER, &new_rows) {
+            match foreign_key::atomically(db.conn(), || {
+                db.reconcile_batch_rows(table, BATCH_OWNER, &new_rows)
+            }) {
                 Ok(changes) => changes,
                 Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
-            };
-            if let Err(e) = _tx.commit() {
-                return vec![error_event(Some(table), trigger, e.to_string())];
             }
-            changes
         };
 
         if changes.keyed {
@@ -1095,16 +1203,9 @@ impl DirSQL {
                 Ok(rows) => rows,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            // Wrap the delete in a transaction so it either succeeds completely
-            // or rolls back; no partial deletes.
-            let _tx = match db.conn().unchecked_transaction() {
-                Ok(tx) => tx,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-            if let Err(e) = db.delete_rows_by_file(table, rel_path) {
-                return vec![error_event(Some(table), rel_path, e.to_string())];
-            }
-            if let Err(e) = _tx.commit() {
+            if let Err(e) =
+                foreign_key::atomically(db.conn(), || db.delete_rows_by_file(table, rel_path))
+            {
                 return vec![error_event(Some(table), rel_path, e.to_string())];
             }
             old_rows
@@ -1154,25 +1255,14 @@ impl DirSQL {
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
 
-            // Wrap the delete+insert in a transaction so they commit together;
-            // a failed multi-row update rolls back completely instead of leaving
-            // partial rows.
-            let _tx = match db.conn().unchecked_transaction() {
-                Ok(tx) => tx,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-
-            let db_result = db.delete_rows_by_file(table, rel_path).and_then(|_| {
+            let db_result = foreign_key::atomically(db.conn(), || -> db::Result<()> {
+                db.delete_rows_by_file(table, rel_path)?;
                 for (i, row) in new_rows.iter().enumerate() {
                     db.insert_row(table, row, rel_path, i)?;
                 }
                 Ok(())
             });
             if let Err(e) = db_result {
-                return vec![error_event(Some(table), rel_path, e.to_string())];
-            }
-
-            if let Err(e) = _tx.commit() {
                 return vec![error_event(Some(table), rel_path, e.to_string())];
             }
 
@@ -1471,6 +1561,7 @@ impl DirSQL {
             .conn()
             .unchecked_transaction()
             .map_err(DirSqlError::sqlite)?;
+        foreign_key::defer(db.conn()).map_err(DirSqlError::sqlite)?;
 
         // Drop cached rows for files that disappeared since the last cache
         // write. Trusted files need no work: their rows already live in the
@@ -1654,8 +1745,9 @@ impl DirSQL {
         // the next scan -- the cache is incomplete, never wrong. SQLite, DDL
         // and extension errors still propagate above, unchanged.
 
-        // Commit the ingest transaction.
-        _tx.commit().map_err(DirSqlError::sqlite)?;
+        let committed = foreign_key::commit(db.conn());
+        drop(_tx);
+        committed.map_err(map_db_error)?;
 
         let mut groups = groups;
         for group in &mut groups {
@@ -1671,6 +1763,7 @@ impl DirSQL {
                 strict_map,
                 declared,
                 batch_files: Mutex::new(batch_files),
+                held: Mutex::new(Vec::new()),
                 scan_failures: on_file_failures,
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
@@ -2593,6 +2686,24 @@ fn start_per_table_hooks(
     (feeds, running)
 }
 
+/// A watch batch a foreign key rejected: the events it applied, and the
+/// errors that report it.
+struct RejectedBatch {
+    events: Vec<FileEvent>,
+    errors: Vec<RowEvent>,
+}
+
+/// The error event for a watch batch that could not be applied: an orphaned
+/// row is reported against the table and file that hold it.
+fn batch_error(e: DirSqlError) -> RowEvent {
+    match e {
+        DirSqlError::Core(DbError::ForeignKey(v)) => {
+            error_event(Some(&v.table), v.file.as_deref().unwrap_or(""), v.message)
+        }
+        other => error_event(None, "", other.to_string()),
+    }
+}
+
 fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     RowEvent::Error {
         table: table.map(str::to_string),
@@ -3079,6 +3190,7 @@ mod internal_tests {
         dirs: StdHashSet<PathBuf>,
         subtrees: StdHashMap<PathBuf, Vec<(PathBuf, String)>>,
         subtree_walks: Mutex<Vec<PathBuf>>,
+        gone: Mutex<StdHashSet<PathBuf>>,
     }
 
     impl FakeFs {
@@ -3106,6 +3218,11 @@ mod internal_tests {
             self
         }
 
+        /// Make a registered path vanish, as `rm` would.
+        fn remove(&self, path: &Path) {
+            self.gone.lock().unwrap().insert(path.to_path_buf());
+        }
+
         fn subtree_walks(&self) -> Vec<PathBuf> {
             self.subtree_walks.lock().unwrap().clone()
         }
@@ -3127,12 +3244,22 @@ mod internal_tests {
 
     impl FileSystem for FakeFs {
         fn stat(&self, path: &Path) -> std::io::Result<FileStat> {
-            self.stats.get(path).cloned().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
-            })
+            self.stats
+                .get(path)
+                .filter(|_| !self.gone.lock().unwrap().contains(path))
+                .cloned()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
+                })
         }
 
         fn is_file(&self, path: &Path) -> std::io::Result<bool> {
+            if self.gone.lock().unwrap().contains(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "fake: no such file",
+                ));
+            }
             if self.dirs.contains(path) {
                 return Ok(false);
             }
@@ -3146,6 +3273,12 @@ mod internal_tests {
         }
 
         fn is_dir(&self, path: &Path) -> std::io::Result<bool> {
+            if self.gone.lock().unwrap().contains(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "fake: no such file",
+                ));
+            }
             if self.dirs.contains(path) {
                 return Ok(true);
             }
@@ -6476,6 +6609,168 @@ mod internal_tests {
                 .iter()
                 .all(|scope| scope.ignore.is_ignored_dir(Path::new("node_modules")))
         );
+    }
+
+    /// The digit a fixture file name ends in, as an integer.
+    fn trailing_id(path: &str) -> Value {
+        Value::Integer(path[path.len() - 1..].parse().unwrap())
+    }
+
+    /// `parent` rows from `p<id>` files and `child` rows from `c<id>` files,
+    /// each child referencing the parent with its id. `files` are applied;
+    /// `unseen` exist but have not been reported yet.
+    fn fk_db(root: &Path, files: &[&str], unseen: &[&str]) -> (Arc<FakeFs>, DirSQL) {
+        let mut fake = FakeFs::default();
+        for f in files.iter().chain(unseen) {
+            fake.stats.insert(root.join(f), fake_stat());
+        }
+        let fake = Arc::new(fake);
+        let db = DirSQL::with_ignore_and_fs(
+            root,
+            vec![
+                Table::new(
+                    "child",
+                    "CREATE TABLE child (pid INTEGER REFERENCES parent(id))",
+                    "c*",
+                    |path| vec![Row::from_iter([("pid".to_string(), trailing_id(path))])],
+                ),
+                Table::new(
+                    "parent",
+                    "CREATE TABLE parent (id INTEGER PRIMARY KEY)",
+                    "p*",
+                    |path| vec![Row::from_iter([("id".to_string(), trailing_id(path))])],
+                ),
+            ],
+            Vec::<String>::new(),
+            fake.clone(),
+        )
+        .unwrap();
+        let events = db.apply_file_events(
+            files
+                .iter()
+                .map(|f| FileEvent::Created(root.join(f)))
+                .collect(),
+        );
+        assert_eq!(events.len(), files.len(), "got: {events:?}");
+        (fake, db)
+    }
+
+    fn parent_ids(db: &DirSQL) -> Vec<Value> {
+        db.query("SELECT id FROM parent ORDER BY id")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["id"].clone())
+            .collect()
+    }
+
+    fn error_count(events: &[RowEvent]) -> usize {
+        events
+            .iter()
+            .filter(|event| matches!(event, RowEvent::Error { .. }))
+            .count()
+    }
+
+    fn held(db: &DirSQL) -> Vec<FileEvent> {
+        db.inner.held.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_rejected_batch_is_held_until_a_batch_resolves_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = fk_db(root, &["p1", "p2", "c1"], &[]);
+        fake.remove(&root.join("p1"));
+
+        let rejected = db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+        assert_eq!(error_count(&rejected), 1, "got: {rejected:?}");
+        assert_eq!(rejected.len(), 1, "got: {rejected:?}");
+        assert_eq!(held(&db), vec![FileEvent::Deleted(root.join("p1"))]);
+        assert_eq!(db.apply_file_events(Vec::new()), Vec::new());
+        assert_eq!(held(&db).len(), 1, "an empty poll replays nothing");
+
+        fake.remove(&root.join("c1"));
+        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("c1"))]);
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        assert_eq!(events.len(), 2, "got: {events:?}");
+        assert_eq!(parent_ids(&db), vec![Value::Integer(2)]);
+        assert_eq!(held(&db), Vec::new());
+    }
+
+    #[test]
+    fn a_batch_lands_alone_while_a_held_one_still_fails() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = fk_db(root, &["p1", "c1"], &["p3"]);
+        fake.remove(&root.join("p1"));
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+
+        let events = db.apply_file_events(vec![FileEvent::Created(root.join("p3"))]);
+
+        assert_eq!(error_count(&events), 1, "the held rejection: {events:?}");
+        assert_eq!(events.len(), 2, "the error and p3's insert: {events:?}");
+        assert_eq!(held(&db), vec![FileEvent::Deleted(root.join("p1"))]);
+        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(3)]);
+    }
+
+    #[test]
+    fn a_held_batch_and_a_failing_one_are_both_held() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = fk_db(root, &["p1", "p2", "c1", "c2"], &[]);
+        fake.remove(&root.join("p1"));
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+        fake.remove(&root.join("p2"));
+
+        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("p2"))]);
+
+        assert_eq!(error_count(&events), 1, "got: {events:?}");
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        assert_eq!(
+            held(&db),
+            vec![
+                FileEvent::Deleted(root.join("p1")),
+                FileEvent::Deleted(root.join("p2"))
+            ]
+        );
+        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(2)]);
+    }
+
+    #[test]
+    fn hold_keeps_each_event_once() {
+        let dir = TempDir::new().unwrap();
+        let (_fake, db) = fk_db(dir.path(), &[], &[]);
+        let a = FileEvent::Modified(dir.path().join("a"));
+        db.hold(vec![a.clone(), FileEvent::Rescan]);
+        db.hold(vec![FileEvent::Rescan, a.clone()]);
+        assert_eq!(held(&db), vec![a, FileEvent::Rescan]);
+    }
+
+    #[test]
+    fn take_held_restates_each_path_as_it_is_now() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut fake = FakeFs::default().with_dir(root.join("d"));
+        fake.stats.insert(root.join("f"), fake_stat());
+        let db = DirSQL::with_ignore_and_fs(root, Vec::new(), Vec::<String>::new(), Arc::new(fake))
+            .unwrap();
+        db.hold(vec![
+            FileEvent::Deleted(root.join("f")),
+            FileEvent::Modified(root.join("f")),
+            FileEvent::Deleted(root.join("d")),
+            FileEvent::Created(root.join("gone")),
+            FileEvent::Rescan,
+        ]);
+
+        assert_eq!(
+            db.take_held(),
+            vec![
+                FileEvent::Created(root.join("f")),
+                FileEvent::Created(root.join("d")),
+                FileEvent::Deleted(root.join("gone")),
+                FileEvent::Rescan,
+            ]
+        );
+        assert_eq!(held(&db), Vec::new());
     }
 }
 
