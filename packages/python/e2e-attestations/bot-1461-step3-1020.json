@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1792499219,
+  "exit_code": 0,
+  "commit": "f0b743744d6e038ad678de855df59c843e109ad1",
+  "branch": "bot/1461-step3-1020"
+}
