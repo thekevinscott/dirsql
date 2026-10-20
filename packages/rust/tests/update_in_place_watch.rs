@@ -1,5 +1,6 @@
 //! A watch refresh updates a keyed row in place, so its generated id holds.
 
+use dirsql::watcher::FileEvent;
 use dirsql::{DirSQL, RowEvent, Value};
 use std::fs;
 use std::path::Path;
@@ -86,6 +87,50 @@ fn renaming_an_experiment_keeps_its_id_and_emits_one_update() {
         ] => {
             assert_eq!(old_row["name"], Value::Text("Alpha".into()));
             assert_eq!(new_row["name"], Value::Text("Renamed".into()));
+        }
+        other => panic!("expected one update, got: {other:?}"),
+    }
+    assert_eq!(id_of(&db, "a"), alpha);
+}
+
+fn per_file_experiments() -> dirsql::Table {
+    dirsql::Table::new(
+        "experiments",
+        "CREATE TABLE experiments (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)",
+        "*.json",
+        |path| {
+            let row: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            vec![
+                row.into_iter()
+                    .map(|(k, v)| (k, Value::Text(v.as_str().unwrap().into())))
+                    .collect(),
+            ] as Vec<dirsql::Row>
+        },
+    )
+}
+
+#[test]
+fn renaming_a_per_file_experiment_keeps_its_id_and_emits_one_update() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write_experiment(&root, "a", "Alpha");
+    write_experiment(&root, "b", "Beta");
+    let db = DirSQL::new(&root, vec![per_file_experiments()]).unwrap();
+    let alpha = id_of(&db, "a");
+
+    write_experiment(&root, "a", "Renamed");
+    let events = db.apply_file_events(vec![FileEvent::Modified(root.join("a.json"))]);
+
+    match events.as_slice() {
+        [
+            RowEvent::Update {
+                old_row, new_row, ..
+            },
+        ] => {
+            assert_eq!(old_row["name"], Value::Text("Alpha".into()));
+            assert_eq!(new_row["name"], Value::Text("Renamed".into()));
+            assert_eq!(new_row["id"], alpha);
         }
         other => panic!("expected one update, got: {other:?}"),
     }

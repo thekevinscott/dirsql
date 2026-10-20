@@ -236,3 +236,42 @@ fn a_rejected_batch_lands_with_the_batch_that_resolves_it() {
         vec!["beta"]
     );
 }
+
+#[test]
+fn editing_a_parent_keeps_the_children_its_delete_would_cascade_to() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir(root.join("parents")).unwrap();
+    fs::create_dir(root.join("children")).unwrap();
+    fs::write(root.join("parents").join("1.txt"), "alpha").unwrap();
+    fs::write(root.join("children").join("kid.txt"), "1").unwrap();
+    let cascading = Table::new(
+        "child",
+        "CREATE TABLE child (name TEXT, \
+         parent_id INTEGER REFERENCES parent(id) ON DELETE CASCADE)",
+        "children/*.txt",
+        |path| {
+            vec![HashMap::from([
+                ("name".into(), Value::Text(stem(path))),
+                (
+                    "parent_id".into(),
+                    Value::Integer(contents(path).parse().unwrap()),
+                ),
+            ])] as Vec<Row>
+        },
+    );
+    let db = DirSQL::new(&root, vec![parent_table("parents/*.txt"), cascading]).unwrap();
+    let parent = root.join("parents").join("1.txt");
+    fs::write(&parent, "renamed").unwrap();
+
+    let events = db.apply_file_events(vec![FileEvent::Modified(parent)]);
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(
+        names(
+            &db,
+            "SELECT p.name FROM child c JOIN parent p ON p.id = c.parent_id"
+        ),
+        vec!["renamed"]
+    );
+}
