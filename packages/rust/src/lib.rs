@@ -418,6 +418,8 @@ struct DirSqlInner {
     groups: Vec<AnchorGroup>,
     on_file_map: HashMap<String, Hook>,
     strict_map: HashMap<String, bool>,
+    /// Every table's name in declaration order: per-table hooks run in it.
+    declared: Vec<String>,
     /// The root-relative paths each per-table hook was last run over. Rows
     /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
     /// deleted directory is traced back to the tables it fed.
@@ -887,8 +889,10 @@ impl DirSQL {
     /// Re-run every per-table hook `pending` names, once each, over the files
     /// its glob matches now, and replace that table's rows.
     fn refresh_pending(&self, pending: PendingRefresh) -> Vec<RowEvent> {
+        let mut pending = pending.0;
+        pending.sort_by_key(|(table, _)| declared_position(&self.inner.declared, table));
         let mut events = Vec::new();
-        for (table, trigger) in pending.0 {
+        for (table, trigger) in pending {
             events.extend(self.refresh_table(&table, &trigger));
         }
         events
@@ -1263,7 +1267,7 @@ impl DirSQL {
         let (feeds, early) = if persist_ctx.is_none() {
             start_per_table_hooks(&tables)
         } else {
-            (HashMap::new(), HashMap::new())
+            (HashMap::new(), Vec::new())
         };
         let scanned = if table_names.is_empty() {
             Vec::new()
@@ -1417,6 +1421,7 @@ impl DirSQL {
         let mut on_file_map: HashMap<String, Hook> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
         let mut ddl_map: HashMap<String, String> = HashMap::new();
+        let declared: Vec<String> = tables.iter().map(|table| table.name.clone()).collect();
 
         for table in tables {
             let table_name = table.name.clone();
@@ -1475,7 +1480,7 @@ impl DirSQL {
         // Grouping walks every scanned file, so it runs beside the early
         // hooks' inserts instead of ahead of them, and settles the early
         // tables' file lists there too.
-        let early_tables: HashSet<String> = early.keys().cloned().collect();
+        let early_tables: HashSet<String> = early.iter().map(|(name, _)| name.clone()).collect();
         let (grouped, streamed) = std::thread::scope(|scope| {
             let grouping = scope.spawn(|| {
                 group_scanned(scanned_files.into_files(), &on_file_map)
@@ -1488,7 +1493,8 @@ impl DirSQL {
             )
         });
         streamed?;
-        let (per_file, (batches, streamed)) = grouped?;
+        let (per_file, (mut batches, streamed)) = grouped?;
+        batches.sort_by_key(|(table_name, _, _)| declared_position(&declared, table_name));
 
         // The phase a user actually waits on: one `on_file` round trip per
         // file or per table, plus whatever the table's DDL triggers on insert.
@@ -1585,7 +1591,7 @@ impl DirSQL {
             });
             if !current {
                 let table_root = anchors.of(&table_name);
-                let production = start_hook(hook, abs_paths.into_iter());
+                let production = start_hook(hook, abs_paths.into_iter(), Turn::default());
                 let outcome = stream_table_rows(&db, &table_name, production, strict)
                     .map_err(map_db_error)?;
                 match outcome {
@@ -1653,6 +1659,7 @@ impl DirSQL {
                 groups,
                 on_file_map,
                 strict_map,
+                declared,
                 batch_files: Mutex::new(batch_files),
                 scan_failures: on_file_failures,
                 watcher: Mutex::new(None),
@@ -2052,7 +2059,7 @@ pub struct PreparedBuild {
     ignore: Vec<String>,
     scanned_files: Scanned,
     /// Per-table hooks already running over the paths the scan found, by table.
-    early: HashMap<String, Production>,
+    early: Vec<(String, Production)>,
     persist: Option<PreparedPersist>,
     poll_interval: Duration,
     hint_legacy_files_table: bool,
@@ -2513,12 +2520,25 @@ struct Production {
     handle: std::thread::JoinHandle<std::result::Result<(), String>>,
 }
 
+/// A per-table hook's place in declaration order: it waits for the hook
+/// before it to finish, and releases the next by dropping `done` as it ends.
+#[derive(Default)]
+struct Turn {
+    after: Option<std::sync::mpsc::Receiver<()>>,
+    done: Option<std::sync::mpsc::Sender<()>>,
+}
+
 fn start_hook(
     hook: Arc<OnFilesFn>,
     paths: impl Iterator<Item = PathBuf> + Send + 'static,
+    turn: Turn,
 ) -> Production {
     let (sender, chunks) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
+        let Turn { after, done: _done } = turn;
+        if let Some(after) = after {
+            let _ = after.recv();
+        }
         let mut paths = paths.peekable();
         if paths.peek().is_none() {
             return Ok(());
@@ -2531,24 +2551,32 @@ fn start_hook(
     Production { chunks, handle }
 }
 
-/// Start every per-table hook before the scan, so each runs over its paths as
-/// the scan finds them: the senders feed the hooks, and closing them ends the
-/// paths.
+/// Start every per-table hook before the scan, so the first runs over its
+/// paths as the scan finds them and each later one runs as soon as the one
+/// declared before it finishes: the senders feed the hooks, and closing them
+/// ends the paths.
+#[allow(clippy::type_complexity)]
 fn start_per_table_hooks(
     tables: &[Table],
 ) -> (
     HashMap<String, std::sync::mpsc::Sender<PathBuf>>,
-    HashMap<String, Production>,
+    Vec<(String, Production)>,
 ) {
     let mut feeds = HashMap::new();
-    let mut running = HashMap::new();
+    let mut running = Vec::new();
+    let mut after = None;
     for table in tables {
         if let Hook::PerTable(hook) = &table.hook {
             let (feed, paths) = std::sync::mpsc::channel();
-            running.insert(
+            let (done, next) = std::sync::mpsc::channel();
+            let turn = Turn {
+                after: after.replace(next),
+                done: Some(done),
+            };
+            running.push((
                 table.name.clone(),
-                start_hook(Arc::clone(hook), paths.into_iter()),
-            );
+                start_hook(Arc::clone(hook), paths.into_iter(), turn),
+            ));
             feeds.insert(table.name.clone(), feed);
         }
     }
@@ -2637,10 +2665,11 @@ fn group_scanned(
     Ok((per_file, batches))
 }
 
-/// Insert the rows of every hook started before the scan.
+/// Insert the rows of every hook started before the scan, in the order the
+/// hooks run.
 fn stream_early(
     db: &Db,
-    early: HashMap<String, Production>,
+    early: Vec<(String, Production)>,
     strict_map: &HashMap<String, bool>,
 ) -> Result<()> {
     for (table_name, production) in early {
@@ -2655,6 +2684,10 @@ fn stream_early(
         }
     }
     Ok(())
+}
+
+fn declared_position(declared: &[String], table: &str) -> Option<usize> {
+    declared.iter().position(|name| name == table)
 }
 
 /// Split off the batches of tables whose hooks already ran, keeping only
@@ -3368,7 +3401,7 @@ mod internal_tests {
                 stat: None,
                 trusted: false,
             }]),
-            early: HashMap::new(),
+            early: Vec::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
             hint_legacy_files_table: false,
@@ -5451,7 +5484,7 @@ mod internal_tests {
             groups: Vec::new(),
             anchors: TableAnchors::at_root(root),
             scanned_files,
-            early: HashMap::new(),
+            early: Vec::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist,
             hint_legacy_files_table: false,
@@ -5577,6 +5610,14 @@ mod internal_tests {
     fn build(prepared: PreparedBuild) -> DirSQL {
         DirSQL::finish_build_with_fs(prepared, Arc::new(FakeFs::default()), Progress::indexing())
             .unwrap()
+    }
+
+    #[test]
+    fn declared_position_is_a_tables_index_in_declaration_order() {
+        let declared = ["zeta".to_string(), "alpha".to_string()];
+        assert_eq!(declared_position(&declared, "zeta"), Some(0));
+        assert_eq!(declared_position(&declared, "alpha"), Some(1));
+        assert_eq!(declared_position(&declared, "beta"), None);
     }
 
     #[test]
