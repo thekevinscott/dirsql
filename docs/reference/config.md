@@ -374,9 +374,12 @@ foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project
   batch that touches the same table carries the orphaning change and waits
   too.
 
-`ON DELETE` and `ON UPDATE` actions are not deferred. `dirsql` applies a changed
-file as a delete and an insert, so `ON DELETE CASCADE` deletes the children of a
-parent whose file is edited or renamed, even though their files still exist.
+`ON DELETE` and `ON UPDATE` actions are not deferred. A parent table with a
+`PRIMARY KEY`, or a `UNIQUE` column its rows fill, has an edited row `UPDATE`d
+in place, so its children stay. A table without one has a changed row deleted
+and inserted, so `ON DELETE CASCADE` deletes the children of a parent whose
+file is edited. A row whose key changes, as when the key is taken from a
+renamed file's name, is a delete and an insert either way.
 
 ### `on-file` row mapping
 
