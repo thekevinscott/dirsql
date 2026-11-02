@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/fanout_test.py -q",
+  "ran_at": 1793653639,
+  "exit_code": 0,
+  "commit": "90967ba7a324453df04aa604126a0d4c004ea887",
+  "branch": "bot/1557-watch-rename-1102"
+}
