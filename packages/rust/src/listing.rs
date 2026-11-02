@@ -53,6 +53,16 @@ impl Chunk {
         self.entries.len() == CHUNK_ENTRIES
     }
 
+    fn name(&self, listed: &Listed) -> &OsStr {
+        self.names.get(listed.start, listed.end)
+    }
+
+    fn sort(&mut self) {
+        let mut entries = std::mem::take(&mut self.entries);
+        entries.sort_unstable_by(|a, b| by_name(a, b, |listed| self.name(listed)));
+        self.entries = entries;
+    }
+
     fn push(&mut self, name: &OsStr, seen: Seen) {
         let start = self.names.add(name);
         self.entries.push(Listed {
@@ -158,10 +168,46 @@ impl Listing {
     /// The entries of `dir` in the byte order of their names; none when it
     /// cannot be read.
     pub(crate) fn read(dir: &Path) -> Listing {
-        let mut listing = Listing::default();
-        read_chunks(dir, &mut |chunk| listing.add(chunk));
-        listing.sort();
-        listing
+        Listing::sorted(|emit| read_chunks(dir, emit), &Chunk::sort)
+    }
+
+    /// Every chunk `read` hands out, in the byte order of their names. Past
+    /// the first chunk, a thread of its own `sort`s each chunk while the next
+    /// is read, and the sorted chunks are then merged on every core.
+    fn sorted(
+        read: impl FnOnce(&mut dyn FnMut(Chunk)),
+        sort: &(dyn Fn(&mut Chunk) + Sync),
+    ) -> Listing {
+        let (send, receive) = std::sync::mpsc::channel::<Chunk>();
+        let mut receive = Some(receive);
+        let mut first = None;
+        std::thread::scope(|scope| {
+            let mut sorter = None;
+            read(&mut |chunk| {
+                if sorter.is_none() {
+                    let Some(earlier) = first.take() else {
+                        first = Some(chunk);
+                        return;
+                    };
+                    let receive = receive.take().expect("one sorter is started");
+                    sorter = Some(scope.spawn(move || sort_each(receive, sort)));
+                    send.send(earlier).expect("the sorter is waiting");
+                }
+                send.send(chunk).expect("the sorter is waiting");
+            });
+            drop(send);
+            match sorter {
+                Some(sorter) => merge(sorter.join().expect("sorting does not panic")),
+                None => {
+                    let mut listing = Listing::default();
+                    if let Some(first) = first {
+                        listing.add(first);
+                    }
+                    listing.sort();
+                    listing
+                }
+            }
+        })
     }
 
     pub(crate) fn entries(&self) -> &[Listed] {
@@ -188,14 +234,91 @@ impl Listing {
 
     pub(crate) fn sort(&mut self) {
         let mut entries = std::mem::take(&mut self.entries);
-        // Comparing a leading word first keeps most comparisons out of the
-        // name buffer, which is most of the sort's cost in a large directory.
-        entries.sort_unstable_by(|a, b| {
-            a.prefix
-                .cmp(&b.prefix)
-                .then_with(|| self.name(a).cmp(self.name(b)))
-        });
+        entries.sort_unstable_by(|a, b| by_name(a, b, |listed| self.name(listed)));
         self.entries = entries;
+    }
+}
+
+/// How `a` and `b` order by name. Comparing a leading word first keeps most
+/// comparisons out of the name buffers, which is most of a sort's cost in a
+/// large directory.
+fn by_name<'n>(a: &Listed, b: &Listed, name: impl Fn(&Listed) -> &'n OsStr) -> std::cmp::Ordering {
+    a.prefix.cmp(&b.prefix).then_with(|| name(a).cmp(name(b)))
+}
+
+/// Each chunk `receive` hands over, sorted by `sort`, in the order handed.
+fn sort_each(
+    receive: std::sync::mpsc::Receiver<Chunk>,
+    sort: &(dyn Fn(&mut Chunk) + Sync),
+) -> Vec<Chunk> {
+    receive
+        .into_iter()
+        .map(|mut chunk| {
+            sort(&mut chunk);
+            chunk
+        })
+        .collect()
+}
+
+/// The entries of `sorted`, a sample of a directory, that split it into
+/// `runs` runs of about equal size.
+fn splits(sorted: &[Listed], runs: usize) -> Vec<Listed> {
+    (1..runs)
+        .map(|run| sorted[run * sorted.len() / runs])
+        .collect()
+}
+
+/// `chunks`, each sorted and given in the order read, as one listing in name
+/// order. The names are split into a run per core at names sampled from the
+/// first chunk, and each run is merged from its share of every chunk on a
+/// core of its own.
+fn merge(chunks: Vec<Chunk>) -> Listing {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let first = &chunks[0].entries;
+    let splits = splits(first, cores);
+    let name = |listed: &Listed| chunks[listed.chunk as usize].name(listed);
+    let bounds: Vec<Vec<usize>> = chunks
+        .iter()
+        .map(|chunk| {
+            let inner = splits.iter().map(|split| {
+                chunk
+                    .entries
+                    .partition_point(|listed| by_name(listed, split, name).is_lt())
+            });
+            std::iter::once(0)
+                .chain(inner)
+                .chain(std::iter::once(chunk.entries.len()))
+                .collect()
+        })
+        .collect();
+    let total = chunks.iter().map(|chunk| chunk.entries.len()).sum();
+    let mut entries = vec![first[0]; total];
+    std::thread::scope(|scope| {
+        let mut rest = entries.as_mut_slice();
+        for run in 0..cores {
+            let len = bounds
+                .iter()
+                .map(|bounds| bounds[run + 1] - bounds[run])
+                .sum();
+            let (merged, after) = rest.split_at_mut(len);
+            rest = after;
+            let (chunks, bounds) = (&chunks, &bounds);
+            scope.spawn(move || {
+                let mut filled = 0;
+                for (chunk, bounds) in chunks.iter().zip(bounds) {
+                    let share = &chunk.entries[bounds[run]..bounds[run + 1]];
+                    merged[filled..filled + share.len()].copy_from_slice(share);
+                    filled += share.len();
+                }
+                // A stable sort merges the chunks' sorted shares rather than
+                // sorting them afresh.
+                merged.sort_by(|a, b| by_name(a, b, name));
+            });
+        }
+    });
+    Listing {
+        names: chunks.into_iter().map(|chunk| chunk.names).collect(),
+        entries,
     }
 }
 
@@ -403,6 +526,120 @@ mod tests {
         assert!(listing.holds(OsStr::new("a")));
         assert!(!listing.holds(OsStr::new(".gi")));
         assert!(!Listing::default().holds(OsStr::new(".git")));
+    }
+
+    fn sorted_from(chunks: Vec<Chunk>) -> Listing {
+        let mut chunks = chunks.into_iter();
+        Listing::sorted(|emit| chunks.by_ref().for_each(&mut *emit), &Chunk::sort)
+    }
+
+    fn named_and_seen(listing: &Listing) -> Vec<(String, Seen)> {
+        listing
+            .entries()
+            .iter()
+            .map(|listed| {
+                (
+                    listing.name(listed).to_string_lossy().into_owned(),
+                    listed.seen,
+                )
+            })
+            .collect()
+    }
+
+    /// Names past the eight bytes a prefix compares, alternately seen as a
+    /// directory and a file, in byte order.
+    fn long_names(count: usize) -> Vec<(String, Seen)> {
+        (0..count)
+            .map(|i| {
+                let seen = if i % 2 == 0 { Seen::Dir } else { Seen::File };
+                (format!("shared-prefix-{i:05}"), seen)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_listing_sorted_from_several_chunks_holds_every_entry_in_byte_order() {
+        let count = 3 * CHUNK_ENTRIES + 5;
+        let expected = long_names(count);
+        let shuffled = (0..count).map(|i| expected[i * 7919 % count].clone());
+        assert_eq!(named_and_seen(&sorted_from(chunks_of(shuffled))), expected);
+    }
+
+    #[test]
+    fn a_listing_sorted_from_chunks_read_in_reverse_holds_every_entry_in_byte_order() {
+        let count = 2 * CHUNK_ENTRIES + 1;
+        let expected = long_names(count);
+        let reversed = expected.iter().rev().cloned();
+        assert_eq!(named_and_seen(&sorted_from(chunks_of(reversed))), expected);
+    }
+
+    #[test]
+    fn a_listing_sorted_from_one_chunk_holds_it_in_byte_order() {
+        let pushed = [("b", Seen::File), ("c", Seen::Dir), ("a", Seen::Link)];
+        let owned = pushed.map(|(name, seen)| (name.to_string(), seen));
+        let expected = [("a", Seen::Link), ("b", Seen::File), ("c", Seen::Dir)]
+            .map(|(name, seen)| (name.to_string(), seen));
+        assert_eq!(named_and_seen(&sorted_from(chunks_of(owned))), expected);
+    }
+
+    #[test]
+    fn a_listing_sorted_from_no_chunk_is_empty() {
+        assert!(sorted_from(Vec::new()).entries().is_empty());
+    }
+
+    #[test]
+    fn a_wide_listing_sorts_a_chunk_before_its_last_is_read() {
+        use std::sync::{Condvar, Mutex};
+        let sorted = (Mutex::new(false), Condvar::new());
+        let sort = |chunk: &mut Chunk| {
+            chunk.sort();
+            *sorted.0.lock().unwrap() = true;
+            sorted.1.notify_all();
+        };
+        let mut chunks = chunks_of(numbered(2 * CHUNK_ENTRIES + 1)).into_iter();
+        let mut sorted_early = false;
+        let listing = Listing::sorted(
+            |emit| {
+                emit(chunks.next().unwrap());
+                emit(chunks.next().unwrap());
+                let done = sorted.0.lock().unwrap();
+                let wait = std::time::Duration::from_secs(10);
+                let (done, _) = sorted
+                    .1
+                    .wait_timeout_while(done, wait, |done| !*done)
+                    .unwrap();
+                sorted_early = *done;
+                drop(done);
+                chunks.by_ref().for_each(&mut *emit);
+            },
+            &sort,
+        );
+        assert!(
+            sorted_early,
+            "no chunk was sorted until the whole directory was read"
+        );
+        assert_eq!(listing.entries().len(), 2 * CHUNK_ENTRIES + 1);
+    }
+
+    #[test]
+    fn splits_cut_a_sorted_sample_into_runs_of_about_equal_size() {
+        let named = ["a", "b", "c", "d", "e", "f", "g", "h"].map(|name| (name, Seen::File));
+        let listing = listing_of(&named);
+        let got: Vec<&OsStr> = splits(listing.entries(), 4)
+            .iter()
+            .map(|listed| listing.name(listed))
+            .collect();
+        assert_eq!(got, ["c", "e", "g"]);
+    }
+
+    #[test]
+    fn read_lists_a_directory_wider_than_a_chunk_in_byte_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected: Vec<_> = numbered(CHUNK_ENTRIES + 3).collect();
+        for (name, _) in &expected {
+            std::fs::File::create(dir.path().join(name)).unwrap();
+        }
+        assert_eq!(named_and_seen(&Listing::read(dir.path())), expected);
     }
 
     #[test]
