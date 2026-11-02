@@ -18,4 +18,4 @@ _None._
 
 #### Verification
 
-Run `dirsql query "SELECT count(*) AS n FROM './notes/**/*.md'"` in a directory with Markdown notes; the count remains the number of matching files.
+In a directory containing exactly one file, `notes/one.md`, run `dirsql query "SELECT count(*) AS n FROM './notes/**/*.md'"`; the output contains `"n": 1`.
