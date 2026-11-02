@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py -x -q -p no:cacheprovider",
+  "ran_at": 1793652544,
+  "exit_code": 0,
+  "commit": "6d95f43e2d8ca47748aa05da5aaebecb83a90678",
+  "branch": "bot/1534-fm-native-1102"
+}

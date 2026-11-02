@@ -708,6 +708,32 @@ impl<'a> Place<'a> {
             linked,
             ..
         } = self;
+        if !walk.dirs {
+            return entries
+                .iter()
+                .filter_map(|listed| {
+                    let name = listing.name(listed);
+                    if name.is_empty() || (listed.seen == Seen::File && !keep_name(name)) {
+                        return None;
+                    }
+                    match walk.take(dir, name, listed.seen, rel, states, *linked)? {
+                        Taken::File(child) => keep(&child).then(|| Step::Leaf(leaf(child, dir))),
+                        Taken::Dir {
+                            child,
+                            next,
+                            linked,
+                        } => Some(Step::Dir(Box::new(Place {
+                            walk: walk.clone(),
+                            dir: dir.join(name),
+                            rel: child,
+                            states: next,
+                            linked,
+                            part: None,
+                        }))),
+                    }
+                })
+                .collect();
+        }
         let taken: Vec<_> = entries
             .iter()
             .map(|listed| {
