@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/extension_package_test.py tests/e2e/plugin_discovery_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/on_file_query_test.py tests/e2e/fanout_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1793651115,
+  "exit_code": 0,
+  "commit": "91c319050e0960f87324c774ed7593895947fb35",
+  "branch": "bot/1552-watch-gap-1102"
+}

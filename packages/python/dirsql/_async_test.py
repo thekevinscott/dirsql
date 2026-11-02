@@ -36,6 +36,10 @@ class _FakeRustDirSQL:
         self.suppress_config_extensions = suppress_config_extensions
         self.query_calls = []
         self.scan_failures_value = []
+        self.watchers_started = 0
+
+    def _start_watcher(self):
+        self.watchers_started += 1
 
     def query(self, sql):
         self.query_calls.append(sql)
@@ -458,3 +462,47 @@ def describe_DirSQL_async():
 
                 assert isinstance(stream, async_mod._WatchStream)
                 assert stream._owner is db
+
+        @pytest.mark.asyncio
+        async def it_starts_the_watcher_before_returning_once_ready():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                db.watch()
+
+                assert db._db.watchers_started == 1
+
+        @pytest.mark.asyncio
+        async def it_starts_the_watcher_before_ready_resolves_when_called_early():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+
+                stream = db.watch()
+                await db.ready()
+
+                assert stream is not None
+                assert db._db.watchers_started == 1
+
+        @pytest.mark.asyncio
+        async def it_leaves_the_watcher_stopped_without_a_stream():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                assert db._db.watchers_started == 0
+
+        @pytest.mark.asyncio
+        async def it_leaves_an_early_start_failure_to_the_stream():
+            class _NoWatchDirSQL(_FakeRustDirSQL):
+                def _start_watcher(self):
+                    raise RuntimeError("no named tables")
+
+            with patch.object(async_mod, "_RustDirSQL", _NoWatchDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+
+                stream = db.watch()
+                await db.ready()
+
+                with pytest.raises(RuntimeError, match="no named tables"):
+                    await stream.__anext__()

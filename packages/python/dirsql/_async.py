@@ -1,6 +1,7 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
+import contextlib
 import os
 import weakref
 
@@ -129,10 +130,19 @@ class DirSQL:
         """Run the scan in the background."""
         try:
             self._db = await asyncio.to_thread(self._build_db)
+            if self._watch_streams:
+                await asyncio.to_thread(self._start_watcher_quietly, self._db)
         except Exception as exc:
             self._init_error = exc
         finally:
             self._ready_event.set()
+
+    @staticmethod
+    def _start_watcher_quietly(db):
+        # A watcher that cannot start is the stream's error, not init's: the
+        # stream's first iteration retries the start and raises it there.
+        with contextlib.suppress(Exception):
+            db._start_watcher()
 
     def _build_db(self):
         """Resolve extensions and construct the Rust-backed instance.
@@ -229,14 +239,22 @@ class DirSQL:
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent.
 
-        Like :meth:`query`, the returned stream awaits :meth:`ready` on its
-        first iteration before starting the watcher, so calling ``watch``
-        before an explicit ``await db.ready()`` waits for the background scan
-        (and surfaces any initialization error) instead of failing on a
-        still-``None`` ``_db``.
+        The watcher is live once both ``watch()`` and :meth:`ready` have
+        returned, in either order: a file written after that point produces
+        an event and reaches the index. Called after the scan, ``watch()``
+        starts the watcher before returning; called before it, the watcher
+        starts before :meth:`ready` resolves. Writes made while the scan is
+        still running may be missed.
+
+        The returned stream awaits :meth:`ready` on its first iteration, so
+        iterating before an explicit ``await db.ready()`` waits for the
+        background scan and surfaces any initialization error.
 
         Each call returns an independent stream, and every stream receives
         every event observed after it was created, so several consumers
         (one per client, say) can share one instance.
         """
-        return _WatchStream(self)
+        stream = _WatchStream(self)
+        if self._db is not None:
+            self._db._start_watcher()
+        return stream

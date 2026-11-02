@@ -297,9 +297,14 @@ while let Some(event) = stream.next().await { ... }
 :::
 
 Returns a stream of [`RowEvent`](#rowevent)s reflecting filesystem changes
-under the root. The watcher starts on first iteration (Python/TypeScript)
-or at the `watch()` call (Rust). The stream never terminates on its own;
-stop consuming it to stop.
+under the root. The stream never terminates on its own; stop consuming it
+to stop.
+
+A file written once the watcher is live produces an event and reaches the
+index. Rust: the watcher is live when `watch()` returns. Python: it is live
+once both `watch()` and `ready()` have returned, in either order; a write made
+while the initial scan is still running may be missed. TypeScript: the watcher
+starts on first iteration.
 
 An instance with no named tables cannot be watched: path-tables emit no
 watch events, so `watch()` (and the polling primitives) raise an error naming

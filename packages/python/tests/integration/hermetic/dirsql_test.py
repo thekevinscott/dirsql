@@ -211,12 +211,12 @@ def describe_binding_layer():
         # Feature: watch() is an async iterator of RowEvent. See
         # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
-        async def it_lazily_starts_watcher_on_first_iteration(mock_core):
+        async def it_starts_the_watcher_before_watch_returns(mock_core):
             db = mock_core("/root", tables=["t"])
             await db.ready()
 
             stream = db.watch()
-            assert _FakeRustDirSQL.instances[0].started is False
+            assert _FakeRustDirSQL.instances[0].started is True
 
             _FakeRustDirSQL.instances[0].poll_batches = [["evt-1"]]
 
