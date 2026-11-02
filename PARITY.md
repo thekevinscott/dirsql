@@ -2,9 +2,6 @@
 
 API surface comparison across the three language SDKs.
 
-The shared core's file-only scan uses the same ordered, single-pass entry
-processing for Python, Rust, and TypeScript; this changes no SDK API.
-
 ## Core Types
 
 | Concept     | Python                  | Rust                     | TypeScript               |
