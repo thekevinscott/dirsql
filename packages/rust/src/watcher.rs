@@ -181,7 +181,9 @@ fn watch_tree_quietly(watcher: &mut RecommendedWatcher, scopes: &[WatchScope], d
 }
 
 /// Watch each directory [`dirs_to_watch`] finds from `dir` that is not in
-/// `watched` yet.
+/// `watched` yet, walking again until a walk finds nothing new. A directory
+/// created below another after the walk but before that one's watch landed
+/// is reported by no event; only a later walk finds it.
 fn watch_tree(
     scopes: &[WatchScope],
     dir: &Path,
@@ -189,12 +191,18 @@ fn watch_tree(
     watched: &mut HashSet<PathBuf>,
     watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
 ) -> Result<(), notify::Error> {
-    for found in dirs_to_watch(scopes, dir, walk) {
-        if watched.insert(found.clone()) {
-            watch(&found)?;
+    loop {
+        let mut found_new = false;
+        for found in dirs_to_watch(scopes, dir, walk) {
+            if watched.insert(found.clone()) {
+                found_new = true;
+                watch(&found)?;
+            }
+        }
+        if !found_new {
+            return Ok(());
         }
     }
-    Ok(())
 }
 
 /// A directory, not a symlink to one: the scan does not follow links, so
