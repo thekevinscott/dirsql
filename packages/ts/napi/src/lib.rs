@@ -334,14 +334,17 @@ impl DirSQL {
         AsyncTask::new(QueryOrderedTask { inner, sql })
     }
 
-    /// Start the file watcher. Must be called before pollEvents.
+    /// Start the file watcher. Must be called before pollEvents. Idempotent.
     ///
-    /// Runs on the libuv threadpool so the JS event loop stays responsive
-    /// while the watcher is being initialized. Returns a `Promise` in JS.
-    #[napi(js_name = "startWatcher", ts_return_type = "Promise<void>")]
-    pub fn start_watcher(&self) -> AsyncTask<StartWatcherTask> {
-        let inner = self.inner.borrow().as_ref().cloned();
-        AsyncTask::new(StartWatcherTask { inner })
+    /// Synchronous, so the watcher is live when the call returns: a stream
+    /// handed out right after it sees every later write.
+    #[napi(js_name = "startWatcher")]
+    pub fn start_watcher(&self) -> Result<()> {
+        let inner = self.inner.borrow();
+        let inner = inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        inner.start_watching().map_err(to_napi_err)
     }
 
     /// Poll for file events with a timeout (in milliseconds).
@@ -520,29 +523,6 @@ impl Task for QueryOrderedTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
-    }
-}
-
-/// Runs `DirSQL::start_watching` on the libuv threadpool. Idempotent on the
-/// core side, so repeated calls from JS are still safe.
-pub struct StartWatcherTask {
-    inner: Option<CoreDirSQL>,
-}
-
-impl Task for StartWatcherTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let inner = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        inner.start_watching().map_err(to_napi_err)
-    }
-
-    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
-        Ok(())
     }
 }
 

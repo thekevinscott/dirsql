@@ -33,7 +33,7 @@ const openAsync = fakeCore.DirSQL.openAsync;
 function makeInner() {
   return {
     query: vi.fn().mockResolvedValue([]),
-    startWatcher: vi.fn().mockResolvedValue(undefined),
+    startWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
   };
 }

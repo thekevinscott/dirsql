@@ -39,7 +39,7 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
   return {
     query: vi.fn().mockResolvedValue([]),
     queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
-    startWatcher: vi.fn().mockResolvedValue(undefined),
+    startWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
     scanFailures: vi.fn(() => []),
     close: vi.fn(),
@@ -338,8 +338,9 @@ describe("DirSQL", () => {
       expect(withFailures.scanFailures).toHaveBeenCalledOnce();
     });
 
-    it("startWatcher forwards to the inner instance", async () => {
+    it("startWatcher forwards to the inner instance once", async () => {
       const db = new DirSQL({ root: "/d" });
+      await db.startWatcher();
       await db.startWatcher();
       expect(inner.startWatcher).toHaveBeenCalledOnce();
     });
@@ -359,6 +360,48 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
+    it("starts the watcher before returning once ready", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      db.watch();
+      expect(inner.startWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("starts the watcher before ready resolves when called early", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const stream = db.watch();
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+      await db.ready;
+      expect(inner.startWatcher).toHaveBeenCalledOnce();
+      await stream.return();
+    });
+
+    it("leaves the watcher stopped without a stream", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+    });
+
+    it("leaves an early start failure to the stream", async () => {
+      const inner = makeInner({
+        startWatcher: vi.fn(() => {
+          throw new Error("no named tables");
+        }),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const stream = db.watch();
+      await db.ready;
+      await expect(stream.next()).rejects.toThrow("no named tables");
+      expect(inner.startWatcher).toHaveBeenCalledTimes(2);
+    });
+
     it("buffers each batch for every stream from creation", async () => {
       const events = [
         { table: "t", action: "insert" as const, row: { n: 1 } },

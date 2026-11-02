@@ -56,7 +56,7 @@ beforeEach(() => {
   planConfigExtensions.mockReturnValue(null);
   openAsync.mockResolvedValue({
     query: vi.fn().mockResolvedValue([]),
-    startWatcher: vi.fn().mockResolvedValue(undefined),
+    startWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
   });
 });
