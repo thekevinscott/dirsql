@@ -14,6 +14,7 @@ on:
       - 'packages/python/tests/e2e/release_speed_test.py'
       - 'packages/python/tests/e2e/glob_speed_recursive_test.py'
       - 'packages/python/tests/e2e/stat_speed_test.py'
+      - 'packages/python/tests/e2e/frontmatter_parse_speed_test.py'
       - '.github/workflows/speed-sanity-ci.yml'
 
 concurrency:
@@ -53,4 +54,8 @@ jobs:
 
       - name: Time this build against the previous release
         run: uv run python -m pytest tests/e2e/release_speed_test.py -x -q -s --tb=short
+        working-directory: packages/python
+
+      - name: Time frontmatter against native
+        run: uv run python -m pytest tests/e2e/frontmatter_parse_speed_test.py -x -q -s --tb=short
         working-directory: packages/python
