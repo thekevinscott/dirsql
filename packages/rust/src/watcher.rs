@@ -151,7 +151,9 @@ fn forward(
                     return;
                 };
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                watch_tree_quietly(&mut watcher, scopes, path);
+                watch_tree_quietly(scopes, path, &walk_scope, &mut |dir| {
+                    watcher.watch(dir, RecursiveMode::NonRecursive)
+                });
             }
             if fe == FileEvent::Rescan && PER_DIRECTORY {
                 let Some(watcher) = watcher.upgrade() else {
@@ -161,7 +163,9 @@ fn forward(
                 // Directories created while events were being dropped have no
                 // watch yet.
                 for scope in scopes {
-                    watch_tree_quietly(&mut watcher, scopes, &scope.root);
+                    watch_tree_quietly(scopes, &scope.root, &walk_scope, &mut |dir| {
+                        watcher.watch(dir, RecursiveMode::NonRecursive)
+                    });
                 }
             }
             if tx.send(fe).is_err() {
@@ -173,9 +177,14 @@ fn forward(
 
 /// [`watch_tree`] from `dir`, carrying on past any directory that cannot be
 /// watched: one gone again before its watch lands has nothing to report.
-fn watch_tree_quietly(watcher: &mut RecommendedWatcher, scopes: &[WatchScope], dir: &Path) {
-    let _ = watch_tree(scopes, dir, &walk_scope, &mut HashSet::new(), &mut |dir| {
-        let _ = tolerate_missing(watcher.watch(dir, RecursiveMode::NonRecursive));
+fn watch_tree_quietly(
+    scopes: &[WatchScope],
+    dir: &Path,
+    walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
+    watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
+) {
+    let _ = watch_tree(scopes, dir, walk, &mut HashSet::new(), &mut |dir| {
+        let _ = tolerate_missing(watch(dir));
         Ok(())
     });
 }
@@ -570,6 +579,29 @@ mod tests {
         assert_eq!(
             seen,
             vec![PathBuf::from("/r/new"), PathBuf::from("/r/new/late")]
+        );
+    }
+
+    #[test]
+    fn watch_tree_quietly_watches_every_directory_past_a_failed_one() {
+        let scopes = [scope("/r", &[])];
+        let mut seen = Vec::new();
+        watch_tree_quietly(
+            &scopes,
+            Path::new("/r"),
+            &|_, dir| vec![dir.to_path_buf(), dir.join("a"), dir.join("b")],
+            &mut |dir| {
+                seen.push(dir.to_path_buf());
+                Err(io_error(13))
+            },
+        );
+        assert_eq!(
+            seen,
+            vec![
+                PathBuf::from("/r"),
+                PathBuf::from("/r/a"),
+                PathBuf::from("/r/b")
+            ]
         );
     }
 
