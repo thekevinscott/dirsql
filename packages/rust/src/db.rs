@@ -4177,6 +4177,25 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_batch_rows_writes_only_the_update_when_rows_change_in_place() {
+        let db = experiments_db();
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Renamed"}
+            ]),
+        );
+        let before = db.conn().total_changes();
+
+        db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert_eq!(db.conn().total_changes() - before, 1);
+        assert_eq!(range_rows(&db, "experiments"), vec![(String::new(), 1, 2)]);
+    }
+
+    #[test]
     fn reconcile_batch_rows_writes_nothing_for_an_unchanged_keyed_table() {
         let db = experiments_db();
         let same = shaped(
