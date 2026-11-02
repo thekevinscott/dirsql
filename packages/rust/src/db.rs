@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -468,7 +469,14 @@ pub struct Db {
     /// The declared functions that batch. Every statement opens a collect
     /// pass on each of them; empty, a statement runs exactly once.
     batched: Vec<Arc<Worker>>,
+    /// Each table's key candidates (see [`Self::row_key`]) as of a schema
+    /// version: reading them takes three pragma queries, and a watched
+    /// change would otherwise pay for them every time.
+    keys: RefCell<HashMap<String, (i64, KeyCandidates)>>,
 }
+
+/// A table's `PRIMARY KEY` column names, then each plain `UNIQUE` index's.
+type KeyCandidates = Vec<Vec<Option<String>>>;
 
 /// Drops every batching worker's gathered replies when the statement that
 /// gathered them is done, whichever way it left.
@@ -521,6 +529,7 @@ impl Db {
             path_table_parser: None,
             calls: CallReporter::new(),
             batched: Vec::new(),
+            keys: RefCell::default(),
         })
     }
 
@@ -546,6 +555,7 @@ impl Db {
             path_table_parser: None,
             calls: CallReporter::new(),
             batched: Vec::new(),
+            keys: RefCell::default(),
         })
     }
 
@@ -657,12 +667,11 @@ impl Db {
     /// Return the column names declared in `table`'s DDL.
     pub fn get_table_columns(&self, table: &str) -> Result<Vec<String>> {
         validate_identifier(table)?;
-        let mut stmt = self.conn.prepare(&format!(
-            "PRAGMA table_info({})",
-            crate::sql_literal::quote_identifier(table)
-        ))?;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT name FROM pragma_table_info(?1) ORDER BY cid")?;
         let columns: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(1))?
+            .query_map([table], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(columns)
@@ -902,20 +911,19 @@ impl Db {
             &mut stored,
         )?;
         let key = self.row_key(table, rows)?;
-        let (changes, _) = self.reconcile_rows(table, &stored, rows, key.as_deref())?;
-        if changes.is_empty() {
+        let (changes, placed) = self.reconcile_rows(table, &stored, rows, key.as_deref())?;
+        // An update keeps its rowid, so only a removal or an addition can move
+        // the owner's range.
+        if changes.removed.is_empty() && changes.added.is_empty() {
             return Ok(changes);
         }
-        self.conn.execute(
-            "DELETE FROM _dirsql_internal_ranges WHERE table_name = ?1 AND file_path = ?2",
-            rusqlite::params![table, owner],
-        )?;
-        let (first, last): (Option<i64>, Option<i64>) = self.conn.query_row(
-            &format!("SELECT min(rowid), max(rowid) FROM \"{table}\""),
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if let (Some(first), Some(last)) = (first, last) {
+        self.conn
+            .prepare_cached(
+                "DELETE FROM _dirsql_internal_ranges WHERE table_name = ?1 AND file_path = ?2",
+            )?
+            .execute(rusqlite::params![table, owner])?;
+        // `placed` holds every row the table keeps.
+        if let (Some(&first), Some(&last)) = (placed.iter().min(), placed.iter().max()) {
             self.conn
                 .prepare_cached(RANGE_INSERT)?
                 .execute(rusqlite::params![table, owner, first, last])?;
@@ -1135,12 +1143,10 @@ impl Db {
         Ok((changes, placed))
     }
 
-    /// The positions in `rows.columns` of `table`'s key: its `PRIMARY KEY`,
-    /// else the first `UNIQUE` index whose columns `rows` emits non-NULL in
-    /// every row. A key the rows leave unset (a generated `INTEGER PRIMARY
-    /// KEY`) cannot match anything, so it is passed over.
-    fn row_key(&self, table: &str, rows: &ShapedRows) -> Result<Option<Vec<usize>>> {
-        let mut candidates: Vec<Vec<Option<String>>> = vec![
+    /// `table`'s `PRIMARY KEY` column names, then each plain `UNIQUE`
+    /// index's, as the schema declares them now.
+    fn key_candidates(&self, table: &str) -> Result<KeyCandidates> {
+        let mut candidates: KeyCandidates = vec![
             self.conn
                 .prepare_cached("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")?
                 .query_map([table], |r| r.get(0))?
@@ -1164,6 +1170,34 @@ impl Db {
                     .collect::<rusqlite::Result<_>>()?,
             );
         }
+        Ok(candidates)
+    }
+
+    /// The positions in `rows.columns` of `table`'s key: its `PRIMARY KEY`,
+    /// else the first `UNIQUE` index whose columns `rows` emits non-NULL in
+    /// every row. A key the rows leave unset (a generated `INTEGER PRIMARY
+    /// KEY`) cannot match anything, so it is passed over.
+    fn row_key(&self, table: &str, rows: &ShapedRows) -> Result<Option<Vec<usize>>> {
+        let version: i64 = self
+            .conn
+            .prepare_cached("PRAGMA schema_version")?
+            .query_row([], |r| r.get(0))?;
+        let cached = self
+            .keys
+            .borrow()
+            .get(table)
+            .filter(|(at, _)| *at == version)
+            .map(|(_, candidates)| candidates.clone());
+        let candidates = match cached {
+            Some(candidates) => candidates,
+            None => {
+                let candidates = self.key_candidates(table)?;
+                self.keys
+                    .borrow_mut()
+                    .insert(table.to_string(), (version, candidates.clone()));
+                candidates
+            }
+        };
         Ok(candidates.into_iter().find_map(|names| {
             let at = names
                 .iter()
@@ -4193,6 +4227,54 @@ mod tests {
 
         assert_eq!(db.conn().total_changes() - before, 1);
         assert_eq!(range_rows(&db, "experiments"), vec![(String::new(), 1, 2)]);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_keys_by_an_index_created_after_an_earlier_reconcile() {
+        let changes = |db: &Db, v: &str| {
+            let next = shaped(db, "t", serde_json::json!([{"k":"a","v":v}]));
+            db.reconcile_batch_rows("t", "", &next).unwrap()
+        };
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (k TEXT, v TEXT)")
+            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"k":"a","v":"0"}])),
+            "",
+        )
+        .unwrap();
+        assert!(!changes(&db, "1").keyed);
+
+        db.conn()
+            .execute_batch("CREATE UNIQUE INDEX t_k ON t(k)")
+            .unwrap();
+
+        assert!(changes(&db, "2").keyed);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_reuses_the_key_read_at_the_same_schema_version() {
+        let db = experiments_db();
+        let version: i64 = db
+            .conn()
+            .query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap();
+        db.keys
+            .borrow_mut()
+            .insert("experiments".into(), (version, Vec::new()));
+        let next = shaped(
+            &db,
+            "experiments",
+            serde_json::json!([
+                {"folder_name":"a","name":"Alpha"},
+                {"folder_name":"b","name":"Renamed"}
+            ]),
+        );
+
+        let changes = db.reconcile_batch_rows("experiments", "", &next).unwrap();
+
+        assert!(!changes.keyed);
     }
 
     #[test]
