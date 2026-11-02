@@ -94,11 +94,13 @@ impl Watcher {
         // A recursive watch already covers every directory below its root.
         let scopes = if PER_DIRECTORY { scopes } else { Vec::new() };
         for scope in &scopes {
-            for dir in dirs_to_watch(&scopes, &scope.root, &walk_scope) {
-                if watched.insert(dir.clone()) {
-                    tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive))?;
-                }
-            }
+            watch_tree(
+                &scopes,
+                &scope.root,
+                &walk_scope,
+                &mut watched,
+                &mut |dir| tolerate_missing(watcher.watch(dir, RecursiveMode::NonRecursive)),
+            )?;
         }
 
         let watcher = Arc::new(Mutex::new(watcher));
@@ -149,10 +151,7 @@ fn forward(
                     return;
                 };
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                for dir in dirs_to_watch(scopes, path, &walk_scope) {
-                    // A directory gone again before its watch lands has nothing to report.
-                    let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
-                }
+                watch_tree_quietly(&mut watcher, scopes, path);
             }
             if fe == FileEvent::Rescan && PER_DIRECTORY {
                 let Some(watcher) = watcher.upgrade() else {
@@ -162,9 +161,7 @@ fn forward(
                 // Directories created while events were being dropped have no
                 // watch yet.
                 for scope in scopes {
-                    for dir in dirs_to_watch(scopes, &scope.root, &walk_scope) {
-                        let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
-                    }
+                    watch_tree_quietly(&mut watcher, scopes, &scope.root);
                 }
             }
             if tx.send(fe).is_err() {
@@ -172,6 +169,32 @@ fn forward(
             }
         }
     }
+}
+
+/// [`watch_tree`] from `dir`, carrying on past any directory that cannot be
+/// watched: one gone again before its watch lands has nothing to report.
+fn watch_tree_quietly(watcher: &mut RecommendedWatcher, scopes: &[WatchScope], dir: &Path) {
+    let _ = watch_tree(scopes, dir, &walk_scope, &mut HashSet::new(), &mut |dir| {
+        let _ = tolerate_missing(watcher.watch(dir, RecursiveMode::NonRecursive));
+        Ok(())
+    });
+}
+
+/// Watch each directory [`dirs_to_watch`] finds from `dir` that is not in
+/// `watched` yet.
+fn watch_tree(
+    scopes: &[WatchScope],
+    dir: &Path,
+    walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
+    watched: &mut HashSet<PathBuf>,
+    watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
+) -> Result<(), notify::Error> {
+    for found in dirs_to_watch(scopes, dir, walk) {
+        if watched.insert(found.clone()) {
+            watch(&found)?;
+        }
+    }
+    Ok(())
 }
 
 /// A directory, not a symlink to one: the scan does not follow links, so
@@ -510,6 +533,55 @@ mod tests {
             dirs,
             vec![PathBuf::from("/r/src"), PathBuf::from("/r/src/deep")]
         );
+    }
+
+    #[test]
+    fn watch_tree_watches_a_directory_created_before_its_parent_was_watched() {
+        let scopes = [scope("/r", &[])];
+        let walks = std::cell::Cell::new(0);
+        let walk = |_: &WatchScope, dir: &Path| {
+            walks.set(walks.get() + 1);
+            if walks.get() == 1 {
+                vec![dir.to_path_buf()]
+            } else {
+                vec![dir.to_path_buf(), dir.join("late")]
+            }
+        };
+        let mut seen = Vec::new();
+        watch_tree(
+            &scopes,
+            Path::new("/r/new"),
+            &walk,
+            &mut HashSet::new(),
+            &mut |dir| {
+                seen.push(dir.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![PathBuf::from("/r/new"), PathBuf::from("/r/new/late")]
+        );
+    }
+
+    #[test]
+    fn watch_tree_skips_a_directory_already_watched() {
+        let scopes = [scope("/r", &[])];
+        let mut watched = HashSet::from([PathBuf::from("/r")]);
+        let mut seen = Vec::new();
+        watch_tree(
+            &scopes,
+            Path::new("/r"),
+            &|_, dir| vec![dir.to_path_buf(), dir.join("a")],
+            &mut watched,
+            &mut |dir| {
+                seen.push(dir.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, vec![PathBuf::from("/r/a")]);
     }
 
     #[test]
