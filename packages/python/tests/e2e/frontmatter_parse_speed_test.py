@@ -17,6 +17,7 @@ import pytest
 
 from .speed_of_light import (
     AGG_AWK,
+    FASTEST,
     MERGE_AWK,
     Native,
     agreed_rows,
@@ -139,7 +140,7 @@ def describe_frontmatter_parse_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        natives = shell_natives(root, NATIVE, native_rows, shell="sh")
+        natives = shell_natives(root, NATIVE, native_rows, shell="sh", bar=FASTEST)
         grow_until_native_takes_a_second(
             lambda lo, hi: build_notes(root, lo, hi),
             baseline(natives),
