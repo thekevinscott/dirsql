@@ -1237,39 +1237,41 @@ impl DirSQL {
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
-        // Normalize, snapshot the file's previous rows, and apply the
-        // delete+insert under one lock acquisition, so a concurrent event for
-        // the same file can't interleave between the read and the write.
-        let (old_rows, new_rows) = {
-            let db = match self.inner.db.lock() {
-                Ok(g) => g,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-            let new_rows = match db.normalize_rows(table, raw_rows, strict) {
-                Ok(rows) => rows,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-
-            let old_rows = match db.get_rows_by_file(table, rel_path) {
-                Ok(rows) => rows,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-
-            let db_result = foreign_key::atomically(db.conn(), || -> db::Result<()> {
-                db.delete_rows_by_file(table, rel_path)?;
-                for (i, row) in new_rows.iter().enumerate() {
-                    db.insert_row(table, row, rel_path, i)?;
-                }
-                Ok(())
-            });
-            if let Err(e) = db_result {
-                return vec![error_event(Some(table), rel_path, e.to_string())];
-            }
-
-            (old_rows, new_rows)
+        // Shape, read the file's previous rows, and write the change under one
+        // lock acquisition, so a concurrent event for the same file can't
+        // interleave between the read and the write.
+        let db = match self.inner.db.lock() {
+            Ok(g) => g,
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
-
-        differ::diff(table, Some(&old_rows), Some(&new_rows), rel_path)
+        let new_rows = match db.shape_value_rows(table, raw_rows, strict) {
+            Ok(rows) => rows,
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+        };
+        let applied = foreign_key::atomically(db.conn(), || -> db::Result<_> {
+            if let Some(changes) = db.reconcile_file_rows(table, rel_path, &new_rows)? {
+                return Ok(differ::diff_keyed(
+                    table,
+                    &changes.removed,
+                    &changes.updated,
+                    &changes.added,
+                    rel_path,
+                ));
+            }
+            let old_rows = db.get_rows_by_file(table, rel_path)?;
+            db.delete_rows_by_file(table, rel_path)?;
+            let new_rows = new_rows.to_maps();
+            for (i, row) in new_rows.iter().enumerate() {
+                db.insert_row(table, row, rel_path, i)?;
+            }
+            Ok(differ::diff(
+                table,
+                Some(&old_rows),
+                Some(&new_rows),
+                rel_path,
+            ))
+        });
+        applied.unwrap_or_else(|e| vec![error_event(Some(table), rel_path, e.to_string())])
     }
 
     pub(crate) fn build_from_resolved(resolved: ResolvedBuild) -> Result<Self> {
@@ -2587,7 +2589,9 @@ fn stream_table_rows(
     production: Production,
     strict: bool,
 ) -> db::Result<std::result::Result<(), String>> {
-    db.delete_rows_by_file(table, BATCH_OWNER)?;
+    if db.owns_rows(table, BATCH_OWNER)? {
+        return refill_table_rows(db, table, production, strict);
+    }
     let columns = db.get_table_columns(table)?;
     let Production { chunks, handle } = production;
     let (shaped_tx, shaped_rx) = std::sync::mpsc::channel();
@@ -2615,6 +2619,45 @@ fn stream_table_rows(
     shaper.join().expect("shaping a hook's rows panicked");
     let produced = handle.join().expect("per-table hook panicked");
     Ok(produced.and(shaped))
+}
+
+/// Make a per-table hook's rows already stored under [`BATCH_OWNER`] equal
+/// the rows it produces now, gathered whole so they can be matched against
+/// the stored ones. Nothing is written unless the hook and every row succeed.
+fn refill_table_rows(
+    db: &Db,
+    table: &str,
+    production: Production,
+    strict: bool,
+) -> db::Result<std::result::Result<(), String>> {
+    let columns = db.get_table_columns(table)?;
+    let Production { chunks, handle } = production;
+    let mut rows = ShapedRows {
+        columns: columns.clone(),
+        cells: Vec::new(),
+        emitted: vec![false; columns.len()],
+    };
+    let mut shaped = Ok(());
+    for chunk in chunks {
+        match db::shape_json_rows(table, columns.clone(), chunk, strict) {
+            Ok(chunk) => {
+                rows.cells.extend(chunk.cells);
+                for (emitted, now) in rows.emitted.iter_mut().zip(chunk.emitted) {
+                    *emitted |= now;
+                }
+            }
+            Err(e) => {
+                shaped = Err(e.to_string());
+                break;
+            }
+        }
+    }
+    let produced = handle.join().expect("per-table hook panicked");
+    let outcome = produced.and(shaped);
+    if outcome.is_ok() {
+        db.refill_batch_rows(table, BATCH_OWNER, &rows)?;
+    }
+    Ok(outcome)
 }
 
 /// A per-table hook running on its own thread, its rows arriving as chunks.
@@ -4702,6 +4745,162 @@ mod internal_tests {
         let del = db.handle_delete("items", &rel);
         assert_eq!(del.len(), 1, "got: {del:?}");
         assert!(matches!(&del[0], RowEvent::Delete { .. }));
+    }
+
+    #[test]
+    fn handle_upsert_updates_a_keyed_row_in_place() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        std::fs::write(&abs, "Alpha").unwrap();
+        let db = DirSQL::new(
+            dir.path(),
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, slug TEXT UNIQUE, name TEXT)",
+                "*.txt",
+                |path| {
+                    vec![Row::from_iter([
+                        ("slug".to_string(), Value::Text("a".into())),
+                        (
+                            "name".to_string(),
+                            Value::Text(std::fs::read_to_string(path).unwrap()),
+                        ),
+                    ])]
+                },
+            )],
+        )
+        .unwrap();
+        std::fs::write(&abs, "Renamed").unwrap();
+
+        let events = db.handle_upsert("items", &abs, "a.txt");
+
+        match events.as_slice() {
+            [RowEvent::Update { new_row, .. }] => {
+                assert_eq!(new_row["id"], Value::Integer(1));
+                assert_eq!(new_row["name"], Value::Text("Renamed".into()));
+            }
+            other => panic!("expected one update, got: {other:?}"),
+        }
+    }
+
+    fn experiment_json(folder: &str, name: &str) -> infer::JsonRow {
+        infer::JsonRow(vec![
+            (Arc::from("folder_name"), serde_json::json!(folder)),
+            (Arc::from("name"), serde_json::json!(name)),
+        ])
+    }
+
+    fn produced(
+        chunks: Vec<Vec<infer::JsonRow>>,
+        outcome: std::result::Result<(), String>,
+    ) -> Production {
+        let hook: Arc<OnFilesFn> = Arc::new(move |_paths, sink| {
+            for chunk in chunks.clone() {
+                sink(chunk);
+            }
+            outcome.clone().map_err(BoxError::from)
+        });
+        start_hook(
+            hook,
+            std::iter::once(PathBuf::from("rows.json")),
+            Turn::default(),
+        )
+    }
+
+    fn stored_experiments() -> Db {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "experiments",
+            "CREATE TABLE experiments (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)",
+        )
+        .unwrap();
+        let rows = db
+            .shape_rows(
+                "experiments",
+                vec![experiment_json("a", "Alpha"), experiment_json("b", "Beta")],
+                false,
+            )
+            .unwrap();
+        db.insert_rows("experiments", &rows, BATCH_OWNER).unwrap();
+        db
+    }
+
+    fn experiment_names(db: &Db) -> Vec<(i64, String)> {
+        db.conn()
+            .prepare("SELECT id, name FROM experiments ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn stream_table_rows_refills_stored_keyed_rows_in_place() {
+        let db = stored_experiments();
+        let production = produced(
+            vec![
+                vec![experiment_json("0", "Zero")],
+                vec![
+                    experiment_json("a", "Alpha"),
+                    experiment_json("b", "Renamed"),
+                ],
+            ],
+            Ok(()),
+        );
+
+        let outcome = stream_table_rows(&db, "experiments", production, false).unwrap();
+
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(
+            experiment_names(&db),
+            vec![
+                (1, "Alpha".into()),
+                (2, "Renamed".into()),
+                (3, "Zero".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_table_rows_refill_writes_nothing_when_the_hook_fails() {
+        let db = stored_experiments();
+        let production = produced(
+            vec![vec![experiment_json("a", "Changed")]],
+            Err("boom".into()),
+        );
+
+        let outcome = stream_table_rows(&db, "experiments", production, false).unwrap();
+
+        assert_eq!(outcome, Err("boom".into()));
+        assert_eq!(
+            experiment_names(&db),
+            vec![(1, "Alpha".into()), (2, "Beta".into())]
+        );
+    }
+
+    #[test]
+    fn stream_table_rows_refill_writes_nothing_when_a_row_fails_to_shape() {
+        let db = stored_experiments();
+        let production = produced(
+            vec![
+                vec![experiment_json("a", "Changed")],
+                vec![infer::JsonRow(vec![(
+                    Arc::from("nope"),
+                    serde_json::json!(1),
+                )])],
+            ],
+            Ok(()),
+        );
+
+        let outcome = stream_table_rows(&db, "experiments", production, true).unwrap();
+
+        let err = outcome.unwrap_err();
+        assert!(err.contains("missing columns"), "got: {err}");
+        assert_eq!(
+            experiment_names(&db),
+            vec![(1, "Alpha".into()), (2, "Beta".into())]
+        );
     }
 
     #[test]

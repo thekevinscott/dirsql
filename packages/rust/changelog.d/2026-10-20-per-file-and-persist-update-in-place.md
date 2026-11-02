@@ -1,0 +1,3 @@
+**Fixed**
+
+- **Per-file hooks and the persist refill update a keyed row in place.** A per-file SDK hook's file change, and a `--persist` warm start that re-runs a config table's `on-file` command, now match rows by the table's `PRIMARY KEY`, or else a `UNIQUE` constraint the rows fill, and `UPDATE` a changed row with its rowid kept; a per-file change emits an `update` carrying the kept columns. Only the columns the hook emits are compared or written, so a generated `INTEGER PRIMARY KEY` keeps its value and an edited parent no longer fires `ON DELETE CASCADE` on its children. A table with no such key still deletes and reinserts.

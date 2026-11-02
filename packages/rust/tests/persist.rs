@@ -613,3 +613,62 @@ fn persist_cache_uses_wal_journal_mode() {
         .unwrap();
     assert_eq!(mode, "wal", "cache must use WAL journal mode");
 }
+
+fn write_experiment(root: &Path, folder: &str, name: &str) {
+    fs::write(
+        root.join(format!("{folder}.json")),
+        format!("{{\"folder_name\":\"{folder}\",\"name\":\"{name}\"}}\n"),
+    )
+    .unwrap();
+}
+
+fn open_experiments(root: &Path) -> DirSQL {
+    let cfg = root.join(".dirsql.toml");
+    fs::write(
+        &cfg,
+        r#"
+[[table]]
+name    = "experiments"
+glob    = "*.json"
+on-file = "cat"
+ddl     = "CREATE TABLE experiments (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE, name TEXT)"
+"#,
+    )
+    .unwrap();
+    DirSQL::builder()
+        .root(root)
+        .config(&cfg)
+        .persist(Some(cache_path(root)))
+        .build()
+        .unwrap()
+}
+
+fn experiment_ids(db: &DirSQL) -> Vec<(String, Value)> {
+    db.query("SELECT folder_name, id FROM experiments ORDER BY folder_name")
+        .unwrap()
+        .into_iter()
+        .map(|row| match &row["folder_name"] {
+            Value::Text(folder) => (folder.clone(), row["id"].clone()),
+            other => panic!("expected a folder name, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_warm_refill_of_a_keyed_config_table_keeps_its_ids() {
+    let root = TempDir::new().unwrap();
+    write_experiment(root.path(), "a", "Alpha");
+    write_experiment(root.path(), "b", "Beta");
+    let before = experiment_ids(&open_experiments(root.path()));
+
+    write_experiment(root.path(), "0", "Zero");
+    write_experiment(root.path(), "b", "Renamed");
+    let db = open_experiments(root.path());
+
+    let after = experiment_ids(&db);
+    assert_eq!(after[1..], before[..], "got: {after:?}");
+    let renamed = db
+        .query("SELECT name FROM experiments WHERE folder_name = 'b'")
+        .unwrap();
+    assert_eq!(renamed[0]["name"], Value::Text("Renamed".into()));
+}
