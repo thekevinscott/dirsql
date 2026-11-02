@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792499101,
+  "exit_code": 0,
+  "commit": "861a18d5fe6be842da12b40d85e8331a9ef849e5",
+  "branch": "bot/1478-perdir-walk-1020"
+}
