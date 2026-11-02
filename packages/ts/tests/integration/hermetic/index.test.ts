@@ -45,7 +45,7 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
   return {
     query: vi.fn().mockResolvedValue([]),
     queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
-    startWatcher: vi.fn().mockResolvedValue(undefined),
+    startWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
     ...overrides,
   };

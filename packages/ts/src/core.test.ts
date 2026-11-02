@@ -122,7 +122,7 @@ describe("NativeDirSQL interface", () => {
     const failures = [{ path: "bad.json", message: "boom" }];
     const instance = {
       query: vi.fn().mockResolvedValue([]),
-      startWatcher: vi.fn().mockResolvedValue(undefined),
+      startWatcher: vi.fn(),
       pollEvents: vi.fn().mockResolvedValue([]),
       scanFailures: vi.fn(() => failures),
       close: vi.fn(),
@@ -144,7 +144,7 @@ describe("NativeDirSQL interface", () => {
   it("includes close() method for cleanup (#598)", () => {
     const instance = {
       query: vi.fn().mockResolvedValue([]),
-      startWatcher: vi.fn().mockResolvedValue(undefined),
+      startWatcher: vi.fn(),
       pollEvents: vi.fn().mockResolvedValue([]),
       close: vi.fn(),
     } as unknown as NativeDirSQL;

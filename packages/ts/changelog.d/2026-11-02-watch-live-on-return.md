@@ -1,0 +1,1 @@
+**Fixed** `watch()` now starts the watcher before it returns (or, when called before the initial scan finishes, before `ready` resolves). A file written right after `watch()` previously produced no event and never reached the index, because the watcher only started on the stream's first `next()`.

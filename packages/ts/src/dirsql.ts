@@ -165,6 +165,7 @@ export class DirSQL {
   private _inner!: NativeDirSQL;
   private readonly _watchStreams = new Set<WeakRef<RowEvent[]>>();
   private _watchPoll?: Promise<void>;
+  private _watcherStarted = false;
   // Constructor options preserved verbatim; public-by-design.
   readonly _options: DirSQLOptions;
 
@@ -221,6 +222,14 @@ export class DirSQL {
       })
       .then((inner) => {
         this._inner = inner;
+        if (this._watchStreams.size > 0) {
+          try {
+            this._ensureWatcher();
+          } catch {
+            // A watcher that cannot start is the stream's error, not init's:
+            // the stream's first next() retries the start and throws there.
+          }
+        }
       });
     this._ready.catch(() => {});
   }
@@ -271,13 +280,19 @@ export class DirSQL {
    * Start the file watcher. Must be called before {@link pollEvents}.
    * Idempotent — safe to call multiple times.
    *
-   * Awaits the initial scan if it has not yet finished, then runs on the
-   * libuv threadpool so the JS event loop stays responsive while the
-   * watcher is being initialized.
+   * Awaits the initial scan if it has not yet finished, then registers the
+   * watcher on the JS thread; the watcher is live once this resolves.
    */
   async startWatcher(): Promise<void> {
     await this.ready;
-    return this._inner.startWatcher();
+    this._ensureWatcher();
+  }
+
+  private _ensureWatcher(): void {
+    if (!this._watcherStarted) {
+      this._inner.startWatcher();
+      this._watcherStarted = true;
+    }
   }
 
   /**
@@ -300,13 +315,23 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * Awaits the initial scan on first iteration, starts the underlying
-   * watcher, then awaits a bounded native poll each cycle. The iterator
-   * runs indefinitely; break out of the `for await` loop to stop.
+   * The watcher is live once both `watch()` and {@link ready} have
+   * returned, in either order: a file written after that point produces an
+   * event and reaches the index. Called after the scan, `watch()` starts the
+   * watcher before returning; called before it, the watcher starts before
+   * `ready` resolves. Writes made while the scan is still running may be
+   * missed.
+   *
+   * The stream awaits `ready` on first iteration, then awaits a bounded
+   * native poll each cycle. The iterator runs indefinitely; break out of the
+   * `for await` loop to stop.
    * Each stream receives every event observed after its creation, even
    * while another stream is consuming events on the same instance.
    */
   watch(): AsyncGenerator<RowEvent, void, unknown> {
+    if (this._inner !== undefined) {
+      this._ensureWatcher();
+    }
     const buffer: RowEvent[] = [];
     const reference = new WeakRef(buffer);
     this._watchStreams.add(reference);
@@ -314,7 +339,7 @@ export class DirSQL {
     return (async function* () {
       try {
         await owner.ready;
-        await owner._inner.startWatcher();
+        owner._ensureWatcher();
         while (true) {
           while (buffer.length === 0) {
             owner._watchPoll ??= owner._inner
