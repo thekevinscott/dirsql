@@ -1345,10 +1345,10 @@ impl DirSQL {
     }
 
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
-    /// off the host's main thread: validates DDL, compiles the matcher, walks
-    /// the directory, opens the persistent cache (when enabled) and decides
-    /// which files need re-parsing. Does **not** read file contents and does
-    /// **not** invoke `on_file`.
+    /// off the host's main thread: compiles the matcher, walks the directory,
+    /// opens the database, creates transient tables when possible, and decides
+    /// which files need re-parsing. Does **not** read file contents or invoke
+    /// `on_file`.
     ///
     /// Pair with [`finish_build`](Self::finish_build) to complete construction
     /// on a thread where the `on_file` callback can safely execute (e.g. the
@@ -1359,6 +1359,30 @@ impl DirSQL {
     }
 
     fn prepare_resolved_with(resolved: ResolvedBuild, scan: ScanFn<'_>) -> Result<PreparedBuild> {
+        Self::prepare_resolved_with_db(resolved, scan, Db::new)
+    }
+
+    fn prepare_resolved_with_db<F>(
+        resolved: ResolvedBuild,
+        scan: ScanFn<'_>,
+        new_db: F,
+    ) -> Result<PreparedBuild>
+    where
+        F: FnOnce() -> db::Result<Db> + Send,
+    {
+        Self::prepare_resolved_with_setup(resolved, scan, new_db, run_table_ddl)
+    }
+
+    fn prepare_resolved_with_setup<F, D>(
+        resolved: ResolvedBuild,
+        scan: ScanFn<'_>,
+        new_db: F,
+        ddl: D,
+    ) -> Result<PreparedBuild>
+    where
+        F: FnOnce() -> db::Result<Db> + Send,
+        D: FnOnce(&Db, &[Table]) -> Result<Vec<String>> + Send,
+    {
         let ResolvedBuild {
             root,
             tables,
@@ -1404,23 +1428,62 @@ impl DirSQL {
         } else {
             (HashMap::new(), Vec::new())
         };
-        let scanned = if table_names.is_empty() {
-            Vec::new()
+        let (scanned, fresh_db) = if table_names.is_empty() {
+            let fresh_db = if persist_ctx.is_none() {
+                let mut db = new_db().map_err(map_db_error)?;
+                configure_db_paths(
+                    &mut db,
+                    &root,
+                    &ignore,
+                    hint_legacy_files_table,
+                    path_table_parser.as_deref(),
+                    no_ignore,
+                );
+                Some((db, true, Vec::new()))
+            } else {
+                None
+            };
+            (Vec::new(), fresh_db)
         } else {
-            // The walk reports a running count rather than a fraction: it does
-            // not know how many files there are until it has found them all.
-            let mut progress = Progress::scanning();
-            let (scanned, seen) = scan_groups(&groups, scan, &mut progress, &mut |path, table| {
-                if let Some(feed) = feeds.get(table) {
-                    let _ = feed.send(path.to_path_buf());
+            std::thread::scope(|scope| {
+                let db_task = persist_ctx.is_none().then(|| {
+                    scope.spawn(|| {
+                        let mut db = new_db().map_err(map_db_error)?;
+                        configure_db_paths(
+                            &mut db,
+                            &root,
+                            &ignore,
+                            hint_legacy_files_table,
+                            path_table_parser.as_deref(),
+                            no_ignore,
+                        );
+                        let ddl_ready = extensions.is_empty() && functions.is_empty();
+                        if ddl_ready {
+                            let warnings = ddl(&db, &tables)?;
+                            return Ok::<_, DirSqlError>((db, true, warnings));
+                        }
+                        Ok::<_, DirSqlError>((db, false, Vec::new()))
+                    })
+                });
+                // The walk reports a running count rather than a fraction: it does
+                // not know how many files there are until it has found them all.
+                let mut progress = Progress::scanning();
+                let (scanned, seen) =
+                    scan_groups(&groups, scan, &mut progress, &mut |path, table| {
+                        if let Some(feed) = feeds.get(table) {
+                            let _ = feed.send(path.to_path_buf());
+                        }
+                    });
+                drop(feeds);
+                progress.finish(seen);
+                for warning in empty_table_warnings(&tables, &anchors, &scanned) {
+                    eprintln!("{warning}");
                 }
-            });
-            drop(feeds);
-            progress.finish(seen);
-            for warning in empty_table_warnings(&tables, &anchors, &scanned) {
-                eprintln!("{warning}");
-            }
-            scanned
+                let fresh_db = db_task
+                    .map(|task| task.join().expect("database creation panicked"))
+                    .transpose()?;
+                Ok::<_, DirSqlError>((scanned, fresh_db))
+            })?
         };
 
         // When persist is enabled, files whose stat tuple matches the cache
@@ -1443,6 +1506,7 @@ impl DirSQL {
             anchors,
             ignore,
             scanned_files,
+            fresh_db,
             early,
             hint_legacy_files_table,
             persist: persist_ctx.map(|ctx| PreparedPersist {
@@ -1471,10 +1535,9 @@ impl DirSQL {
     }
 
     /// Split-phase construction — part 2. Consumes the intermediate state from
-    /// [`prepare_resolved`](Self::prepare_resolved): creates the SQLite
-    /// database (or wires up the persistent on-disk one), runs each table's
-    /// DDL, invokes each file's `on_file` callback, and inserts the
-    /// resulting rows.
+    /// [`prepare_resolved`](Self::prepare_resolved): configures the prepared
+    /// database, completes any deferred DDL, invokes each file's `on_file`
+    /// callback, and inserts the resulting rows.
     ///
     /// Must be invoked on a thread where the `on_file` closures can safely
     /// run. For the napi-rs binding that is the JS main thread.
@@ -1501,6 +1564,7 @@ impl DirSQL {
             anchors,
             ignore,
             scanned_files,
+            fresh_db,
             early,
             persist,
             poll_interval,
@@ -1509,20 +1573,28 @@ impl DirSQL {
             no_ignore,
         } = prepared;
 
-        let (mut db, persist_ready, needs_sweep) = match persist {
+        let (mut db, fresh_ddl, ddl_warnings, persist_ready, needs_sweep) = match persist {
             Some(p) => (
                 p.db,
+                false,
+                Vec::new(),
                 Some((p.deleted, p.meta, p.meta_current)),
                 p.needs_sweep,
             ),
-            None => (Db::new()?, None, false),
+            None => {
+                let (db, ddl_ready, warnings) = fresh_db.expect("prepare opened the database");
+                (db, ddl_ready, warnings, None, false)
+            }
         };
-        db.set_path_table_root(root.clone());
-        db.set_hint_legacy_files_table(hint_legacy_files_table);
-        db.add_path_table_ignore(ignore);
-        db.set_path_table_gitignore(!no_ignore);
-        if let Some(command) = path_table_parser {
-            db.set_path_table_parser(command);
+        if persist_ready.is_some() {
+            configure_db_paths(
+                &mut db,
+                &root,
+                &ignore,
+                hint_legacy_files_table,
+                path_table_parser.as_deref(),
+                no_ignore,
+            );
         }
 
         // Load extensions before any CREATE TABLE so a table's DDL and later
@@ -1558,32 +1630,16 @@ impl DirSQL {
         let mut ddl_map: HashMap<String, String> = HashMap::new();
         let declared: Vec<String> = tables.iter().map(|table| table.name.clone()).collect();
 
+        let ddl_warnings = if fresh_ddl {
+            ddl_warnings
+        } else {
+            run_table_ddl(&db, &tables)?
+        };
+        for warning in ddl_warnings {
+            eprintln!("{warning}");
+        }
         for table in tables {
             let table_name = table.name.clone();
-            // A real table under this name is the cache already holding it
-            // from a prior run: skip the batch, since the schema is preserved
-            // verbatim across runs (the glob_config_hash captures the whole
-            // `ddl`). Anything else under the name is not a warm cache — run
-            // the batch and let SQLite object to the collision itself.
-            let warm = catalog_entry(&db, &table_name)?.is_some_and(|entry| entry.kind == "table");
-            if !warm {
-                let before = db::user_table_names(db.conn()).map_err(DirSqlError::sqlite)?;
-                db.create_table(&table_name, &table.ddl).map_err(|source| {
-                    DirSqlError::TableDdl {
-                        name: table_name.clone(),
-                        source,
-                    }
-                })?;
-                let created = db::user_table_names(db.conn())
-                    .map_err(DirSqlError::sqlite)?
-                    .into_iter()
-                    .filter(|name| !before.contains(name))
-                    .collect();
-                let entry = catalog_entry(&db, &table_name)?;
-                if let Some(warning) = classify_declared_table(&table_name, entry, created)? {
-                    eprintln!("{warning}");
-                }
-            }
             on_file_map.insert(table_name.clone(), table.hook);
             strict_map.insert(table_name.clone(), table.strict);
             ddl_map.insert(table_name, table.ddl);
@@ -2196,6 +2252,9 @@ pub struct PreparedBuild {
     /// the same ones declared tables do.
     ignore: Vec<String>,
     scanned_files: Scanned,
+    /// The transient database opened during the scan, whether its tables'
+    /// DDL already ran, and that DDL's warnings. `None` when persisting.
+    fresh_db: Option<(Db, bool, Vec<String>)>,
     /// Per-table hooks already running over the paths the scan found, by table.
     early: Vec<(String, Production)>,
     persist: Option<PreparedPersist>,
@@ -2238,6 +2297,49 @@ struct PersistContext {
 }
 
 type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>, Vec<String>);
+
+fn configure_db_paths(
+    db: &mut Db,
+    root: &Path,
+    ignore: &[String],
+    hint_legacy_files_table: bool,
+    path_table_parser: Option<&str>,
+    no_ignore: bool,
+) {
+    db.set_path_table_root(root.to_path_buf());
+    db.set_hint_legacy_files_table(hint_legacy_files_table);
+    db.add_path_table_ignore(ignore.to_vec());
+    db.set_path_table_gitignore(!no_ignore);
+    if let Some(command) = path_table_parser {
+        db.set_path_table_parser(command.to_owned());
+    }
+}
+
+fn run_table_ddl(db: &Db, tables: &[Table]) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for table in tables {
+        let table_name = &table.name;
+        let warm = catalog_entry(db, table_name)?.is_some_and(|entry| entry.kind == "table");
+        if !warm {
+            let before = db::user_table_names(db.conn()).map_err(DirSqlError::sqlite)?;
+            db.create_table(table_name, &table.ddl)
+                .map_err(|source| DirSqlError::TableDdl {
+                    name: table_name.clone(),
+                    source,
+                })?;
+            let created = db::user_table_names(db.conn())
+                .map_err(DirSqlError::sqlite)?
+                .into_iter()
+                .filter(|name| !before.contains(name))
+                .collect();
+            let entry = catalog_entry(db, table_name)?;
+            if let Some(warning) = classify_declared_table(table_name, entry, created)? {
+                warnings.push(warning);
+            }
+        }
+    }
+    Ok(warnings)
+}
 
 /// Walk every group's anchor in turn, reporting one running count across all of
 /// them. Returns the matches and the total count.
@@ -3450,6 +3552,173 @@ mod internal_tests {
         )
     }
 
+    #[test]
+    fn prepare_opens_the_database_while_the_scan_is_active() {
+        use std::sync::mpsc;
+
+        let dir = TempDir::new().unwrap();
+        let (scan_started, wait_for_scan) = mpsc::channel();
+        let (db_opened, wait_for_db) = mpsc::channel();
+        let scan =
+            |_: &Path, _: &TableMatcher, _: &mut dyn FnMut(u64), _: &mut dyn FnMut(&Path, &str)| {
+                scan_started.send(()).unwrap();
+                assert!(
+                    wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
+                    "database creation must finish before the scan completes"
+                );
+                Vec::new()
+            };
+        let new_db = move || {
+            wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
+            let db = Db::new()?;
+            db_opened.send(()).unwrap();
+            Ok(db)
+        };
+
+        let prepared = DirSQL::prepare_resolved_with_db(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &scan,
+            new_db,
+        )
+        .unwrap();
+        assert!(prepared.scanned_files.into_files().is_empty());
+    }
+
+    #[test]
+    fn prepare_creates_the_table_while_the_scan_is_active() {
+        use std::sync::mpsc;
+
+        let dir = TempDir::new().unwrap();
+        let (scan_started, wait_for_scan) = mpsc::channel();
+        let (ddl_done, wait_for_ddl) = mpsc::channel();
+        let scan =
+            |_: &Path, _: &TableMatcher, _: &mut dyn FnMut(u64), _: &mut dyn FnMut(&Path, &str)| {
+                scan_started.send(()).unwrap();
+                assert!(
+                    wait_for_ddl.recv_timeout(Duration::from_secs(5)).is_ok(),
+                    "table DDL must finish before the scan completes"
+                );
+                Vec::new()
+            };
+        let ddl = move |db: &Db, tables: &[Table]| {
+            wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
+            let warnings = run_table_ddl(db, tables)?;
+            assert!(catalog_entry(db, "items")?.is_some());
+            ddl_done.send(()).unwrap();
+            Ok(warnings)
+        };
+
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &scan,
+            Db::new,
+            ddl,
+        )
+        .unwrap();
+        assert!(prepared.scanned_files.into_files().is_empty());
+    }
+
+    #[test]
+    fn prepare_defers_ddl_until_after_extensions_load() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = TempDir::new().unwrap();
+        let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+        resolved.extensions.push(Extension {
+            path: dir.path().join("missing-extension.so"),
+            entrypoint: None,
+        });
+        let ddl_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&ddl_called);
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved,
+            &|_, _, _, _| Vec::new(),
+            Db::new,
+            move |_, _| {
+                called.store(true, Ordering::SeqCst);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+
+        assert!(!ddl_called.load(Ordering::SeqCst));
+        assert!(!prepared.fresh_db.as_ref().unwrap().1);
+        assert!(matches!(
+            DirSQL::finish_build(prepared),
+            Err(DirSqlError::Extension { .. })
+        ));
+    }
+
+    #[test]
+    fn configure_db_paths_honors_gitignore_unless_told_not_to() {
+        for no_ignore in [false, true] {
+            let mut db = Db::new().unwrap();
+            configure_db_paths(&mut db, Path::new("/r"), &[], false, None, no_ignore);
+            assert_eq!(db.path_table_gitignore, !no_ignore);
+        }
+    }
+
+    #[test]
+    fn run_table_ddl_creates_a_missing_table_and_keeps_a_present_one() {
+        let db = Db::new().unwrap();
+        let tables = [txt_table()];
+        assert!(run_table_ddl(&db, &tables).unwrap().is_empty());
+        assert!(catalog_entry(&db, "items").unwrap().is_some());
+        assert!(run_table_ddl(&db, &tables).unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_table_ddl_names_only_the_tables_its_batch_created() {
+        let db = Db::new().unwrap();
+        db.conn()
+            .execute_batch("CREATE TABLE earlier (y TEXT)")
+            .unwrap();
+        let tables = [Table::new(
+            "items",
+            "CREATE TABLE made (x TEXT)",
+            "*.txt",
+            |_| Vec::new(),
+        )];
+        let err = run_table_ddl(&db, &tables).unwrap_err();
+        assert!(
+            matches!(&err, DirSqlError::TableNotCreated { created, .. } if created == &["made"]),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn prepare_defers_ddl_until_after_functions_register() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = TempDir::new().unwrap();
+        let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+        resolved.functions.push(ResolvedFunction {
+            name: "custom_value".into(),
+            args: vec![0],
+            command: "true".into(),
+            deterministic: true,
+            timeout: Duration::from_secs(1),
+            batch: None,
+            cwd: dir.path().to_path_buf(),
+        });
+        let ddl_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&ddl_called);
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved,
+            &|_, _, _, _| Vec::new(),
+            Db::new,
+            move |_, _| {
+                called.store(true, Ordering::SeqCst);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+
+        assert!(!ddl_called.load(Ordering::SeqCst));
+        assert!(!prepared.fresh_db.as_ref().unwrap().1);
+        assert!(DirSQL::finish_build(prepared).is_ok());
+    }
+
     /// Configless startup declares zero tables, so nothing the walk could
     /// visit can match: the walk must not run at all.
     #[test]
@@ -3621,6 +3890,7 @@ mod internal_tests {
                 stat: None,
                 trusted: false,
             }]),
+            fresh_db: Some((Db::new().unwrap(), false, Vec::new())),
             early: Vec::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
@@ -5855,6 +6125,9 @@ mod internal_tests {
                 })
                 .collect(),
         );
+        let fresh_db = persist
+            .is_none()
+            .then(|| (Db::new().unwrap(), false, Vec::new()));
         PreparedBuild {
             ignore: Vec::new(),
             root: root.to_path_buf(),
@@ -5864,6 +6137,7 @@ mod internal_tests {
             groups: Vec::new(),
             anchors: TableAnchors::at_root(root),
             scanned_files,
+            fresh_db,
             early: Vec::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist,
