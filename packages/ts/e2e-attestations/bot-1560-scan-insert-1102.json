@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1793710210,
+  "exit_code": 0,
+  "commit": "c7a69d4ca08522c915bc96bdc778e917ea5d5e20",
+  "branch": "bot/1560-scan-insert-1102"
+}
