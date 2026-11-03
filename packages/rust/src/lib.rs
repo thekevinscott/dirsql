@@ -1425,6 +1425,18 @@ impl DirSQL {
         })
     }
 
+    #[cfg(test)]
+    fn prepare_resolved_with_db<F>(
+        resolved: ResolvedBuild,
+        scan: ScanFn<'_>,
+        _new_db: F,
+    ) -> Result<PreparedBuild>
+    where
+        F: FnOnce() -> db::Result<Db> + Send,
+    {
+        Self::prepare_resolved_with(resolved, scan)
+    }
+
     /// The files the initial scan could not index, in scan order — each with
     /// the path relative to the root and the hook's own error.
     ///
@@ -3414,6 +3426,40 @@ mod internal_tests {
             "**/*.txt",
             |_| Vec::new(),
         )
+    }
+
+    #[test]
+    fn prepare_opens_the_database_while_the_scan_is_active() {
+        use std::sync::mpsc;
+
+        let dir = TempDir::new().unwrap();
+        let (scan_started, wait_for_scan) = mpsc::channel();
+        let (db_opened, wait_for_db) = mpsc::channel();
+        let scan = |_: &Path,
+                    _: &TableMatcher,
+                    _: &mut dyn FnMut(u64),
+                    _: &mut dyn FnMut(&Path, &str)| {
+            scan_started.send(()).unwrap();
+            assert!(
+                wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
+                "database creation must finish before the scan completes"
+            );
+            Vec::new()
+        };
+        let new_db = move || {
+            wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
+            let db = Db::new()?;
+            db_opened.send(()).unwrap();
+            Ok(db)
+        };
+
+        let prepared = DirSQL::prepare_resolved_with_db(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &scan,
+            new_db,
+        )
+        .unwrap();
+        assert!(prepared.scanned_files.into_files().is_empty());
     }
 
     /// Configless startup declares zero tables, so nothing the walk could
