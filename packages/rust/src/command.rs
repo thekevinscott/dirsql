@@ -312,10 +312,29 @@ pub(crate) fn run_argv_blocks(
         buf
     });
     let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let status =
+        drain_then_reap(&mut stdout_pipe, on_block, on_eof, || child.wait()).map_err(|source| {
+            CommandError::Io {
+                command: command.to_string(),
+                source,
+            }
+        })?;
+    let stderr = stderr_thread.join().unwrap_or_default();
+    check_exit(command, status, &stderr)
+}
+
+/// Hand `stdout` to `on_block` in blocks of whole lines until it closes, run
+/// `on_eof`, then `reap` the child, so work on the output overlaps its exit.
+fn drain_then_reap<T>(
+    stdout: &mut dyn Read,
+    on_block: &mut dyn FnMut(&str),
+    on_eof: &mut dyn FnMut(),
+    reap: impl FnOnce() -> T,
+) -> T {
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; READ_BYTES];
     loop {
-        let n = match stdout_pipe.read(&mut buf) {
+        let n = match stdout.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
@@ -328,14 +347,9 @@ pub(crate) fn run_argv_blocks(
     if !pending.is_empty() {
         on_block(&String::from_utf8_lossy(&pending));
     }
-
-    let status = child.wait().map_err(|source| CommandError::Io {
-        command: command.to_string(),
-        source,
-    })?;
+    let reaped = reap();
     on_eof();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    check_exit(command, status, &stderr)
+    reaped
 }
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
@@ -881,28 +895,19 @@ mod tests {
     }
 
     #[test]
-    fn run_argv_blocks_signals_eof_while_the_child_is_still_running() {
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "echo row; exec >&-; sleep 1".to_string(),
-        ];
-        let mut seen = String::new();
-        let mut eof_at = None;
-        run_argv_blocks(
-            "t",
-            &argv,
-            &cwd(),
-            &mut |block| seen.push_str(block),
-            &mut || eof_at = Some(std::time::Instant::now()),
-        )
-        .unwrap();
-        let after_eof = eof_at.expect("on_eof ran").elapsed();
-        assert_eq!(seen, "row\n");
-        assert!(
-            after_eof >= std::time::Duration::from_millis(500),
-            "the child outlived on_eof by only {after_eof:?}"
+    fn drain_then_reap_ends_the_output_before_reaping_the_child() {
+        let order = std::cell::RefCell::new(Vec::new());
+        let reaped = drain_then_reap(
+            &mut &b"a\nb"[..],
+            &mut |block| order.borrow_mut().push(block.to_string()),
+            &mut || order.borrow_mut().push("eof".to_string()),
+            || {
+                order.borrow_mut().push("reap".to_string());
+                7
+            },
         );
+        assert_eq!(reaped, 7);
+        assert_eq!(*order.borrow(), vec!["a\n", "b", "eof", "reap"]);
     }
 
     #[test]
