@@ -130,6 +130,8 @@ struct Shared<'e, D, L> {
     open: Mutex<Open<D, L>>,
     found_dir: Condvar,
     found: AtomicUsize,
+    /// Threads started on the walk, the calling thread among them.
+    hired: AtomicUsize,
     explore: &'e (dyn Fn(D) -> Vec<Step<D, L>> + Sync),
 }
 
@@ -147,6 +149,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
         }),
         found_dir: Condvar::new(),
         found: AtomicUsize::new(1),
+        hired: AtomicUsize::new(1),
         explore,
     };
     thread::scope(|scope| {
@@ -159,7 +162,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                     if !spawned && shared.found.load(Ordering::Relaxed) >= PARALLEL_DIRS {
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
-                        spawn_workers(scope, &shared, (1..workers).collect());
+                        hire(scope, &shared, workers);
                     }
                     stack.push(shared.obtain(&slot).into_iter());
                 }
@@ -177,29 +180,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("exploring a directory does not panic")
 }
 
-/// Start a worker for each of `team` as a tree: each worker starts half of
-/// the rest before it explores, since spawning a thread takes tens of
-/// microseconds and the walk hands out nothing while it spawns. Every worker
-/// starts a strictly smaller team than it was handed, so the tree is finite.
-fn spawn_workers<'scope, D: Send, L: Send>(
+/// Start workers until `workers` threads are on the walk, as a tree: each
+/// worker starts up to two more before it explores, since spawning a thread
+/// takes tens of microseconds and the walk hands out nothing while it spawns.
+/// The count only rises, so however the tree branches it ends.
+fn hire<'scope, D: Send, L: Send>(
     scope: &'scope thread::Scope<'scope, '_>,
     shared: &'scope Shared<'_, D, L>,
-    mut team: Vec<usize>,
+    workers: usize,
 ) {
-    if team.pop().is_none() {
-        return;
+    for _ in 0..2 {
+        if shared.hired.fetch_add(1, Ordering::Relaxed) < workers {
+            scope.spawn(move || {
+                hire(scope, shared, workers);
+                shared.work();
+            });
+        }
     }
-    let (first, second) = halves(team);
-    scope.spawn(move || {
-        spawn_workers(scope, shared, first);
-        spawn_workers(scope, shared, second);
-        shared.work();
-    });
-}
-
-fn halves(mut team: Vec<usize>) -> (Vec<usize>, Vec<usize>) {
-    let second = team.split_off(team.len() / 2);
-    (team, second)
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -415,6 +412,7 @@ mod tests {
             }),
             found_dir: Condvar::new(),
             found: AtomicUsize::new(0),
+            hired: AtomicUsize::new(1),
             explore: &explore,
         };
         assert!(
@@ -478,11 +476,6 @@ mod tests {
     #[test]
     fn a_walk_of_a_few_dozen_directories_is_shared_across_threads() {
         assert!(threads_exploring(4, 2) > 1);
-    }
-
-    #[test]
-    fn a_team_splits_into_halves_the_second_taking_any_odd_one() {
-        assert_eq!(halves(vec![1, 2, 3, 4, 5]), (vec![1, 2], vec![3, 4, 5]));
     }
 
     #[test]
