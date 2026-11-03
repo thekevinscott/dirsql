@@ -281,24 +281,30 @@ fn run_invocation(
 ) -> Result<(), String> {
     let mut bad_output: Option<String> = None;
     let mut lines_seen = 0usize;
-    command::run_argv_blocks(command, full, cwd, &mut |block| {
-        if bad_output.is_some() {
-            return;
-        }
-        match parse_rows_at(block, lines_seen) {
-            Ok(rows) => {
-                lines_seen += block.bytes().filter(|&b| b == b'\n').count();
-                if !rows.is_empty() {
-                    send(rows);
+    command::run_argv_blocks(
+        command,
+        full,
+        cwd,
+        &mut |block| {
+            if bad_output.is_some() {
+                return;
+            }
+            match parse_rows_at(block, lines_seen) {
+                Ok(rows) => {
+                    lines_seen += block.bytes().filter(|&b| b == b'\n').count();
+                    if !rows.is_empty() {
+                        send(rows);
+                    }
+                }
+                Err(message) => {
+                    bad_output = Some(format!(
+                        "on-file output was not one JSON object per line: {message}"
+                    ));
                 }
             }
-            Err(message) => {
-                bad_output = Some(format!(
-                    "on-file output was not one JSON object per line: {message}"
-                ));
-            }
-        }
-    })
+        },
+        &mut || {},
+    )
     .map_err(spawn_failure)?;
     bad_output.map_or(Ok(()), Err)
 }

@@ -286,12 +286,14 @@ const READ_BYTES: usize = 262_144;
 /// Run an already-built `argv` and hand its stdout to `on_block` as it
 /// arrives, in blocks that each hold whole lines (the last block may lack its
 /// trailing newline). The child runs with stdin closed. A non-zero exit is an
-/// error after every block has been delivered.
+/// error after every block has been delivered. `on_eof` runs once stdout has
+/// closed, before the child's exit is known.
 pub(crate) fn run_argv_blocks(
     command: &str,
     argv: &[String],
     cwd: &Path,
     on_block: &mut dyn FnMut(&str),
+    on_eof: &mut dyn FnMut(),
 ) -> Result<(), CommandError> {
     let mut cmd = Command::new(&argv[0]);
     push_args(&mut cmd, &argv[1..]);
@@ -331,6 +333,7 @@ pub(crate) fn run_argv_blocks(
         command: command.to_string(),
         source,
     })?;
+    on_eof();
     let stderr = stderr_thread.join().unwrap_or_default();
     check_exit(command, status, &stderr)
 }
@@ -809,10 +812,16 @@ mod tests {
         ];
         let mut seen = String::new();
         let mut blocks = 0;
-        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
-            seen.push_str(block);
-            blocks += 1;
-        })
+        run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| {
+                seen.push_str(block);
+                blocks += 1;
+            },
+            &mut || {},
+        )
         .unwrap();
         assert_eq!(seen, "a\nb\nc");
         assert!(blocks >= 1);
@@ -827,11 +836,17 @@ mod tests {
         ];
         let mut lines = 0;
         let mut blocks = 0;
-        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
-            blocks += 1;
-            assert!(block.ends_with('\n'), "block cut mid-line");
-            lines += block.lines().count();
-        })
+        run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| {
+                blocks += 1;
+                assert!(block.ends_with('\n'), "block cut mid-line");
+                lines += block.lines().count();
+            },
+            &mut || {},
+        )
         .unwrap();
         assert_eq!(lines, 100_000);
         assert!(blocks > 1, "2.7 MB arrives in more than one read");
@@ -845,8 +860,14 @@ mod tests {
             "echo partial; echo oops >&2; exit 3".to_string(),
         ];
         let mut seen = String::new();
-        let err =
-            run_argv_blocks("t", &argv, &cwd(), &mut |block| seen.push_str(block)).unwrap_err();
+        let err = run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| seen.push_str(block),
+            &mut || {},
+        )
+        .unwrap_err();
         assert_eq!(seen, "partial\n");
         match err {
             CommandError::NonZeroExit {
@@ -860,9 +881,34 @@ mod tests {
     }
 
     #[test]
+    fn run_argv_blocks_signals_eof_while_the_child_is_still_running() {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo row; exec >&-; sleep 1".to_string(),
+        ];
+        let mut seen = String::new();
+        let mut eof_at = None;
+        run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| seen.push_str(block),
+            &mut || eof_at = Some(std::time::Instant::now()),
+        )
+        .unwrap();
+        let after_eof = eof_at.expect("on_eof ran").elapsed();
+        assert_eq!(seen, "row\n");
+        assert!(
+            after_eof >= std::time::Duration::from_millis(500),
+            "the child outlived on_eof by only {after_eof:?}"
+        );
+    }
+
+    #[test]
     fn run_argv_blocks_names_a_missing_program() {
         let argv = vec!["definitely-not-a-real-binary-xyzzy".to_string()];
-        let err = run_argv_blocks("t", &argv, &cwd(), &mut |_| {}).unwrap_err();
+        let err = run_argv_blocks("t", &argv, &cwd(), &mut |_| {}, &mut || {}).unwrap_err();
         assert!(
             matches!(err, CommandError::NotOnPath { .. }),
             "got: {err:?}"
