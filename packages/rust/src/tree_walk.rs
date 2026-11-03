@@ -159,7 +159,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                     if !spawned && shared.found.load(Ordering::Relaxed) >= PARALLEL_DIRS {
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
-                        spawn_worker(scope, &shared, 1, workers);
+                        spawn_workers(scope, &shared, (1..workers).collect());
                     }
                     stack.push(shared.obtain(&slot).into_iter());
                 }
@@ -177,30 +177,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("exploring a directory does not panic")
 }
 
-/// Start worker `n` of `workers`, which starts its [`children`] before it
-/// explores: spawning a thread takes tens of microseconds, and the
-/// walk hands out nothing while it spawns.
-fn spawn_worker<'scope, D: Send, L: Send>(
+/// Start a worker for each of `team` as a tree: each worker starts half of
+/// the rest before it explores, since spawning a thread takes tens of
+/// microseconds and the walk hands out nothing while it spawns. Every worker
+/// starts a strictly smaller team than it was handed, so the tree is finite.
+fn spawn_workers<'scope, D: Send, L: Send>(
     scope: &'scope thread::Scope<'scope, '_>,
     shared: &'scope Shared<'_, D, L>,
-    n: usize,
-    workers: usize,
+    mut team: Vec<usize>,
 ) {
-    if n >= workers {
+    if team.pop().is_none() {
         return;
     }
+    let (first, second) = halves(team);
     scope.spawn(move || {
-        for child in children(n) {
-            spawn_worker(scope, shared, child, workers);
-        }
+        spawn_workers(scope, shared, first);
+        spawn_workers(scope, shared, second);
         shared.work();
     });
 }
 
-/// The workers worker `n` starts, numbered so that, from worker 1, each
-/// number below the worker count is started exactly once.
-fn children(n: usize) -> std::ops::Range<usize> {
-    2 * n..2 * n + 2
+fn halves(mut team: Vec<usize>) -> (Vec<usize>, Vec<usize>) {
+    let second = team.split_off(team.len() / 2);
+    (team, second)
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -482,8 +481,8 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_starts_the_two_numbered_after_twice_its_own() {
-        assert_eq!([1, 5].map(children), [2..4, 10..12]);
+    fn a_team_splits_into_halves_the_second_taking_any_odd_one() {
+        assert_eq!(halves(vec![1, 2, 3, 4, 5]), (vec![1, 2], vec![3, 4, 5]));
     }
 
     #[test]
