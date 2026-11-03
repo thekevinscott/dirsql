@@ -2,7 +2,7 @@
 
 #### Summary
 
-One-shot CLI queries start fewer threads, and the walk uses half the cores on machines with more than sixteen. No API changes.
+One-shot CLI queries start fewer threads, and the walk starts its workers as a tree. No API changes.
 
 #### Required changes
 
