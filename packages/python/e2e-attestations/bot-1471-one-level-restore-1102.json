@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py -x -q -s",
+  "ran_at": 1793673449,
+  "exit_code": 0,
+  "commit": "d2f907e7dae672c3c7bfc86399cddf43bf404795",
+  "branch": "bot/1471-one-level-restore-1102"
+}
