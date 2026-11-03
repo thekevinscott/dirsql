@@ -3614,6 +3614,39 @@ mod internal_tests {
         ));
     }
 
+    #[test]
+    fn prepare_defers_ddl_until_after_functions_register() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = TempDir::new().unwrap();
+        let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+        resolved.functions.push(ResolvedFunction {
+            name: "custom_value".into(),
+            args: vec![0],
+            command: "true".into(),
+            deterministic: true,
+            timeout: Duration::from_secs(1),
+            batch: None,
+            cwd: dir.path().to_path_buf(),
+        });
+        let ddl_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&ddl_called);
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved,
+            &|_, _, _, _| Vec::new(),
+            Db::new,
+            move |_, _| {
+                called.store(true, Ordering::SeqCst);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+
+        assert!(!ddl_called.load(Ordering::SeqCst));
+        assert!(!prepared.fresh_db.as_ref().unwrap().1);
+        assert!(DirSQL::finish_build(prepared).is_ok());
+    }
+
     /// Configless startup declares zero tables, so nothing the walk could
     /// visit can match: the walk must not run at all.
     #[test]
