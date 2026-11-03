@@ -1312,10 +1312,10 @@ impl DirSQL {
     }
 
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
-    /// off the host's main thread: validates DDL, compiles the matcher, walks
-    /// the directory, opens the database, and decides
-    /// which files need re-parsing. Does **not** read file contents and does
-    /// **not** invoke `on_file`.
+    /// off the host's main thread: compiles the matcher, walks the directory,
+    /// opens the database, creates transient tables when possible, and decides
+    /// which files need re-parsing. Does **not** read file contents or invoke
+    /// `on_file`.
     ///
     /// Pair with [`finish_build`](Self::finish_build) to complete construction
     /// on a thread where the `on_file` callback can safely execute (e.g. the
@@ -1502,10 +1502,9 @@ impl DirSQL {
     }
 
     /// Split-phase construction — part 2. Consumes the intermediate state from
-    /// [`prepare_resolved`](Self::prepare_resolved): creates the SQLite
-    /// database (or wires up the persistent on-disk one), runs each table's
-    /// DDL, invokes each file's `on_file` callback, and inserts the
-    /// resulting rows.
+    /// [`prepare_resolved`](Self::prepare_resolved): configures the prepared
+    /// database, completes any deferred DDL, invokes each file's `on_file`
+    /// callback, and inserts the resulting rows.
     ///
     /// Must be invoked on a thread where the `on_file` closures can safely
     /// run. For the napi-rs binding that is the JS main thread.
