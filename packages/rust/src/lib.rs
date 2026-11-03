@@ -108,7 +108,10 @@ type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send +
 type RowSink<'a> = dyn FnMut(Vec<infer::JsonRow>) + Send + 'a;
 /// The paths a per-table hook runs over, yielded as the scan finds them.
 type PathFeed<'a> = dyn Iterator<Item = PathBuf> + Send + 'a;
-type OnFilesFn = dyn Fn(&mut PathFeed<'_>, &mut RowSink<'_>) -> std::result::Result<(), BoxError>
+/// What a per-table hook may call once its last chunk is out, before it knows
+/// whether it succeeded, so its rows can be staged while it finishes.
+type OutputEnd<'a> = dyn FnMut() + 'a;
+type OnFilesFn = dyn Fn(&mut PathFeed<'_>, &mut RowSink<'_>, &mut OutputEnd<'_>) -> std::result::Result<(), BoxError>
     + Send
     + Sync
     + 'static;
@@ -378,11 +381,16 @@ impl Table {
             + Sync
             + 'static,
     {
-        Self::per_table_streaming(name, ddl, glob, move |feed, sink: &mut RowSink<'_>| {
-            let paths: Vec<PathBuf> = feed.collect();
-            sink(on_files(&paths)?);
-            Ok(())
-        })
+        Self::per_table_streaming(
+            name,
+            ddl,
+            glob,
+            move |feed, sink: &mut RowSink<'_>, _: &mut OutputEnd<'_>| {
+                let paths: Vec<PathBuf> = feed.collect();
+                sink(on_files(&paths)?);
+                Ok(())
+            },
+        )
     }
 
     /// [`per_table`](Self::per_table) for a hook that hands its rows over in
@@ -394,7 +402,11 @@ impl Table {
         on_files: F,
     ) -> Self
     where
-        F: Fn(&mut PathFeed<'_>, &mut RowSink<'_>) -> std::result::Result<(), BoxError>
+        F: Fn(
+                &mut PathFeed<'_>,
+                &mut RowSink<'_>,
+                &mut OutputEnd<'_>,
+            ) -> std::result::Result<(), BoxError>
             + Send
             + Sync
             + 'static,
@@ -1031,27 +1043,31 @@ impl DirSQL {
                 .unwrap_or_default(),
             Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
         };
-        let raw_rows = match collect_table_rows(hook.as_ref(), &abs_paths) {
-            Ok(rows) => rows,
-            Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
-        };
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
-
-        let changes = {
-            let db = match self.inner.db.lock() {
-                Ok(g) => g,
-                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
-            };
-            let new_rows = match shape_rows(&db, table, raw_rows, strict) {
-                Ok(rows) => rows,
-                Err(message) => return vec![error_event(Some(table), trigger, message)],
-            };
-            match foreign_key::atomically(db.conn(), || {
-                db.reconcile_batch_rows(table, BATCH_OWNER, &new_rows)
-            }) {
-                Ok(changes) => changes,
-                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+        let rows = Mutex::new(Vec::new());
+        let take_rows = || std::mem::take(&mut *rows.lock().expect("hook rows lock"));
+        let mut staged = None;
+        let produced = hook(
+            &mut abs_paths.into_iter(),
+            &mut |chunk| rows.lock().expect("hook rows lock").extend(chunk),
+            &mut || staged = Some(self.stage_table_rows(table, take_rows(), strict)),
+        );
+        let staged = match (produced, staged) {
+            (Err(e), staged) => {
+                if let Some(Ok(staged)) = staged {
+                    let _ = foreign_key::discard(staged.db.conn());
+                }
+                return vec![error_event(Some(table), trigger, e.to_string())];
             }
+            (Ok(()), Some(staged)) => staged,
+            (Ok(()), None) => self.stage_table_rows(table, take_rows(), strict),
+        };
+        let changes = match staged {
+            Ok(Staged { db, changes }) => match foreign_key::keep(db.conn()) {
+                Ok(()) => changes,
+                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+            },
+            Err(message) => return vec![error_event(Some(table), trigger, message)],
         };
 
         if changes.keyed {
@@ -1065,6 +1081,23 @@ impl DirSQL {
         } else {
             differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
         }
+    }
+
+    /// Shape a per-table hook's rows and write them as `table`'s, held open
+    /// under the database lock until the hook's exit keeps or discards them.
+    fn stage_table_rows(
+        &self,
+        table: &str,
+        raw_rows: Vec<infer::JsonRow>,
+        strict: bool,
+    ) -> std::result::Result<Staged<'_>, String> {
+        let db = self.inner.db.lock().map_err(|e| e.to_string())?;
+        let rows = shape_rows(&db, table, raw_rows, strict)?;
+        let changes = foreign_key::stage(db.conn(), || {
+            db.reconcile_batch_rows(table, BATCH_OWNER, &rows)
+        })
+        .map_err(|e| e.to_string())?;
+        Ok(Staged { db, changes })
     }
 
     /// Record in the table's file set whether `abs_path` is, now, one of the
@@ -2567,16 +2600,6 @@ fn shape_rows(
         .map_err(|e| e.to_string())
 }
 
-/// Every row a per-table hook produces over `paths`, gathered into one list.
-fn collect_table_rows(
-    hook: &OnFilesFn,
-    paths: &[PathBuf],
-) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
-    let mut rows = Vec::new();
-    hook(&mut paths.iter().cloned(), &mut |chunk| rows.extend(chunk))?;
-    Ok(rows)
-}
-
 /// Replace a per-table hook's rows under [`BATCH_OWNER`], storing each chunk
 /// the hook emits while the hook, on its own thread, goes on producing the
 /// next. Chunks are shaped on a thread of their own, in order, so shaping one
@@ -2660,6 +2683,12 @@ fn refill_table_rows(
     Ok(outcome)
 }
 
+/// A per-table hook's rows written but not yet kept.
+struct Staged<'a> {
+    db: std::sync::MutexGuard<'a, Db>,
+    changes: db::RowChanges,
+}
+
 /// A per-table hook running on its own thread, its rows arriving as chunks.
 struct Production {
     chunks: std::sync::mpsc::Receiver<Vec<infer::JsonRow>>,
@@ -2689,9 +2718,13 @@ fn start_hook(
         if paths.peek().is_none() {
             return Ok(());
         }
-        hook(&mut paths, &mut |chunk| {
-            let _ = sender.send(chunk);
-        })
+        hook(
+            &mut paths,
+            &mut |chunk| {
+                let _ = sender.send(chunk);
+            },
+            &mut || {},
+        )
         .map_err(|e| e.to_string())
     });
     Production { chunks, handle }
@@ -2964,8 +2997,8 @@ fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<V
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
             glob,
-            move |paths: &mut PathFeed<'_>, sink: &mut RowSink<'_>| {
-                run_on_files(&command, paths, &hook_cwd, &hook_root, sink)
+            move |paths: &mut PathFeed<'_>, sink: &mut RowSink<'_>, end: &mut OutputEnd<'_>| {
+                run_on_files(&command, paths, &hook_cwd, &hook_root, sink, end)
             },
         )
         .anchored(anchor)
@@ -2992,9 +3025,10 @@ fn run_on_files(
     config_dir: &Path,
     root: &Path,
     sink: &mut RowSink<'_>,
+    end: &mut OutputEnd<'_>,
 ) -> std::result::Result<(), BoxError> {
     Ok(on_file::run_streaming(
-        command, config_dir, root, paths, sink,
+        command, config_dir, root, paths, sink, end,
     )?)
 }
 
@@ -3478,7 +3512,7 @@ mod internal_tests {
             "items",
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            move |paths: &mut PathFeed<'_>, _: &mut RowSink<'_>| {
+            move |paths: &mut PathFeed<'_>, _: &mut RowSink<'_>, _: &mut OutputEnd<'_>| {
                 for path in paths {
                     let _ = got.lock().unwrap().send(path);
                 }
@@ -4794,7 +4828,7 @@ mod internal_tests {
         chunks: Vec<Vec<infer::JsonRow>>,
         outcome: std::result::Result<(), String>,
     ) -> Production {
-        let hook: Arc<OnFilesFn> = Arc::new(move |_paths, sink| {
+        let hook: Arc<OnFilesFn> = Arc::new(move |_paths, sink, _end| {
             for chunk in chunks.clone() {
                 sink(chunk);
             }
@@ -5399,12 +5433,14 @@ mod internal_tests {
         let Hook::PerTable(on_files) = &tables[0].hook else {
             panic!("a configured on-file command runs once per table");
         };
-        assert_eq!(
-            collect_table_rows(on_files.as_ref(), &[dir.path().join("f.a")])
-                .unwrap()
-                .len(),
-            1
-        );
+        let mut rows = Vec::new();
+        on_files(
+            &mut std::iter::once(dir.path().join("f.a")),
+            &mut |chunk| rows.extend(chunk),
+            &mut || {},
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
         assert!(tables[1].strict, "on-file table preserves strict flag");
     }
 
@@ -5574,6 +5610,7 @@ mod internal_tests {
             config_dir,
             root,
             &mut |chunk| rows.extend(chunk),
+            &mut || {},
         )?;
         Ok(rows)
     }
@@ -5605,6 +5642,7 @@ mod internal_tests {
             dir.path(),
             dir.path(),
             &mut |chunk| chunks.push(chunk),
+            &mut || {},
         )
         .expect("a well-formed payload parses");
         assert!(chunks.len() > 1, "{} invocation(s)", chunks.len());
@@ -5991,7 +6029,7 @@ mod internal_tests {
             "items",
             "CREATE TABLE items (name TEXT)",
             "*.txt",
-            move |_: &mut PathFeed<'_>, sink: &mut RowSink<'_>| hook(sink),
+            move |_: &mut PathFeed<'_>, sink: &mut RowSink<'_>, _: &mut OutputEnd<'_>| hook(sink),
         )
     }
 
@@ -6419,6 +6457,69 @@ mod internal_tests {
             *calls.lock().unwrap(),
             vec![vec![a.clone(), b.clone()], vec![a, b.clone()], vec![b]]
         );
+    }
+
+    /// A per-table hook that answers `answer`'s name, ends its output, and
+    /// then fails when `answer` says so.
+    fn ending_per_table(answer: Arc<Mutex<(String, bool)>>) -> Table {
+        Table::per_table_streaming(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |_: &mut PathFeed<'_>, sink: &mut RowSink<'_>, end: &mut OutputEnd<'_>| {
+                let (name, fails) = answer.lock().unwrap().clone();
+                sink(vec![name_json_row(&name)]);
+                end();
+                if fails {
+                    return Err("exited 1".into());
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn ending_hook_db(answer: &Arc<Mutex<(String, bool)>>) -> (TempDir, DirSQL, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let fake = Arc::new(
+            FakeFs::default().with_subtree(root.clone(), vec![(a.clone(), "items".into())]),
+        );
+        let items = ending_per_table(Arc::clone(answer));
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake).unwrap();
+        db.apply_file_events(vec![FileEvent::Created(a.clone())]);
+        (dir, db, a)
+    }
+
+    #[test]
+    fn a_per_table_hook_that_fails_after_ending_its_output_writes_nothing() {
+        let answer = Arc::new(Mutex::new(("old".to_string(), false)));
+        let (_dir, db, a) = ending_hook_db(&answer);
+        *answer.lock().unwrap() = ("new".to_string(), true);
+
+        let events = db.apply_file_events(vec![FileEvent::Modified(a)]);
+
+        assert!(
+            matches!(&events[..], [RowEvent::Error { error, .. }] if error.contains("exited 1")),
+            "{events:?}"
+        );
+        assert_eq!(row_names(&db), vec!["old"]);
+    }
+
+    #[test]
+    fn a_per_table_hook_that_succeeds_after_ending_its_output_keeps_its_rows() {
+        let answer = Arc::new(Mutex::new(("old".to_string(), false)));
+        let (_dir, db, a) = ending_hook_db(&answer);
+        *answer.lock().unwrap() = ("new".to_string(), false);
+
+        let events = db.apply_file_events(vec![FileEvent::Modified(a)]);
+
+        assert!(
+            matches!(&events[..], [RowEvent::Update { .. }]),
+            "{events:?}"
+        );
+        assert_eq!(row_names(&db), vec!["new"]);
     }
 
     #[test]

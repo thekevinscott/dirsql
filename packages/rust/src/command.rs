@@ -286,12 +286,14 @@ const READ_BYTES: usize = 262_144;
 /// Run an already-built `argv` and hand its stdout to `on_block` as it
 /// arrives, in blocks that each hold whole lines (the last block may lack its
 /// trailing newline). The child runs with stdin closed. A non-zero exit is an
-/// error after every block has been delivered.
+/// error after every block has been delivered. `on_eof` runs once stdout has
+/// closed, before the child's exit is known.
 pub(crate) fn run_argv_blocks(
     command: &str,
     argv: &[String],
     cwd: &Path,
     on_block: &mut dyn FnMut(&str),
+    on_eof: &mut dyn FnMut(),
 ) -> Result<(), CommandError> {
     let mut cmd = Command::new(&argv[0]);
     push_args(&mut cmd, &argv[1..]);
@@ -310,10 +312,29 @@ pub(crate) fn run_argv_blocks(
         buf
     });
     let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let status =
+        drain_then_reap(&mut stdout_pipe, on_block, on_eof, || child.wait()).map_err(|source| {
+            CommandError::Io {
+                command: command.to_string(),
+                source,
+            }
+        })?;
+    let stderr = stderr_thread.join().unwrap_or_default();
+    check_exit(command, status, &stderr)
+}
+
+/// Hand `stdout` to `on_block` in blocks of whole lines until it closes, run
+/// `on_eof`, then `reap` the child, so work on the output overlaps its exit.
+fn drain_then_reap<T>(
+    stdout: &mut dyn Read,
+    on_block: &mut dyn FnMut(&str),
+    on_eof: &mut dyn FnMut(),
+    reap: impl FnOnce() -> T,
+) -> T {
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; READ_BYTES];
     loop {
-        let n = match stdout_pipe.read(&mut buf) {
+        let n = match stdout.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
@@ -326,13 +347,8 @@ pub(crate) fn run_argv_blocks(
     if !pending.is_empty() {
         on_block(&String::from_utf8_lossy(&pending));
     }
-
-    let status = child.wait().map_err(|source| CommandError::Io {
-        command: command.to_string(),
-        source,
-    })?;
-    let stderr = stderr_thread.join().unwrap_or_default();
-    check_exit(command, status, &stderr)
+    on_eof();
+    reap()
 }
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
@@ -809,10 +825,16 @@ mod tests {
         ];
         let mut seen = String::new();
         let mut blocks = 0;
-        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
-            seen.push_str(block);
-            blocks += 1;
-        })
+        run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| {
+                seen.push_str(block);
+                blocks += 1;
+            },
+            &mut || {},
+        )
         .unwrap();
         assert_eq!(seen, "a\nb\nc");
         assert!(blocks >= 1);
@@ -827,11 +849,17 @@ mod tests {
         ];
         let mut lines = 0;
         let mut blocks = 0;
-        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
-            blocks += 1;
-            assert!(block.ends_with('\n'), "block cut mid-line");
-            lines += block.lines().count();
-        })
+        run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| {
+                blocks += 1;
+                assert!(block.ends_with('\n'), "block cut mid-line");
+                lines += block.lines().count();
+            },
+            &mut || {},
+        )
         .unwrap();
         assert_eq!(lines, 100_000);
         assert!(blocks > 1, "2.7 MB arrives in more than one read");
@@ -845,8 +873,14 @@ mod tests {
             "echo partial; echo oops >&2; exit 3".to_string(),
         ];
         let mut seen = String::new();
-        let err =
-            run_argv_blocks("t", &argv, &cwd(), &mut |block| seen.push_str(block)).unwrap_err();
+        let err = run_argv_blocks(
+            "t",
+            &argv,
+            &cwd(),
+            &mut |block| seen.push_str(block),
+            &mut || {},
+        )
+        .unwrap_err();
         assert_eq!(seen, "partial\n");
         match err {
             CommandError::NonZeroExit {
@@ -860,9 +894,25 @@ mod tests {
     }
 
     #[test]
+    fn drain_then_reap_ends_the_output_before_reaping_the_child() {
+        let order = std::cell::RefCell::new(Vec::new());
+        let reaped = drain_then_reap(
+            &mut &b"a\nb"[..],
+            &mut |block| order.borrow_mut().push(block.to_string()),
+            &mut || order.borrow_mut().push("eof".to_string()),
+            || {
+                order.borrow_mut().push("reap".to_string());
+                7
+            },
+        );
+        assert_eq!(reaped, 7);
+        assert_eq!(*order.borrow(), vec!["a\n", "b", "eof", "reap"]);
+    }
+
+    #[test]
     fn run_argv_blocks_names_a_missing_program() {
         let argv = vec!["definitely-not-a-real-binary-xyzzy".to_string()];
-        let err = run_argv_blocks("t", &argv, &cwd(), &mut |_| {}).unwrap_err();
+        let err = run_argv_blocks("t", &argv, &cwd(), &mut |_| {}, &mut || {}).unwrap_err();
         assert!(
             matches!(err, CommandError::NotOnPath { .. }),
             "got: {err:?}"

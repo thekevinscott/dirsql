@@ -55,17 +55,31 @@ pub(crate) fn atomically<T, E: From<rusqlite::Error>>(
     conn: &Connection,
     unit: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
+    let value = stage(conn, unit)?;
+    keep(conn)?;
+    Ok(value)
+}
+
+/// Apply `unit` but hold it open, for [`keep`] or [`discard`] to settle. A
+/// unit that fails is discarded here and leaves nothing open.
+pub(crate) fn stage<T, E: From<rusqlite::Error>>(
+    conn: &Connection,
+    unit: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
     conn.execute_batch("SAVEPOINT dirsql_unit")?;
-    match unit() {
-        Ok(value) => {
-            conn.execute_batch("RELEASE dirsql_unit")?;
-            Ok(value)
-        }
-        Err(e) => {
-            conn.execute_batch("ROLLBACK TO dirsql_unit; RELEASE dirsql_unit")?;
-            Err(e)
-        }
-    }
+    unit().inspect_err(|_| {
+        let _ = discard(conn);
+    })
+}
+
+/// Keep the unit [`stage`] left open.
+pub(crate) fn keep(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("RELEASE dirsql_unit")
+}
+
+/// Drop the unit [`stage`] left open, as if it had never run.
+pub(crate) fn discard(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("ROLLBACK TO dirsql_unit; RELEASE dirsql_unit")
 }
 
 /// The rows violating a foreign key right now, or `None` when there are none.
@@ -401,5 +415,42 @@ mod tests {
         assert!(!conn.is_autocommit());
         commit(&conn).unwrap();
         assert_eq!(count(&conn, "parent"), 1);
+    }
+    #[test]
+    fn a_staged_unit_is_visible_until_discarded() {
+        let conn = family(CHILD);
+        let out: rusqlite::Result<i32> = stage(&conn, || {
+            conn.execute_batch("INSERT INTO parent VALUES (1, 'a')")?;
+            Ok(7)
+        });
+        assert_eq!(out.unwrap(), 7);
+        assert_eq!(count(&conn, "parent"), 1);
+        discard(&conn).unwrap();
+        assert_eq!(count(&conn, "parent"), 0);
+        assert!(conn.is_autocommit());
+    }
+
+    #[test]
+    fn a_staged_unit_kept_stays() {
+        let conn = family(CHILD);
+        let out: rusqlite::Result<()> = stage(&conn, || {
+            conn.execute_batch("INSERT INTO parent VALUES (1, 'a')")
+        });
+        out.unwrap();
+        keep(&conn).unwrap();
+        assert!(conn.is_autocommit());
+        assert_eq!(count(&conn, "parent"), 1);
+    }
+
+    #[test]
+    fn a_staged_unit_that_fails_leaves_nothing_open() {
+        let conn = family(CHILD);
+        let out: rusqlite::Result<()> = stage(&conn, || {
+            conn.execute_batch("INSERT INTO parent VALUES (1, 'a')")?;
+            conn.execute_batch("INSERT INTO nowhere VALUES (1)")
+        });
+        assert!(out.is_err());
+        assert!(conn.is_autocommit());
+        assert_eq!(count(&conn, "parent"), 0);
     }
 }

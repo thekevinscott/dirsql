@@ -57,6 +57,7 @@ pub(crate) fn run(
         root,
         &mut paths.iter().cloned(),
         &mut |chunk| rows.extend(chunk),
+        &mut || {},
     )?;
     Ok(rows)
 }
@@ -90,9 +91,15 @@ impl Pool<'_> {
             }
             let mut full = self.argv.to_vec();
             full.extend(args);
-            let outcome = run_invocation(self.command, &full, self.cwd, &mut |chunk| {
-                let _ = rows.send(chunk);
-            });
+            let outcome = run_invocation(
+                self.command,
+                &full,
+                self.cwd,
+                &mut |chunk| {
+                    let _ = rows.send(chunk);
+                },
+                &mut || {},
+            );
             if let Err(message) = outcome {
                 self.aborted.store(true, Ordering::SeqCst);
                 self.failures
@@ -110,14 +117,18 @@ impl Pool<'_> {
 ///
 /// `paths` is consumed as it yields: an invocation starts as soon as its
 /// argument list is full, while later paths are still arriving.
+///
+/// `end` runs when a lone invocation's stdout closes, after its last rows and
+/// before its exit is known. Several invocations never call it.
 pub(crate) fn run_streaming(
     command: &str,
     cwd: &Path,
     root: &Path,
     paths: &mut (dyn Iterator<Item = PathBuf> + Send),
     sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
+    end: &mut dyn FnMut(),
 ) -> Result<(), String> {
-    run_streaming_on(command, cwd, root, paths, sink, &cpus)
+    run_streaming_on(command, cwd, root, paths, sink, end, &cpus)
 }
 
 /// [`run_streaming`] with the machine's CPU count asked of `cpus`.
@@ -127,6 +138,7 @@ fn run_streaming_on(
     root: &Path,
     paths: &mut (dyn Iterator<Item = PathBuf> + Send),
     sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
+    end: &mut dyn FnMut(),
     cpus: &(dyn Fn() -> usize + Sync),
 ) -> Result<(), String> {
     let Some(first) = paths.next() else {
@@ -144,7 +156,7 @@ fn run_streaming_on(
             if let Some(args) = lone_run(&known, budget, cpus) {
                 let mut full = argv;
                 full.extend(args);
-                return run_invocation(command, &full, cwd, sink);
+                return run_invocation(command, &full, cwd, sink, end);
             }
             known_rest = known.into_iter();
             let first = known_rest.next().expect("known holds the first path");
@@ -278,27 +290,34 @@ fn run_invocation(
     full: &[String],
     cwd: &Path,
     send: &mut dyn FnMut(Vec<JsonRow>),
+    end: &mut dyn FnMut(),
 ) -> Result<(), String> {
     let mut bad_output: Option<String> = None;
     let mut lines_seen = 0usize;
-    command::run_argv_blocks(command, full, cwd, &mut |block| {
-        if bad_output.is_some() {
-            return;
-        }
-        match parse_rows_at(block, lines_seen) {
-            Ok(rows) => {
-                lines_seen += block.bytes().filter(|&b| b == b'\n').count();
-                if !rows.is_empty() {
-                    send(rows);
+    command::run_argv_blocks(
+        command,
+        full,
+        cwd,
+        &mut |block| {
+            if bad_output.is_some() {
+                return;
+            }
+            match parse_rows_at(block, lines_seen) {
+                Ok(rows) => {
+                    lines_seen += block.bytes().filter(|&b| b == b'\n').count();
+                    if !rows.is_empty() {
+                        send(rows);
+                    }
+                }
+                Err(message) => {
+                    bad_output = Some(format!(
+                        "on-file output was not one JSON object per line: {message}"
+                    ));
                 }
             }
-            Err(message) => {
-                bad_output = Some(format!(
-                    "on-file output was not one JSON object per line: {message}"
-                ));
-            }
-        }
-    })
+        },
+        end,
+    )
     .map_err(spawn_failure)?;
     bad_output.map_or(Ok(()), Err)
 }
@@ -721,10 +740,29 @@ mod tests {
             Path::new("."),
             &mut paths.into_iter(),
             &mut |chunk| rows.extend(chunk),
+            &mut || {},
             &|| panic!("counted the cpus"),
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn run_streaming_ends_a_lone_invocations_output_once_after_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 2, 100);
+        let order = Mutex::new(Vec::new());
+        run_streaming_on(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &mut paths.into_iter(),
+            &mut |chunk| order.lock().unwrap().push(chunk.len()),
+            &mut || order.lock().unwrap().push(0),
+            &|| 1,
+        )
+        .unwrap();
+        assert_eq!(*order.lock().unwrap(), vec![1, 0]);
     }
 
     fn two_paths() -> (Vec<PathBuf>, Vec<String>, usize) {
