@@ -457,7 +457,7 @@ pub struct Db {
     path_table_ignore: Vec<String>,
     /// Whether a path-table scan respects `.gitignore` files. On by default;
     /// the CLI's `--no-ignore` turns it off.
-    path_table_gitignore: bool,
+    pub(crate) path_table_gitignore: bool,
     /// When set (the CLI's `--on-file`), every path-table is minted over the
     /// parser instead of the stat columns: its rows and schema come from the
     /// command's output. `None` keeps the stat path-table behavior.

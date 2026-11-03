@@ -3616,6 +3616,24 @@ mod internal_tests {
     }
 
     #[test]
+    fn configure_db_paths_honors_gitignore_unless_told_not_to() {
+        for no_ignore in [false, true] {
+            let mut db = Db::new().unwrap();
+            configure_db_paths(&mut db, Path::new("/r"), &[], false, None, no_ignore);
+            assert_eq!(db.path_table_gitignore, !no_ignore);
+        }
+    }
+
+    #[test]
+    fn run_table_ddl_creates_a_missing_table_and_keeps_a_present_one() {
+        let db = Db::new().unwrap();
+        let tables = [txt_table()];
+        assert!(run_table_ddl(&db, &tables).unwrap().is_empty());
+        assert!(catalog_entry(&db, "items").unwrap().is_some());
+        assert!(run_table_ddl(&db, &tables).unwrap().is_empty());
+    }
+
+    #[test]
     fn prepare_defers_ddl_until_after_functions_register() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
