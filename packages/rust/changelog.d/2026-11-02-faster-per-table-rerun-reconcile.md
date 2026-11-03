@@ -1,0 +1,1 @@
+**Changed** A watched change to a table filled by a per-table `on-file` command reaches `/events` sooner: the table's key and columns are read from the schema once per schema change rather than on every rerun, and a rerun that only updates rows in place no longer rewrites the table's row range.
