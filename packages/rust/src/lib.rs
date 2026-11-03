@@ -1337,6 +1337,19 @@ impl DirSQL {
     where
         F: FnOnce() -> db::Result<Db> + Send,
     {
+        Self::prepare_resolved_with_setup(resolved, scan, new_db, run_table_ddl)
+    }
+
+    fn prepare_resolved_with_setup<F, D>(
+        resolved: ResolvedBuild,
+        scan: ScanFn<'_>,
+        new_db: F,
+        ddl: D,
+    ) -> Result<PreparedBuild>
+    where
+        F: FnOnce() -> db::Result<Db> + Send,
+        D: FnOnce(&Db, &[Table]) -> Result<Vec<String>> + Send,
+    {
         let ResolvedBuild {
             root,
             tables,
@@ -1393,7 +1406,7 @@ impl DirSQL {
                     path_table_parser.as_deref(),
                     no_ignore,
                 );
-                Some((db, true))
+                Some((db, true, Vec::new()))
             } else {
                 None
             };
@@ -1413,9 +1426,10 @@ impl DirSQL {
                         );
                         let ddl_ready = extensions.is_empty() && functions.is_empty();
                         if ddl_ready {
-                            run_table_ddl(&db, &tables)?;
+                            let warnings = ddl(&db, &tables)?;
+                            return Ok::<_, DirSqlError>((db, true, warnings));
                         }
-                        Ok::<_, DirSqlError>((db, ddl_ready))
+                        Ok::<_, DirSqlError>((db, false, Vec::new()))
                     })
                 });
                 // The walk reports a running count rather than a fraction: it does
@@ -1527,16 +1541,17 @@ impl DirSQL {
             no_ignore,
         } = prepared;
 
-        let (mut db, fresh_ddl, persist_ready, needs_sweep) = match persist {
+        let (mut db, fresh_ddl, ddl_warnings, persist_ready, needs_sweep) = match persist {
             Some(p) => (
                 p.db,
                 false,
+                Vec::new(),
                 Some((p.deleted, p.meta, p.meta_current)),
                 p.needs_sweep,
             ),
             None => {
-                let (db, ddl_ready) = fresh_db.expect("prepare opened the database");
-                (db, ddl_ready, None, false)
+                let (db, ddl_ready, warnings) = fresh_db.expect("prepare opened the database");
+                (db, ddl_ready, warnings, None, false)
             }
         };
         if persist_ready.is_some() {
@@ -1583,8 +1598,13 @@ impl DirSQL {
         let mut ddl_map: HashMap<String, String> = HashMap::new();
         let declared: Vec<String> = tables.iter().map(|table| table.name.clone()).collect();
 
-        if !fresh_ddl {
-            run_table_ddl(&db, &tables)?;
+        let ddl_warnings = if fresh_ddl {
+            ddl_warnings
+        } else {
+            run_table_ddl(&db, &tables)?
+        };
+        for warning in ddl_warnings {
+            eprintln!("{warning}");
         }
         for table in tables {
             let table_name = table.name.clone();
@@ -2200,7 +2220,7 @@ pub struct PreparedBuild {
     /// the same ones declared tables do.
     ignore: Vec<String>,
     scanned_files: Scanned,
-    fresh_db: Option<(Db, bool)>,
+    fresh_db: Option<(Db, bool, Vec<String>)>,
     /// Per-table hooks already running over the paths the scan found, by table.
     early: Vec<(String, Production)>,
     persist: Option<PreparedPersist>,
@@ -2261,7 +2281,8 @@ fn configure_db_paths(
     }
 }
 
-fn run_table_ddl(db: &Db, tables: &[Table]) -> Result<()> {
+fn run_table_ddl(db: &Db, tables: &[Table]) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     for table in tables {
         let table_name = &table.name;
         let warm = catalog_entry(db, table_name)?.is_some_and(|entry| entry.kind == "table");
@@ -2279,11 +2300,11 @@ fn run_table_ddl(db: &Db, tables: &[Table]) -> Result<()> {
                 .collect();
             let entry = catalog_entry(db, table_name)?;
             if let Some(warning) = classify_declared_table(table_name, entry, created)? {
-                eprintln!("{warning}");
+                warnings.push(warning);
             }
         }
     }
-    Ok(())
+    Ok(warnings)
 }
 
 /// Walk every group's anchor in turn, reporting one running count across all of
@@ -3528,6 +3549,71 @@ mod internal_tests {
         assert!(prepared.scanned_files.into_files().is_empty());
     }
 
+    #[test]
+    fn prepare_creates_the_table_while_the_scan_is_active() {
+        use std::sync::mpsc;
+
+        let dir = TempDir::new().unwrap();
+        let (scan_started, wait_for_scan) = mpsc::channel();
+        let (ddl_done, wait_for_ddl) = mpsc::channel();
+        let scan =
+            |_: &Path, _: &TableMatcher, _: &mut dyn FnMut(u64), _: &mut dyn FnMut(&Path, &str)| {
+                scan_started.send(()).unwrap();
+                assert!(
+                    wait_for_ddl.recv_timeout(Duration::from_secs(5)).is_ok(),
+                    "table DDL must finish before the scan completes"
+                );
+                Vec::new()
+            };
+        let ddl = move |db: &Db, tables: &[Table]| {
+            wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
+            let warnings = run_table_ddl(db, tables)?;
+            assert!(catalog_entry(db, "items")?.is_some());
+            ddl_done.send(()).unwrap();
+            Ok(warnings)
+        };
+
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &scan,
+            Db::new,
+            ddl,
+        )
+        .unwrap();
+        assert!(prepared.scanned_files.into_files().is_empty());
+    }
+
+    #[test]
+    fn prepare_defers_ddl_until_after_extensions_load() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = TempDir::new().unwrap();
+        let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+        resolved.extensions.push(Extension {
+            path: dir.path().join("missing-extension.so"),
+            entrypoint: None,
+        });
+        let ddl_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&ddl_called);
+        let prepared = DirSQL::prepare_resolved_with_setup(
+            resolved,
+            &|_, _, _, _| Vec::new(),
+            Db::new,
+            move |_, _| {
+                called.store(true, Ordering::SeqCst);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+
+        assert!(!ddl_called.load(Ordering::SeqCst));
+        assert!(!prepared.fresh_db.as_ref().unwrap().1);
+        assert!(matches!(
+            DirSQL::finish_build(prepared),
+            Err(DirSqlError::Extension { .. })
+        ));
+    }
+
     /// Configless startup declares zero tables, so nothing the walk could
     /// visit can match: the walk must not run at all.
     #[test]
@@ -3699,7 +3785,7 @@ mod internal_tests {
                 stat: None,
                 trusted: false,
             }]),
-            fresh_db: Some((Db::new().unwrap(), false)),
+            fresh_db: Some((Db::new().unwrap(), false, Vec::new())),
             early: Vec::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
@@ -5930,7 +6016,9 @@ mod internal_tests {
                 })
                 .collect(),
         );
-        let fresh_db = persist.is_none().then(|| (Db::new().unwrap(), false));
+        let fresh_db = persist
+            .is_none()
+            .then(|| (Db::new().unwrap(), false, Vec::new()));
         PreparedBuild {
             ignore: Vec::new(),
             root: root.to_path_buf(),
