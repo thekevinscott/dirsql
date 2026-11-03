@@ -3435,17 +3435,15 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let (scan_started, wait_for_scan) = mpsc::channel();
         let (db_opened, wait_for_db) = mpsc::channel();
-        let scan = |_: &Path,
-                    _: &TableMatcher,
-                    _: &mut dyn FnMut(u64),
-                    _: &mut dyn FnMut(&Path, &str)| {
-            scan_started.send(()).unwrap();
-            assert!(
-                wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
-                "database creation must finish before the scan completes"
-            );
-            Vec::new()
-        };
+        let scan =
+            |_: &Path, _: &TableMatcher, _: &mut dyn FnMut(u64), _: &mut dyn FnMut(&Path, &str)| {
+                scan_started.send(()).unwrap();
+                assert!(
+                    wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
+                    "database creation must finish before the scan completes"
+                );
+                Vec::new()
+            };
         let new_db = move || {
             wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
             let db = Db::new()?;
