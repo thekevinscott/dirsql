@@ -347,9 +347,8 @@ fn drain_then_reap<T>(
     if !pending.is_empty() {
         on_block(&String::from_utf8_lossy(&pending));
     }
-    let reaped = reap();
     on_eof();
-    reaped
+    reap()
 }
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates

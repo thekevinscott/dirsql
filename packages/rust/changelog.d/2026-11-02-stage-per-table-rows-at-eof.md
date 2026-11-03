@@ -1,0 +1,1 @@
+**Changed** A watched change to a table filled by a per-table `on-file` command reaches `/events` sooner: the command's rows are written as soon as its stdout closes, while it exits, and kept only once it exits zero. A command that exits non-zero still leaves the table as it was.
