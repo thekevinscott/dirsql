@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_symlink_test.py -x -q -s",
+  "ran_at": 1793672360,
+  "exit_code": 0,
+  "commit": "be03752309ec91f1e05891e53b9cb96872b7afec",
+  "branch": "bot/1482-docs-fastest-bar-1102"
+}

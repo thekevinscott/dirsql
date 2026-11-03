@@ -7,7 +7,7 @@ and `*.md` lists the files directly inside, never the directories below.
 Native for the first is bash globstar alone, the reference for which links it
 takes: `find`, `fd` and `rg` either skip the link or descend through it.
 Natives for the second are `find` bounded at one level, `fd`, `rg --files`
-and a bash glob. No mocks: real console
+and a bash glob, and its bar is the fastest of them. No mocks: real console
 script, real process, real filesystem.
 """
 
@@ -18,6 +18,7 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    FASTEST,
     Native,
     agreed_rows,
     assert_speed_of_light,
@@ -50,8 +51,8 @@ DOCS = [
     ),
 ]
 CASES = [
-    ("./**/*.md (symlinks)", "./**/*.md", LINKED),
-    ("./docs/", "./docs/", DOCS),
+    ("./**/*.md (symlinks)", "./**/*.md", LINKED, ""),
+    ("./docs/", "./docs/", DOCS, FASTEST),
 ]
 FANOUT = 8
 
@@ -113,8 +114,8 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
         finally:
             shutil.rmtree(root.parent, ignore_errors=True)
 
-    @pytest.mark.parametrize(("name", "glob", "specs"), CASES)
-    def it_matches_native_files_within_the_bar(tree, name, glob, specs):
+    @pytest.mark.parametrize(("name", "glob", "specs", "bar"), CASES)
+    def it_matches_native_files_within_the_bar(tree, name, glob, specs, bar):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -125,7 +126,7 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(shell_natives(root, specs), dirsql, startup)
+        result = paired(shell_natives(root, specs, bar=bar), dirsql, startup)
         expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, glob)
 
