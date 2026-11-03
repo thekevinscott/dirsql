@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py tests/e2e/declared_table_name_test.py tests/e2e/fanout_test.py tests/e2e/use_case_dossier_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_notebook_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/watch_speed_test.py -q",
+  "ran_at": 1793671776,
+  "exit_code": 0,
+  "commit": "92277f18890c83a5a800db7c2dec4d6f0e4bb8fb",
+  "branch": "bot/1562-hook-savepoint-1102"
+}
