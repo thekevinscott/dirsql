@@ -2219,6 +2219,8 @@ pub struct PreparedBuild {
     /// the same ones declared tables do.
     ignore: Vec<String>,
     scanned_files: Scanned,
+    /// The transient database opened during the scan, whether its tables'
+    /// DDL already ran, and that DDL's warnings. `None` when persisting.
     fresh_db: Option<(Db, bool, Vec<String>)>,
     /// Per-table hooks already running over the paths the scan found, by table.
     early: Vec<(String, Production)>,
