@@ -3634,6 +3634,25 @@ mod internal_tests {
     }
 
     #[test]
+    fn run_table_ddl_names_only_the_tables_its_batch_created() {
+        let db = Db::new().unwrap();
+        db.conn()
+            .execute_batch("CREATE TABLE earlier (y TEXT)")
+            .unwrap();
+        let tables = [Table::new(
+            "items",
+            "CREATE TABLE made (x TEXT)",
+            "*.txt",
+            |_| Vec::new(),
+        )];
+        let err = run_table_ddl(&db, &tables).unwrap_err();
+        assert!(
+            matches!(&err, DirSqlError::TableNotCreated { created, .. } if created == &["made"]),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn prepare_defers_ddl_until_after_functions_register() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
