@@ -791,24 +791,10 @@ mod tests {
         FileRow::new(Path::new(prefix), PathBuf::from(rel))
     }
 
-    /// `dir/`, a unit that is not Unicode, then `.md`: on Unix a lone 0xff
-    /// byte, on Windows an unpaired surrogate.
+    /// `dir/`, an unpaired surrogate's WTF-8 bytes, then `.md`: not UTF-8
+    /// on Unix, not Unicode on Windows.
     fn not_unicode() -> PathBuf {
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStringExt;
-            std::ffi::OsString::from_vec(b"dir/\xff.md".to_vec()).into()
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStringExt;
-            let wide: Vec<u16> = "dir/"
-                .encode_utf16()
-                .chain([0xD8FF])
-                .chain(".md".encode_utf16())
-                .collect();
-            std::ffi::OsString::from_wide(&wide).into()
-        }
+        PathBuf::from(os_str(b"dir/\xED\xA3\xBF.md"))
     }
 
     #[test]

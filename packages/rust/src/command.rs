@@ -543,24 +543,17 @@ mod tests {
         assert_eq!(non_verbatim(path), path);
     }
 
-    /// `before`, a unit that is not Unicode, then `after`: on Unix a lone
-    /// 0xff byte, on Windows an unpaired surrogate.
+    /// `before`, an unpaired surrogate's WTF-8 bytes, then `after`: not
+    /// UTF-8 on Unix, not Unicode on Windows.
+    #[expect(
+        unsafe_code,
+        reason = "std offers no checked conversion from encoded bytes to an OsString"
+    )]
     fn not_unicode(before: &str, after: &str) -> OsString {
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStringExt;
-            OsString::from_vec([before.as_bytes(), &[0xff], after.as_bytes()].concat())
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStringExt;
-            let wide: Vec<u16> = before
-                .encode_utf16()
-                .chain([0xD8FF])
-                .chain(after.encode_utf16())
-                .collect();
-            OsString::from_wide(&wide)
-        }
+        let bytes = [before.as_bytes(), b"\xED\xA3\xBF", after.as_bytes()].concat();
+        // SAFETY: UTF-8 around the generalized UTF-8 of one surrogate, which
+        // is how either platform encodes such a name.
+        unsafe { OsString::from_encoded_bytes_unchecked(bytes) }
     }
 
     #[test]
