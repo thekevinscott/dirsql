@@ -1,0 +1,7 @@
+{
+  "command": "pnpm vitest run --dir tests/e2e tests/e2e/query-contract.test.ts tests/e2e/query-params.test.ts",
+  "ran_at": 1793818913,
+  "exit_code": 0,
+  "commit": "85754e9162bb71999dbe15021284372704de75f0",
+  "branch": "bot/1607-path-case-1104"
+}
