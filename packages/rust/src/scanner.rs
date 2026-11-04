@@ -1281,6 +1281,21 @@ mod tests {
     }
 
     #[test]
+    fn take_reports_no_link_for_a_real_directory_or_a_file() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let reported = std::sync::Mutex::new(Vec::new());
+        let on_link = |path: &Path| reported.lock().unwrap().push(path.to_path_buf());
+        let walk = Walk {
+            on_link: &on_link,
+            ..walk_with(&ignore, Some(&glob), Vec::new())
+        };
+        assert!(take(&walk, "a", Seen::Dir, &[0], false).is_some());
+        assert!(take(&walk, "x", Seen::File, &[1], false).is_some());
+        assert!(reported.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn take_keeps_a_file_off_a_link_for_the_whole_path_to_judge() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("*/x").unwrap();

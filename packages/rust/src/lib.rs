@@ -498,7 +498,6 @@ impl Link {
             FileEvent::Rescan => return None,
         };
         match path.strip_prefix(&self.target) {
-            Ok(rest) if rest.as_os_str().is_empty() => Some(kind(self.path.clone())),
             Ok(rest) => Some(kind(self.path.join(rest))),
             Err(_) if !matches!(event, FileEvent::Modified(_)) && self.target.starts_with(path) => {
                 Some(kind(self.path.clone()))
@@ -8186,6 +8185,23 @@ mod internal_tests {
         assert!(!db.below_a_link(Path::new("/ws/link")));
         assert!(!db.below_a_link(Path::new("/ws/linked")));
         assert_eq!(known_links(&db).len(), 1, "re-registering replaces");
+    }
+
+    #[test]
+    fn a_created_directory_below_a_known_link_is_not_a_link_of_its_own() {
+        let root = PathBuf::from("/ws");
+        let fake = FakeFs::default()
+            .with_canonical_root(&root, "/ws")
+            .with_canonical_root("/ws/link", "/ws/real")
+            .with_canonical_root("/ws/link/sub", "/ws/real/sub")
+            .with_subtree("/ws/link", Vec::new())
+            .with_subtree("/ws/link/sub", Vec::new());
+        let db = subtree_db(fake, &root, Vec::new());
+        db.process_file_event(FileEvent::Created("/ws/link".into()));
+
+        db.process_file_event(FileEvent::Created("/ws/link/sub".into()));
+
+        assert_eq!(known_links(&db), vec![link_at("/ws/link", "/ws/real")]);
     }
 
     #[test]
