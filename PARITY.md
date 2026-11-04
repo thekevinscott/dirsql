@@ -11,6 +11,10 @@ API surface comparison across the three language SDKs.
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
 
+DDL column names with embedded double quotes are handled by the shared core
+for all three SDKs. This fixes the existing behavior without changing the API
+surface or introducing parity drift.
+
 **Where the row-event flattening lives.** Both bindings publish the same flat
 `{table, action, row, old_row, error, file_path}` record, and the decisions
 behind it — which variant carries an old row, which one may have no table, the
