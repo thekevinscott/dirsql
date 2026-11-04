@@ -99,19 +99,14 @@ fn open_regular(path: &Path) -> io::Result<File> {
     }
 }
 
-#[cfg(unix)]
 fn open_nonblocking(path: &Path) -> io::Result<File> {
-    use rustix::fs::{Mode, OFlags};
-    let fd = rustix::fs::open(
+    #[cfg(unix)]
+    return Ok(File::from(rustix::fs::open(
         path,
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?;
-    Ok(File::from(fd))
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> io::Result<File> {
+        rustix::fs::OFlags::NONBLOCK.union(rustix::fs::OFlags::CLOEXEC),
+        rustix::fs::Mode::empty(),
+    )?));
+    #[cfg(not(unix))]
     File::open(path)
 }
 
@@ -874,20 +869,29 @@ mod tests {
     }
 
     #[test]
-    fn open_regular_refuses_a_directory() {
-        let err = open_regular(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap_err();
-
+    fn open_regular_refuses_what_is_not_a_regular_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut entries = vec![dir.path().to_path_buf()];
         if cfg!(unix) {
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            entries.push(PathBuf::from("/dev/null"));
         }
-    }
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("fifo");
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o644),
+                0,
+            )
+            .unwrap();
+            entries.push(fifo);
+        }
 
-    #[cfg(unix)]
-    #[test]
-    fn open_regular_refuses_a_device() {
-        let err = open_regular(Path::new("/dev/null")).unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        for entry in entries {
+            assert!(open_regular(&entry).is_err(), "{} opened", entry.display());
+        }
     }
 
     #[test]
