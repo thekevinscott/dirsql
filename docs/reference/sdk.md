@@ -234,6 +234,13 @@ Executes a SQL query and returns rows keyed by column name.
   breaks a foreign key, the query fails with the error a build over that tree
   returns. Rust and Python today; a TypeScript query reads what the watcher
   has applied.
+
+  The check trusts the file's stat, so it shares the limits of every
+  stat-based tool (`make`, `rsync`, `git status`): a write through a shared
+  memory map can land without the file's times moving until the writer
+  unmaps or syncs it; a network filesystem that caches attributes can report
+  a stale stat; and a clock stepped backwards can stamp a new write with a
+  time older than the last read.
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
   `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `VACUUM`, … — is rejected
