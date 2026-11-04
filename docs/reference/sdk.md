@@ -224,6 +224,14 @@ db.query(sql: &str) -> Result<Vec<Row>>   // Row = HashMap<String, Value>
 
 Executes a SQL query and returns rows keyed by column name.
 
+- **Accurate to the filesystem.** A query reads what is on disk when it
+  starts: a file written, edited, renamed or deleted before the call is
+  reflected in its rows, with no watcher, wait or retry. Before reading, the
+  query walks each named table's glob and stats every match; a file whose stat
+  moved, or that changed within the last two seconds, is parsed again, and a
+  file that is gone loses its rows. The row events those re-reads produce reach
+  [`watch`](#watch) streams and the next poll, once each. Rust and Python
+  today; a TypeScript query reads what the watcher has applied.
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
   `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `VACUUM`, … — is rejected
@@ -303,7 +311,9 @@ to stop.
 The watcher is live once both `watch()` and [`ready`](#ready) have returned,
 in either order (a Rust `DirSQL` is ready when `build()` returns); a file
 written after that point produces an event and reaches the index. A write
-made while the initial scan is still running may be missed.
+made while the initial scan is still running may be missed by the stream, but
+never by a query (see [`query`](#query)). A change a query read first still
+arrives on the stream, once.
 
 An instance with no named tables cannot be watched: path-tables emit no
 watch events, so `watch()` (and the polling primitives) raise an error naming

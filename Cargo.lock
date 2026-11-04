@@ -610,6 +610,7 @@ dependencies = [
  "toml",
  "tower-http",
  "typed-path",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

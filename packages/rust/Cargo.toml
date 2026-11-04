@@ -95,6 +95,9 @@ typed-path = "0.12"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [lints.rust]
 # `deny`, not `forbid`: rusqlite's API imposes five unavoidable `unsafe`
 # sites (the `load_extension` guard and four `unsafe impl VTab`/`VTabCursor`).

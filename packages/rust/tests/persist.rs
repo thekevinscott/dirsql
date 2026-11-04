@@ -378,6 +378,8 @@ fn persist_fans_out_and_composite_key_round_trips() {
     let cb = Arc::new(AtomicUsize::new(0));
     {
         let db = open_two(root.path(), ca.clone(), cb.clone());
+        assert_eq!(ca.swap(0, Ordering::SeqCst), 1, "ta extracted once");
+        assert_eq!(cb.swap(0, Ordering::SeqCst), 1, "tb extracted once");
         assert_eq!(db.query("SELECT col_a FROM ta").unwrap().len(), 1);
         assert_eq!(
             db.query("SELECT col_b FROM tb").unwrap().len(),
@@ -385,8 +387,8 @@ fn persist_fans_out_and_composite_key_round_trips() {
             "second-declared table populated on cold start"
         );
     }
-    assert_eq!(ca.swap(0, Ordering::SeqCst), 1, "ta extracted once");
-    assert_eq!(cb.swap(0, Ordering::SeqCst), 1, "tb extracted once");
+    ca.store(0, Ordering::SeqCst);
+    cb.store(0, Ordering::SeqCst);
 
     // Warm start over the same root/cache: both (rel_path, table) entries are
     // trusted, so neither table re-extracts, yet both still serve the row.

@@ -20,6 +20,7 @@ pub mod differ;
 pub mod extension_resolution;
 #[doc(hidden)]
 pub mod foreign_key;
+mod freshness;
 #[doc(hidden)]
 pub mod functions;
 mod gitignore_frame;
@@ -77,7 +78,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -450,9 +451,30 @@ struct DirSqlInner {
     /// Locks out [`DirSQL::poll_events`] once [`DirSQL::watch`] has spawned
     /// its background thread.
     watch_thread_started: AtomicBool,
+    /// Set once a watcher is wanted; from then on a query hands the row
+    /// events of the changes it reads to the watch consumer.
+    watching: AtomicBool,
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
+    /// Whether a query first brings the named tables in line with the files
+    /// on disk. Off where a query cannot run `on_file` on its own thread.
+    fresh_reads: AtomicBool,
+    /// When the build's walk began.
+    built_ns: i64,
+    /// Held across every change to the index, so a query's reconcile and a
+    /// watch batch never interleave and their events reach consumers in the
+    /// order they were applied.
+    fresh: Mutex<FreshState>,
+}
+
+#[derive(Default)]
+struct FreshState {
+    /// What the index holds for each `(table, file)`.
+    known: HashMap<(String, String), freshness::Known>,
+    seeded: bool,
+    /// Row events a query's reconcile produced, for the next watch batch.
+    outbox: Vec<RowEvent>,
 }
 
 fn watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
@@ -584,8 +606,139 @@ impl DirSQL {
     /// [`QueryResult::columns`]. A [`Row`] is a `HashMap`, so a caller that
     /// renders columns in the order the user asked for needs this instead.
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
+        let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_ordered(sql).map_err(map_db_error)
+    }
+
+    /// Turn off reading the named tables' files at query time, for a caller
+    /// that queries once, straight after the build, or that cannot run
+    /// `on_file` on the thread a query runs on.
+    #[doc(hidden)]
+    pub fn set_fresh_reads(&self, on: bool) {
+        self.inner.fresh_reads.store(on, Ordering::SeqCst);
+    }
+
+    /// Bring every named table in line with the files on disk now, and hold
+    /// the index still until the returned guard drops.
+    fn refresh(&self) -> Result<Option<MutexGuard<'_, FreshState>>> {
+        if self.inner.groups.is_empty() || !self.inner.fresh_reads.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let mut state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
+        self.reconcile(&mut state)?;
+        Ok(Some(state))
+    }
+
+    /// Walk each anchor, read every file whose stat says it may differ from
+    /// what the index holds, and drop the rows of files that are gone, in one
+    /// transaction.
+    fn reconcile(&self, state: &mut FreshState) -> Result<()> {
+        let start_ns = now_ns();
+        if !state.seeded {
+            self.seed(state)?;
+        }
+        let mut found: Vec<(String, String, PathBuf)> = Vec::new();
+        for group in &self.inner.groups {
+            for (path, table) in
+                self.inner
+                    .fs
+                    .scan_subtree(&group.anchor, &group.anchor, &group.matcher)
+            {
+                let rel = scanner::to_slash(path.strip_prefix(&group.anchor).unwrap_or(&path));
+                found.push((table, rel, path));
+            }
+        }
+        self.with_db(|db| Ok(foreign_key::begin(db.conn())?))?;
+        let mut stats: HashMap<PathBuf, Option<freshness::Fingerprint>> = HashMap::new();
+        let mut updates: Vec<((String, String), freshness::Known)> = Vec::new();
+        let mut pending = PendingRefresh::default();
+        let mut events = Vec::new();
+        for (table, rel, path) in &found {
+            let now = *stats
+                .entry(path.clone())
+                .or_insert_with(|| self.inner.fs.fingerprint(path).ok());
+            let key = (table.clone(), rel.clone());
+            let known = state.known.get(&key);
+            if !freshness::must_read(known, now.as_ref(), self.inner.built_ns) {
+                if known == Some(&freshness::Known::Built) {
+                    updates.push((key, freshness::after_read(now, self.inner.built_ns)));
+                }
+                continue;
+            }
+            if self.is_per_table(table) {
+                self.track_batch_file(table, path, rel, false);
+                pending.mark(table, rel);
+            } else {
+                events.extend(self.read_file(table, path, rel));
+                updates.push((
+                    key,
+                    freshness::after_read(self.inner.fs.fingerprint(path).ok(), start_ns),
+                ));
+            }
+        }
+        let present: HashSet<(&str, &str)> = found
+            .iter()
+            .map(|(table, rel, _)| (table.as_str(), rel.as_str()))
+            .collect();
+        let gone: Vec<(String, String)> = state
+            .known
+            .keys()
+            .filter(|(table, rel)| !present.contains(&(table.as_str(), rel.as_str())))
+            .cloned()
+            .collect();
+        for (table, rel) in &gone {
+            if self.is_per_table(table) {
+                self.track_batch_file(table, Path::new(rel), rel, true);
+                pending.mark(table, rel);
+            } else {
+                events.extend(self.handle_delete(table, rel));
+            }
+        }
+        let rerun: HashSet<String> = pending.0.iter().map(|(table, _)| table.clone()).collect();
+        events.extend(self.refresh_pending(pending));
+        for (table, rel, path) in found.iter().filter(|(table, _, _)| rerun.contains(table)) {
+            updates.push((
+                (table.clone(), rel.clone()),
+                freshness::after_read(self.inner.fs.fingerprint(path).ok(), start_ns),
+            ));
+        }
+        self.with_db(|db| foreign_key::commit(db.conn()))?;
+        for key in gone {
+            state.known.remove(&key);
+        }
+        state.known.extend(updates);
+        if self.inner.watching.load(Ordering::SeqCst) {
+            state.outbox.extend(events);
+        }
+        Ok(())
+    }
+
+    /// Record every file the build indexed as [`freshness::Known::Built`].
+    fn seed(&self, state: &mut FreshState) -> Result<()> {
+        let owned = self.with_db(Db::owned_files)?;
+        let batch_files = self.inner.batch_files.lock().map_err(DirSqlError::lock)?;
+        let batched = batch_files
+            .iter()
+            .flat_map(|(table, files)| files.iter().map(|rel| (table.clone(), rel.clone())));
+        for key in owned.into_iter().chain(batched) {
+            state.known.insert(key, freshness::Known::Built);
+        }
+        state.seeded = true;
+        Ok(())
+    }
+
+    /// Re-read one file of a per-file table. A file whose hook fails keeps no
+    /// rows, as a fresh build would give it.
+    fn read_file(&self, table: &str, path: &Path, rel: &str) -> Vec<RowEvent> {
+        let mut events = self.handle_upsert(table, path, rel);
+        if events
+            .iter()
+            .any(|event| matches!(event, RowEvent::Error { .. }))
+        {
+            events.extend(self.handle_delete(table, rel));
+        }
+        events
     }
 
     /// The directory the index is rooted at: where path-tables resolve.
@@ -609,6 +762,7 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
+        let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_each(sql, start, on_row).map_err(map_db_error)
     }
@@ -622,6 +776,7 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[rusqlite::types::ValueRef<'_>]),
     ) -> Result<S> {
+        let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_each_ref(sql, start, on_row).map_err(map_db_error)
     }
@@ -633,9 +788,15 @@ impl DirSQL {
         self.require_named_tables()?;
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
+            // Set before the watcher exists so a change a query reads while
+            // it starts still reaches the consumer.
+            self.inner.watching.store(true, Ordering::SeqCst);
             // Watch the canonicalized anchors, never the (possibly relative)
             // user-supplied ones — `notify` misbehaves on relative paths.
-            let watcher = Watcher::scoped(self.watch_scopes()).map_err(DirSqlError::watch)?;
+            let watcher = Watcher::scoped(self.watch_scopes()).map_err(|e| {
+                self.inner.watching.store(false, Ordering::SeqCst);
+                DirSqlError::watch(e)
+            })?;
             *guard = Some(watcher);
         }
         Ok(())
@@ -718,6 +879,21 @@ impl DirSQL {
     /// before any per-table hook runs. One write reaches the watcher as
     /// several events; a hook run for the first would run again for the rest.
     fn apply_file_events_draining(
+        &self,
+        events: Vec<FileEvent>,
+        late: impl FnMut() -> Vec<FileEvent>,
+    ) -> Vec<RowEvent> {
+        let mut fresh = self
+            .inner
+            .fresh
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut out = std::mem::take(&mut fresh.outbox);
+        out.extend(self.apply_events(events, late));
+        out
+    }
+
+    fn apply_events(
         &self,
         events: Vec<FileEvent>,
         mut late: impl FnMut() -> Vec<FileEvent>,
@@ -1396,6 +1572,7 @@ impl DirSQL {
             path_table_parser,
             no_ignore,
         } = resolved;
+        let built_ns = now_ns();
 
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
         let groups = groups
@@ -1519,6 +1696,7 @@ impl DirSQL {
             poll_interval,
             path_table_parser,
             no_ignore,
+            built_ns,
         })
     }
 
@@ -1571,6 +1749,7 @@ impl DirSQL {
             hint_legacy_files_table,
             path_table_parser,
             no_ignore,
+            built_ns,
         } = prepared;
 
         let (mut db, fresh_ddl, ddl_warnings, persist_ready, needs_sweep) = match persist {
@@ -1859,8 +2038,12 @@ impl DirSQL {
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
+                watching: AtomicBool::new(false),
                 poll_interval,
                 fs,
+                fresh_reads: AtomicBool::new(true),
+                built_ns,
+                fresh: Mutex::new(FreshState::default()),
             }),
         })
     }
@@ -2262,6 +2445,8 @@ pub struct PreparedBuild {
     hint_legacy_files_table: bool,
     path_table_parser: Option<String>,
     no_ignore: bool,
+    /// When the walk began.
+    built_ns: i64,
 }
 
 #[doc(hidden)]
@@ -2520,6 +2705,7 @@ trait FileSystem: Send + Sync {
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
     /// Canonicalize the watch root, falling back to the literal path.
     fn canonical_root(&self, root: &Path) -> String;
+    fn fingerprint(&self, path: &Path) -> std::io::Result<freshness::Fingerprint>;
 }
 
 struct RealFs;
@@ -2548,6 +2734,10 @@ impl FileSystem for RealFs {
 
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
         hash_file(path)
+    }
+
+    fn fingerprint(&self, path: &Path) -> std::io::Result<freshness::Fingerprint> {
+        freshness::fingerprint(path)
     }
 
     fn canonical_root(&self, root: &Path) -> String {
@@ -3486,6 +3676,16 @@ mod internal_tests {
             })
         }
 
+        fn fingerprint(&self, path: &Path) -> std::io::Result<freshness::Fingerprint> {
+            self.stat(path).map(|stat| freshness::Fingerprint {
+                dev: stat.dev.unsigned_abs(),
+                ino: stat.inode.unsigned_abs(),
+                size: stat.size.unsigned_abs(),
+                mtime_ns: stat.mtime_ns,
+                ctime_ns: Some(stat.ctime_ns),
+            })
+        }
+
         fn canonical_root(&self, root: &Path) -> String {
             self.canonical_roots
                 .get(root)
@@ -3897,6 +4097,7 @@ mod internal_tests {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            built_ns: 0,
         };
         assert!(DirSQL::finish_build(prepared).is_err());
     }
@@ -4071,7 +4272,8 @@ mod internal_tests {
     }
 
     /// A one-table db whose fake fs stats every file in `files`, each already
-    /// upserted so the db holds a row per file.
+    /// upserted so the db holds a row per file. Queries read the index as
+    /// applied, since the fake walk lists no files.
     fn populated_db(root: &Path, glob: &str, files: &[&str]) -> DirSQL {
         let mut fake = FakeFs::default();
         for f in files {
@@ -4094,6 +4296,7 @@ mod internal_tests {
             Arc::new(fake),
         )
         .unwrap();
+        db.set_fresh_reads(false);
         for f in files {
             let events = db.handle_upsert("items", &root.join(f), f);
             assert!(
@@ -6144,6 +6347,7 @@ mod internal_tests {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            built_ns: 0,
         }
     }
 
@@ -6666,11 +6870,13 @@ mod internal_tests {
             DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
                 .unwrap();
 
-        let calls = calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        let mut seen = calls[0].clone();
-        seen.sort();
-        assert_eq!(seen, vec![root.join("a.txt"), root.join("b.txt")]);
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "{calls:?}");
+            let mut seen = calls[0].clone();
+            seen.sort();
+            assert_eq!(seen, vec![root.join("a.txt"), root.join("b.txt")]);
+        }
         let mut names = row_names(&db);
         names.sort();
         assert_eq!(names, vec!["a.txt", "b.txt"]);
@@ -7219,6 +7425,7 @@ mod internal_tests {
             fake.clone(),
         )
         .unwrap();
+        db.set_fresh_reads(false);
         let events = db.apply_file_events(
             files
                 .iter()
@@ -7345,6 +7552,228 @@ mod internal_tests {
             ]
         );
         assert_eq!(held(&db), Vec::new());
+    }
+
+    type Reads = Arc<Mutex<Vec<String>>>;
+
+    /// A per-file `items` table over `**/*.txt` whose hook records each file
+    /// it reads and answers one row holding the file's content, failing for
+    /// content `bad`.
+    fn content_table() -> (Table, Reads) {
+        let reads: Reads = Arc::default();
+        let seen = Arc::clone(&reads);
+        let table = Table::try_new(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |path| {
+                seen.lock().unwrap().push(
+                    Path::new(path)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                let text = std::fs::read_to_string(path).unwrap_or_default();
+                if text == "bad" {
+                    return Err("bad content".into());
+                }
+                Ok(vec![Row::from_iter([(
+                    "name".to_string(),
+                    Value::Text(text),
+                )])])
+            },
+        );
+        (table, reads)
+    }
+
+    fn fresh_fixture(files: &[(&str, &str)]) -> (TempDir, PathBuf, DirSQL, Reads) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for (rel, text) in files {
+            std::fs::write(root.join(rel), text).unwrap();
+        }
+        let (table, reads) = content_table();
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![table], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+        (dir, root, db, reads)
+    }
+
+    #[test]
+    fn a_query_reads_a_file_written_after_the_build() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        assert_eq!(row_names(&db), vec!["one"]);
+    }
+
+    #[test]
+    fn a_query_reads_an_edit_to_a_file_the_build_indexed() {
+        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        std::fs::write(root.join("a.txt"), "two").unwrap();
+        assert_eq!(row_names(&db), vec!["two"]);
+    }
+
+    #[test]
+    fn a_query_drops_the_rows_of_a_deleted_file() {
+        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+        assert_eq!(row_names(&db), vec!["two"]);
+        assert_eq!(row_names(&db), vec!["two"]);
+    }
+
+    #[test]
+    fn a_query_with_fresh_reads_off_reads_the_index_as_built() {
+        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.set_fresh_reads(false);
+        std::fs::write(root.join("b.txt"), "two").unwrap();
+        assert_eq!(row_names(&db), vec!["one"]);
+        db.set_fresh_reads(true);
+        assert_eq!(row_names(&db), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn query_ordered_and_query_each_read_fresh_rows_too() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        assert_eq!(
+            db.query_ordered("SELECT name FROM items")
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+        std::fs::write(root.join("b.txt"), "two").unwrap();
+        let count = db
+            .query_each("SELECT name FROM items", |_| 0, |n, _| *n += 1)
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_file_whose_hook_fails_at_query_time_keeps_no_rows_and_reports_the_error() {
+        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.inner.watching.store(true, Ordering::SeqCst);
+        std::fs::write(root.join("a.txt"), "bad").unwrap();
+        assert_eq!(row_names(&db), Vec::<String>::new());
+        let events = db.apply_file_events(Vec::new());
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RowEvent::Error { .. })),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RowEvent::Delete { .. })),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_query_hands_its_row_events_to_the_next_poll_once() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.inner.watching.store(true, Ordering::SeqCst);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        row_names(&db);
+        assert_eq!(
+            rescan_summary(&db.apply_file_events(Vec::new())),
+            vec!["insert one"]
+        );
+        assert_eq!(db.apply_file_events(Vec::new()), vec![]);
+    }
+
+    #[test]
+    fn a_query_after_start_watching_hands_its_row_events_to_the_consumer() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.start_watching().unwrap();
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        row_names(&db);
+        assert_eq!(
+            rescan_summary(&db.apply_file_events(Vec::new())),
+            vec!["insert one"]
+        );
+    }
+
+    #[test]
+    fn a_query_keeps_no_row_events_when_nothing_consumes_them() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        row_names(&db);
+        db.inner.watching.store(true, Ordering::SeqCst);
+        assert_eq!(db.apply_file_events(Vec::new()), vec![]);
+    }
+
+    #[test]
+    fn a_change_a_query_read_reaches_the_next_poll_once_when_the_watcher_reports_it_too() {
+        let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.inner.watching.store(true, Ordering::SeqCst);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        row_names(&db);
+        let events = db.apply_file_events(vec![FileEvent::Created(root.join("a.txt"))]);
+        assert_eq!(rescan_summary(&events), vec!["insert one"]);
+    }
+
+    /// A built instance whose filesystem double reports `found` under the
+    /// root, each file last changed long before any query.
+    fn settled_fixture(built: &[&str], found: &[&str]) -> (TempDir, DirSQL, Reads) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for rel in built {
+            std::fs::write(root.join(rel), "x").unwrap();
+        }
+        let fs = FakeFs::default().with_subtree(
+            &root,
+            found
+                .iter()
+                .map(|rel| (root.join(rel), "items".to_string()))
+                .collect(),
+        );
+        let (table, reads) = content_table();
+        let db = DirSQL::with_ignore_and_fs(&root, vec![table], Vec::<String>::new(), Arc::new(fs))
+            .unwrap();
+        reads.lock().unwrap().clear();
+        (dir, db, reads)
+    }
+
+    #[test]
+    fn a_built_file_unchanged_since_before_the_build_is_not_read_again() {
+        let (_dir, db, reads) = settled_fixture(&["a.txt"], &["a.txt"]);
+        row_names(&db);
+        row_names(&db);
+        assert_eq!(*reads.lock().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_settled_file_is_read_once_then_not_again() {
+        let (_dir, db, reads) = settled_fixture(&[], &["a.txt"]);
+        row_names(&db);
+        row_names(&db);
+        assert_eq!(*reads.lock().unwrap(), vec!["a.txt"]);
+    }
+
+    #[test]
+    fn a_per_table_hook_reruns_when_one_of_its_files_changes_and_when_one_goes() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+        std::fs::write(root.join("b.txt"), "x").unwrap();
+        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+        assert_eq!(
+            calls.lock().unwrap().last().unwrap(),
+            &vec![root.join("a.txt"), root.join("b.txt")]
+        );
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+        assert_eq!(row_names(&db), vec!["b.txt"]);
+        assert_eq!(
+            calls.lock().unwrap().last().unwrap(),
+            &vec![root.join("b.txt")]
+        );
     }
 }
 

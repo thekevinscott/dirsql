@@ -447,6 +447,8 @@ impl Task for OpenTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
+        // A query runs on a worker thread, where `on_file` cannot be called.
+        inner.set_fresh_reads(false);
         Ok(DirSQL {
             inner: RefCell::new(Some(inner)),
         })
