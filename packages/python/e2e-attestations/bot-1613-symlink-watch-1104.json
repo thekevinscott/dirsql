@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1793824871,
+  "exit_code": 0,
+  "commit": "9852d4ef62f11ea4af47c5359b761ef02c398e46",
+  "branch": "bot/1613-symlink-watch-1104"
+}
