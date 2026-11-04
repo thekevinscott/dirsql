@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py tests/e2e/cli_version_test.py -x -q",
+  "ran_at": 1793814772,
+  "exit_code": 0,
+  "commit": "43d8e7c1ebd157e80090a466348da1b9d5aafcda",
+  "branch": "bot/1593-non-utf8-text-1104"
+}
