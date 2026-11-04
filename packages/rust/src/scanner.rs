@@ -38,6 +38,7 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
         matcher,
         &mut |_| {},
         &mut |_, _| {},
+        &ignore_link,
     ))
 }
 
@@ -74,8 +75,9 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
+    on_link: &(dyn Fn(&Path) + Sync),
 ) -> Vec<Found> {
-    scan_below(root, root, matcher, on_file, on_match)
+    scan_below(root, root, matcher, on_file, on_match, on_link)
 }
 
 /// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
@@ -86,7 +88,25 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    paired(scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {}))
+    scan_subtree_reporting(root, dir, matcher, &ignore_link)
+}
+
+/// [`scan_subtree`], telling `on_link` the path of each symlinked directory
+/// the walk enters.
+pub fn scan_subtree_reporting(
+    root: &Path,
+    dir: &Path,
+    matcher: &TableMatcher,
+    on_link: &(dyn Fn(&Path) + Sync),
+) -> Vec<(PathBuf, String)> {
+    paired(scan_below(
+        root,
+        dir,
+        matcher,
+        &mut |_| {},
+        &mut |_, _| {},
+        on_link,
+    ))
 }
 
 /// One [`Found`] per table whose glob matches `rel_path`, in declaration
@@ -119,6 +139,7 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         in_repo: false,
         frames: Vec::new(),
         dirs: true,
+        on_link: &ignore_link,
     };
     let mut dirs = vec![start.to_path_buf()];
     walk(
@@ -139,6 +160,7 @@ fn scan_below(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
+    on_link: &(dyn Fn(&Path) + Sync),
 ) -> Vec<Found> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
@@ -158,6 +180,7 @@ fn scan_below(
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: false,
+        on_link,
     };
     walk(
         root,
@@ -263,6 +286,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &Frame::load)),
         dirs: false,
+        on_link: &ignore_link,
     };
     walk(
         root,
@@ -806,7 +830,11 @@ struct Walk<'a> {
     frames: Vec<Arc<Frame>>,
     /// Whether each directory entered is also visited, as a leaf.
     dirs: bool,
+    /// Told the path of each symlinked directory the walk enters.
+    on_link: &'a (dyn Fn(&Path) + Sync),
 }
+
+fn ignore_link(_: &Path) {}
 
 /// `rel.join(name)` in one allocation: the walk builds one per entry on every
 /// worker thread, and `join`'s grow-on-push contends the allocator's arenas.
@@ -856,6 +884,9 @@ impl Walk<'_> {
         };
         if !self.admits(is_dir, name, &path, &child) {
             return None;
+        }
+        if kind == Kind::LinkedDir {
+            (self.on_link)(&dir.join(name));
         }
         Some(if is_dir {
             Taken::Dir {
@@ -1086,6 +1117,7 @@ mod tests {
             &matcher,
             &mut |count| counts.push(count),
             &mut |_, _| {},
+            &ignore_link,
         );
 
         assert_eq!(
@@ -1693,6 +1725,7 @@ mod tests {
             in_repo: !frames.is_empty(),
             frames,
             dirs: false,
+            on_link: &ignore_link,
         }
     }
 
@@ -1996,6 +2029,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
@@ -2013,6 +2047,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
         assert!(!walk.follows(false, &[2], Kind::Dir));
@@ -2030,6 +2065,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(false, &[], Kind::Dir));
     }
