@@ -603,6 +603,18 @@ impl DirSQL {
         db.query_ordered_with(sql, params).map_err(map_db_error)
     }
 
+    /// [`query_ordered`](Self::query_ordered), abandoned once `cancelled` is
+    /// set, releasing the index for the next query.
+    #[cfg(feature = "cli")]
+    pub(crate) fn query_ordered_until(
+        &self,
+        sql: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<QueryResult> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_ordered_until(sql, cancelled).map_err(map_db_error)
+    }
+
     /// The directory the index is rooted at: where path-tables resolve.
     pub fn root(&self) -> &Path {
         &self.inner.root

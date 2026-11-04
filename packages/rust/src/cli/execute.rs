@@ -9,6 +9,8 @@
 //! exit code.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -66,11 +68,14 @@ pub async fn execute_query(
 
     let db = require_ready(state)?;
 
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancelled);
     let join = run_bounded(
         timeout,
-        tokio::task::spawn_blocking(move || db.query_ordered(&sql)),
+        tokio::task::spawn_blocking(move || db.query_ordered_until(&sql, flag)),
     )
-    .await?;
+    .await
+    .inspect_err(|_| cancelled.store(true, Ordering::Relaxed))?;
 
     match join {
         Ok(Ok(result)) => Ok(Value::Array(result_to_json(&result))),
