@@ -110,7 +110,7 @@ reason = "set_terminated_text writes through a raw sqlite3_context, which only a
 [[rust.exempt]]
 path = "src/freshness.rs"
 rules = ["mutation"]
-lines = [100, 115, 121, 127, 128, 130, 136, 143]
+lines = [101, 115, 121, 127, 128, 130, 137, 144]
 reason = "the cfg(windows) and non-unix fingerprint bodies are compiled out on the Linux mutation runner, so no Linux test can reach them; the Windows CI job runs tests/fresh_declared_*.rs, whose t+0 asserts fail if the Windows fingerprint misses a change"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
