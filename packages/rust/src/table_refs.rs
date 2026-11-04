@@ -285,6 +285,42 @@ mod tests {
     }
 
     #[test]
+    fn a_new_statement_closes_the_from_list() {
+        assert_eq!(names("SELECT 1 FROM './a'; PRAGMA x, 'y'"), vec!["./a"]);
+    }
+
+    #[test]
+    fn a_lone_minus_is_not_a_comment() {
+        assert_eq!(names("SELECT 1 - 2 FROM './a'"), vec!["./a"]);
+    }
+
+    #[test]
+    fn a_lone_slash_is_not_a_comment() {
+        assert_eq!(names("SELECT 4 / 2 FROM './a'"), vec!["./a"]);
+    }
+
+    #[test]
+    fn a_blob_literal_is_not_a_qualifier() {
+        assert_eq!(names("SELECT X'41'.a FROM './b'"), vec!["./b"]);
+    }
+
+    #[test]
+    fn a_symbol_does_not_start_a_word() {
+        assert_eq!(names("SELECT *FROM './a'"), vec!["./a"]);
+    }
+
+    #[test]
+    fn a_keyword_prefix_of_a_word_is_not_a_keyword() {
+        for sql in [
+            "SELECT my_from, 'y' FROM './a'",
+            "SELECT from$x, 'y' FROM './a'",
+            "SELECT from™, 'y' FROM './a'",
+        ] {
+            assert_eq!(names(sql), vec!["./a"], "{sql}");
+        }
+    }
+
+    #[test]
     fn an_unbalanced_close_keeps_the_outer_depth() {
         assert_eq!(names("SELECT 1) FROM './a'"), vec!["./a"]);
     }
