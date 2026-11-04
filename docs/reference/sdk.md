@@ -97,7 +97,8 @@ DirSQL::builder()
 :::
 
 Creates a SQLite index over a directory. The index root is the explicit
-`root` when given, else the **process cwd** — the `config` file's location
+`root` when given (a relative `root` resolves against the cwd once, at build
+time), else the **process cwd** — the `config` file's location
 never sets the root. A config's `[[table]]` globs anchor at the config file's
 own directory instead (see [glob anchor](./config.md#glob-anchor)); `root`
 governs programmatic tables and path-tables.

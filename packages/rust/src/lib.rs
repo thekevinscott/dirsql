@@ -2076,7 +2076,7 @@ impl DirSQLBuilder {
         // explicit `.root(...)` when given, else the process cwd. The config
         // file's own location plays no part in root derivation (#540).
         let root = match explicit_root {
-            Some(explicit) => explicit,
+            Some(explicit) => std::path::absolute(explicit).map_err(DirSqlError::config)?,
             None => std::env::current_dir().map_err(DirSqlError::config)?,
         };
 
@@ -3893,6 +3893,13 @@ mod internal_tests {
     fn builder_defaults_to_respecting_gitignore() {
         let resolved = DirSQL::builder().root("/idx").resolve().unwrap();
         assert!(!resolved.no_ignore);
+    }
+
+    #[test]
+    fn resolve_makes_a_relative_root_absolute() {
+        let resolved = DirSQL::builder().root("tree").resolve().unwrap();
+        assert!(resolved.root.is_absolute(), "got {:?}", resolved.root);
+        assert!(resolved.root.ends_with("tree"), "got {:?}", resolved.root);
     }
 
     #[test]
