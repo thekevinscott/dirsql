@@ -3,6 +3,7 @@
 // requires the napi binary — it hands back a fake core module instead.
 // Real-core behaviour is covered by `tests/binding/`.
 
+import { resolve } from "node:path";
 import { DirSQL, type RowEvent, Table } from "dirsql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,7 +64,7 @@ describe("DirSQL construction", () => {
     const db = new DirSQL("/cfg/.dirsql.toml");
     await db.ready;
     expect(openAsync).toHaveBeenCalledWith(
-      null,
+      process.cwd(),
       null,
       null,
       ["/cfg/.dirsql.toml"],
@@ -95,7 +96,7 @@ describe("DirSQL construction", () => {
     });
     await db.ready;
     expect(openAsync).toHaveBeenCalledWith(
-      "/data",
+      resolve("/data"),
       tables,
       ["**/node_modules/**"],
       ["/cfg/.dirsql.toml"],
@@ -143,7 +144,7 @@ describe("DirSQL construction", () => {
     const db = new DirSQL({ root: "/data", noIgnore: true });
     await db.ready;
     expect(openAsync).toHaveBeenCalledWith(
-      "/data",
+      resolve("/data"),
       null,
       null,
       null,
