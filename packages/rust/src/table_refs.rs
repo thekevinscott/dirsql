@@ -103,106 +103,92 @@ pub(crate) fn case_alias(name: &str) -> String {
     alias
 }
 
+type Chars<'a> = std::iter::Peekable<std::str::CharIndices<'a>>;
+
 /// SQLite's tokens, as far as [`table_refs`] tells them apart, with
 /// whitespace and comments dropped.
 fn tokens(sql: &str) -> Vec<(Range<usize>, Token)> {
-    let bytes = sql.as_bytes();
+    let mut chars = sql.char_indices().peekable();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let start = i;
-        let token = match bytes[i] {
-            b if b.is_ascii_whitespace() => {
-                i += 1;
+    while let Some((start, c)) = chars.next() {
+        let token = match c {
+            c if c.is_whitespace() => continue,
+            '-' if chars.next_if(|&(_, n)| n == '-').is_some() => {
+                skip_while(&mut chars, |c| c != '\n');
                 continue;
             }
-            b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                i = sql[i..].find('\n').map_or(bytes.len(), |n| i + n);
+            '/' if chars.next_if(|&(_, n)| n == '*').is_some() => {
+                let mut star = false;
+                for (_, c) in chars.by_ref() {
+                    if star && c == '/' {
+                        break;
+                    }
+                    star = c == '*';
+                }
                 continue;
             }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = sql[i + 2..]
-                    .find("*/")
-                    .map_or(bytes.len(), |n| i + 2 + n + 2);
-                continue;
-            }
-            quote @ (b'\'' | b'"' | b'`') => {
-                let (name, end) = quoted(sql, i, quote as char);
-                i = end;
+            '\'' | '"' | '`' => Token::Quoted(quoted(&mut chars, c)),
+            '[' => {
+                let mut name = String::new();
+                for (_, c) in chars.by_ref() {
+                    if c == ']' {
+                        break;
+                    }
+                    name.push(c);
+                }
                 Token::Quoted(name)
             }
-            b'[' => {
-                let end = sql[i..].find(']').map_or(bytes.len(), |n| i + n);
-                let name = sql[i + 1..end].to_string();
-                i = (end + 1).min(bytes.len());
-                Token::Quoted(name)
-            }
-            b'x' | b'X' if bytes.get(i + 1) == Some(&b'\'') => {
-                i = quoted(sql, i + 1, '\'').1;
+            'x' | 'X' if chars.next_if(|&(_, n)| n == '\'').is_some() => {
+                quoted(&mut chars, '\'');
                 Token::Other
             }
-            b'(' => {
-                i += 1;
-                Token::Open
-            }
-            b')' => {
-                i += 1;
-                Token::Close
-            }
-            b',' => {
-                i += 1;
-                Token::Comma
-            }
-            b'.' => {
-                i += 1;
-                Token::Dot
-            }
-            b';' => {
-                i += 1;
-                Token::End
-            }
-            b if b.is_ascii_digit() || matches!(b, b'?' | b':' | b'@' | b'$') => {
-                i += 1 + word_len(&sql[i + 1..]);
+            '(' => Token::Open,
+            ')' => Token::Close,
+            ',' => Token::Comma,
+            '.' => Token::Dot,
+            ';' => Token::End,
+            c if c.is_ascii_digit() || matches!(c, '?' | ':' | '@' | '$') => {
+                skip_while(&mut chars, is_word_char);
                 Token::Other
             }
-            _ => match word_len(&sql[i..]) {
-                0 => {
-                    i += sql[i..].chars().next().map_or(1, char::len_utf8);
-                    Token::Other
-                }
-                n => {
-                    i += n;
-                    Token::Word(sql[start..i].to_string())
-                }
-            },
+            c if is_word_char(c) => {
+                skip_while(&mut chars, is_word_char);
+                Token::Word(sql[start..offset(&mut chars, sql)].to_string())
+            }
+            _ => Token::Other,
         };
-        out.push((start..i, token));
+        out.push((start..offset(&mut chars, sql), token));
     }
     out
 }
 
-/// The text of the `quote`-delimited token opening at byte `start`, with its
-/// doubled quotes collapsed, and the byte just past its closing quote.
-fn quoted(sql: &str, start: usize, quote: char) -> (String, usize) {
-    let mut name = String::new();
-    let mut chars = sql[start + 1..].char_indices().peekable();
-    while let Some((offset, c)) = chars.next() {
-        if c != quote {
-            name.push(c);
-        } else if chars.peek().is_some_and(|(_, next)| *next == quote) {
-            name.push(quote);
-            chars.next();
-        } else {
-            return (name, start + 1 + offset + 1);
-        }
-    }
-    (name, sql.len())
+/// The byte offset of the next character, or the end of `sql`.
+fn offset(chars: &mut Chars<'_>, sql: &str) -> usize {
+    chars.peek().map_or(sql.len(), |&(i, _)| i)
 }
 
-/// The byte length of the identifier-like run `s` opens with.
-fn word_len(s: &str) -> usize {
-    s.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$' || !c.is_ascii()))
-        .unwrap_or(s.len())
+fn skip_while(chars: &mut Chars<'_>, keep: impl Fn(char) -> bool) {
+    while chars.next_if(|&(_, c)| keep(c)).is_some() {}
+}
+
+/// The text of a `quote`-delimited token whose opening quote `chars` has
+/// just passed, with its doubled quotes collapsed, consuming the closing one.
+fn quoted(chars: &mut Chars<'_>, quote: char) -> String {
+    let mut name = String::new();
+    while let Some((_, c)) = chars.next() {
+        if c != quote {
+            name.push(c);
+        } else if chars.next_if(|&(_, n)| n == quote).is_some() {
+            name.push(quote);
+        } else {
+            break;
+        }
+    }
+    name
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$' || !c.is_ascii()
 }
 
 #[cfg(test)]
