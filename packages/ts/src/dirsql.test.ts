@@ -316,7 +316,15 @@ describe("DirSQL", () => {
     it("query awaits ready then forwards to the inner instance", async () => {
       const db = new DirSQL({ root: "/d" });
       expect(await db.query("SELECT 1")).toEqual([{ ok: 1 }]);
-      expect(inner.query).toHaveBeenCalledWith("SELECT 1");
+      expect(inner.query).toHaveBeenCalledWith("SELECT 1", undefined);
+    });
+
+    it("query forwards its params to the inner instance", async () => {
+      const db = new DirSQL({ root: "/d" });
+      await db.query("SELECT ?, :a", [1]);
+      await db.query("SELECT :a", { a: "x" });
+      expect(inner.query).toHaveBeenNthCalledWith(1, "SELECT ?, :a", [1]);
+      expect(inner.query).toHaveBeenNthCalledWith(2, "SELECT :a", { a: "x" });
     });
 
     it("queryOrdered awaits ready then forwards to the inner instance", async () => {
@@ -324,7 +332,13 @@ describe("DirSQL", () => {
       inner.queryOrdered.mockResolvedValue(result);
       const db = new DirSQL({ root: "/d" });
       expect(await db.queryOrdered("SELECT b, a")).toEqual(result);
-      expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT b, a");
+      expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT b, a", undefined);
+    });
+
+    it("queryOrdered forwards its params to the inner instance", async () => {
+      const db = new DirSQL({ root: "/d" });
+      await db.queryOrdered("SELECT :a", { a: 1 });
+      expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT :a", { a: 1 });
     });
 
     it("scanFailures awaits ready then forwards to the inner instance", async () => {

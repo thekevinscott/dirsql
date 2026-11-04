@@ -4,6 +4,7 @@ export { DirSQL } from "./dirsql.js";
 export type {
   DirSQLOptions,
   ExtensionSpec,
+  QueryParams,
   QueryResult,
   RowEvent,
   ScanFailure,
