@@ -1,0 +1,1 @@
+**Fixed** A `.*` glob component no longer admits dot-named files below its own depth: `'./.*/*'` and `'./.*/**'` listed `.cfg/.secret` and `.cfg/sub/.cache`, where bash lists only `.cfg/app.toml`. Declared `[[table]] glob` values had the same leak.
