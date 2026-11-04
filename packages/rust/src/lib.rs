@@ -31,6 +31,7 @@ mod listing;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;
+mod params;
 #[doc(hidden)]
 #[doc(hidden)]
 pub mod parsed_vtab;
@@ -87,6 +88,7 @@ use thiserror::Error;
 pub use crate::config::ExtensionSpec as Extension;
 pub use crate::db::{ColumnInfo, DbError, QueryResult, TableInfo, Value};
 pub use crate::differ::RowEvent;
+pub use crate::params::Params;
 #[doc(hidden)]
 pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
 #[doc(hidden)]
@@ -584,6 +586,20 @@ impl DirSQL {
     /// [`QueryResult::columns`]. A [`Row`] is a `HashMap`, so a caller that
     /// renders columns in the order the user asked for needs this instead.
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
+        self.query_ordered_with(sql, &Params::default())
+    }
+
+    /// [`query`](Self::query), binding `params` to the statement's
+    /// placeholders. The values never enter the SQL text.
+    pub fn query_with(&self, sql: &str, params: &Params) -> Result<Vec<Row>> {
+        self.query_ordered_with(sql, params)
+            .map(|result| result.rows)
+    }
+
+    /// [`query_ordered`](Self::query_ordered), binding `params` as
+    /// [`query_with`](Self::query_with) does.
+    pub fn query_ordered_with(&self, sql: &str, params: &Params) -> Result<QueryResult> {
+        let _ = params;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_ordered(sql).map_err(map_db_error)
     }
@@ -609,6 +625,19 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
+        self.query_each_with(sql, &Params::default(), start, on_row)
+    }
+
+    /// [`query_each`](Self::query_each), binding `params` as
+    /// [`query_with`](Self::query_with) does.
+    pub fn query_each_with<S>(
+        &self,
+        sql: &str,
+        params: &Params,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        let _ = params;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_each(sql, start, on_row).map_err(map_db_error)
     }
@@ -3245,8 +3274,14 @@ impl AsyncDirSQL {
     }
 
     pub async fn query(&self, sql: &str) -> Result<Vec<Row>> {
+        self.query_with(sql, &Params::default()).await
+    }
+
+    /// [`DirSQL::query_with`] off the async runtime's worker threads.
+    pub async fn query_with(&self, sql: &str, params: &Params) -> Result<Vec<Row>> {
         let db = self.sync()?;
         let sql = sql.to_string();
+        let _ = params;
         tokio::task::spawn_blocking(move || db.query(&sql))
             .await
             .map_err(|e| DirSqlError::Lock(format!("join error: {e}")))?

@@ -35,14 +35,16 @@ class _FakeRustDirSQL:
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
         self.query_calls = []
+        self.query_params = []
         self.scan_failures_value = []
         self.watchers_started = 0
 
     def _start_watcher(self):
         self.watchers_started += 1
 
-    def query(self, sql):
+    def query(self, sql, params=None):
         self.query_calls.append(sql)
+        self.query_params.append(params)
         return [{"sql": sql}]
 
     def scan_failures(self):
@@ -122,6 +124,17 @@ def describe_DirSQL_async():
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]
+                assert db._db.query_params == [None]
+
+        @pytest.mark.asyncio
+        async def it_forwards_params_to_the_core():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                await db.query("SELECT ?", [1])
+
+                assert db._db.query_params == [[1]]
 
         @pytest.mark.asyncio
         async def it_forwards_no_ignore_to_the_core():

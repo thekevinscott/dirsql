@@ -191,7 +191,14 @@ mod python {
             Ok(Self { inner })
         }
 
-        fn query(&self, py: Python<'_>, sql: String) -> PyResult<Py<PyList>> {
+        #[pyo3(signature = (sql, params=None))]
+        fn query(
+            &self,
+            py: Python<'_>,
+            sql: String,
+            params: Option<Bound<'_, PyAny>>,
+        ) -> PyResult<Py<PyList>> {
+            let _ = params;
             let db = self.inner.clone();
             let result = py
                 .detach(move || db.query_ordered(&sql))

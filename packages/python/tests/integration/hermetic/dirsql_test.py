@@ -53,6 +53,7 @@ class _FakeRustDirSQL:
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
         self.queries: list[str] = []
+        self.query_params: list = []
         self.query_results: list = (
             [{"from_config": config}] if config is not None else [{"ok": 1}]
         )
@@ -62,8 +63,9 @@ class _FakeRustDirSQL:
         self.poll_batches: list[list] = []
         _FakeRustDirSQL.instances.append(self)
 
-    def query(self, sql):
+    def query(self, sql, params=None):
         self.queries.append(sql)
+        self.query_params.append(params)
         return self.query_results
 
     def _start_watcher(self):
@@ -206,6 +208,25 @@ def describe_binding_layer():
             await db.query(sql)
 
             assert _FakeRustDirSQL.instances[0].queries == [sql]
+
+        @pytest.mark.asyncio
+        async def it_passes_params_to_the_engine_untouched(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+            params = {"advice": "it's"}
+
+            await db.query("SELECT * FROM t WHERE a = :advice", params)
+
+            assert _FakeRustDirSQL.instances[0].query_params == [params]
+
+        @pytest.mark.asyncio
+        async def it_passes_no_params_when_none_are_given(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+
+            await db.query("SELECT 1")
+
+            assert _FakeRustDirSQL.instances[0].query_params == [None]
 
     def describe_watch():
         # Feature: watch() is an async iterator of RowEvent. See
