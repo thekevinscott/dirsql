@@ -130,6 +130,8 @@ struct Shared<'e, D, L> {
     open: Mutex<Open<D, L>>,
     found_dir: Condvar,
     found: AtomicUsize,
+    /// Threads started on the walk, the calling thread among them.
+    hired: AtomicUsize,
     explore: &'e (dyn Fn(D) -> Vec<Step<D, L>> + Sync),
 }
 
@@ -147,6 +149,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
         }),
         found_dir: Condvar::new(),
         found: AtomicUsize::new(1),
+        hired: AtomicUsize::new(1),
         explore,
     };
     thread::scope(|scope| {
@@ -159,9 +162,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                     if !spawned && shared.found.load(Ordering::Relaxed) >= PARALLEL_DIRS {
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
-                        for _ in 1..workers {
-                            scope.spawn(|| shared.work());
-                        }
+                        hire(scope, &shared, workers);
                     }
                     stack.push(shared.obtain(&slot).into_iter());
                 }
@@ -177,6 +178,25 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("exploring a directory does not panic")
+}
+
+/// Start workers until `workers` threads are on the walk, as a tree: each
+/// worker starts up to two more before it explores, since spawning a thread
+/// takes tens of microseconds and the walk hands out nothing while it spawns.
+/// The count only rises, so however the tree branches it ends.
+fn hire<'scope, D: Send, L: Send>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    shared: &'scope Shared<'_, D, L>,
+    workers: usize,
+) {
+    for _ in 0..2 {
+        if shared.hired.fetch_add(1, Ordering::Relaxed) < workers {
+            scope.spawn(move || {
+                hire(scope, shared, workers);
+                shared.work();
+            });
+        }
+    }
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -392,6 +412,7 @@ mod tests {
             }),
             found_dir: Condvar::new(),
             found: AtomicUsize::new(0),
+            hired: AtomicUsize::new(1),
             explore: &explore,
         };
         assert!(
