@@ -61,6 +61,16 @@ pub(crate) fn after_read(fp: Option<Fingerprint>, start_ns: i64) -> Known {
     }
 }
 
+/// What the index records for a file a query need not read: a built file
+/// counts as read when the build began; any other entry stands.
+pub(crate) fn adopted(
+    known: Option<&Known>,
+    now: Option<Fingerprint>,
+    built_ns: i64,
+) -> Option<Known> {
+    (known == Some(&Known::Built)).then(|| after_read(now, built_ns))
+}
+
 #[cfg(unix)]
 pub(crate) fn fingerprint(path: &Path) -> std::io::Result<Fingerprint> {
     use std::os::unix::fs::MetadataExt;
@@ -162,6 +172,28 @@ mod tests {
         assert!(changed_before(&fp(Some(START - SETTLE_NS - 1)), START));
         assert!(!changed_before(&fp(Some(START - SETTLE_NS)), START));
         assert!(!changed_before(&fp(Some(START)), START));
+    }
+
+    #[test]
+    fn a_built_file_is_adopted_as_read_when_the_build_began() {
+        let now = fp(Some(START - SETTLE_NS - 1));
+        assert_eq!(
+            adopted(Some(&Known::Built), Some(now), START),
+            Some(Known::Read {
+                fp: Some(now),
+                settled: true
+            })
+        );
+    }
+
+    #[test]
+    fn a_file_already_read_or_unknown_is_not_adopted() {
+        let read = Known::Read {
+            fp: Some(fp(Some(0))),
+            settled: true,
+        };
+        assert_eq!(adopted(Some(&read), Some(fp(Some(0))), START), None);
+        assert_eq!(adopted(None, Some(fp(Some(0))), START), None);
     }
 
     #[test]

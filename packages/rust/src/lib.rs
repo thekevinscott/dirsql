@@ -661,8 +661,8 @@ impl DirSQL {
             let key = (table.clone(), rel.clone());
             let known = state.known.get(&key);
             if !freshness::must_read(known, now.as_ref(), self.inner.built_ns) {
-                if known == Some(&freshness::Known::Built) {
-                    updates.push((key, freshness::after_read(now, self.inner.built_ns)));
+                if let Some(adopted) = freshness::adopted(known, now, self.inner.built_ns) {
+                    updates.push((key, adopted));
                 }
                 continue;
             }
