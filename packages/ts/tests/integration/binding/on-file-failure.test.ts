@@ -35,7 +35,10 @@ describe("DirSQL onFile failure", () => {
       return [{ n: 1 }];
     }, "CREATE TABLE notes (n INTEGER)");
 
-    for (const call of [() => db.ready, () => db.query("SELECT * FROM notes")]) {
+    for (const call of [
+      () => db.ready,
+      () => db.query("SELECT * FROM notes"),
+    ]) {
       const err = await call().then(
         () => null,
         (e: Error) => e,
@@ -48,7 +51,10 @@ describe("DirSQL onFile failure", () => {
 
   it("fails ready on a NOT NULL violation", async () => {
     writeFileSync(join(dir, "d", "a.txt"), "1");
-    const db = mkdb(() => [{ n: null }], "CREATE TABLE notes (n INTEGER NOT NULL)");
+    const db = mkdb(
+      () => [{ n: null }],
+      "CREATE TABLE notes (n INTEGER NOT NULL)",
+    );
 
     const err = await db.ready.then(
       () => null,

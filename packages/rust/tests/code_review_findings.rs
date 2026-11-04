@@ -51,27 +51,15 @@ fn s1_column_name_with_sql_syntax_produces_clean_error() {
             },
         )],
     );
-    // The row is still rejected; since #714 the rejection costs that file
-    // rather than the scan, so it surfaces as a reported skip instead of a
-    // build error. What must not change is that the name never reaches SQL.
-    let db = result.expect("a rejected row is now that file's failure, not the scan's");
-
-    let reported = db.scan_failures();
-    assert_eq!(
-        reported.len(),
-        1,
-        "expected the file to be skipped: {reported:?}"
-    );
-    let msg = reported[0].message.to_lowercase();
+    let msg = match result {
+        Ok(_) => panic!("a rejected row must fail the build"),
+        Err(e) => e.to_string().to_lowercase(),
+    };
     assert!(
         msg.contains("identifier")
             || msg.contains("invalid column")
             || msg.contains("invalid identifier"),
         "expected an identifier-validation message, got: {msg}"
-    );
-    assert!(
-        db.query("SELECT * FROM t").unwrap().is_empty(),
-        "the rejected row must not have been inserted"
     );
 }
 
