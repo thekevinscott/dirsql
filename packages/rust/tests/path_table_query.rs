@@ -416,3 +416,15 @@ fn rows_folded_from_a_path_table_are_the_rows_sqlite_steps() {
         assert_eq!(folded, stepped, "{sql}");
     }
 }
+
+#[test]
+fn a_doubled_separator_after_the_dot_resolves_under_the_index_root() {
+    let root = fixture();
+    let db = open(&root);
+
+    let file = db.query("SELECT path FROM './/docs/a.md'").unwrap();
+    let glob = db.query("SELECT path FROM './/docs/*.md'").unwrap();
+
+    assert_eq!(texts(&file, "path"), vec!["docs/a.md"]);
+    assert_eq!(texts(&glob, "path"), vec!["docs/a.md", "docs/b.md"]);
+}
