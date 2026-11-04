@@ -115,3 +115,50 @@ fn a_dot_named_symlink_is_hidden_unless_the_pattern_spells_the_dot() {
     assert_eq!(paths("./.dotdir/*"), vec![".dotdir/r.md"]);
     assert_eq!(paths("./.*/*"), vec![".dotdir/r.md"]);
 }
+
+/// `y/link -> real/sub`, so `y/link/..` is `real` to the filesystem and `y`
+/// to a lexical fold. Each `f.md` says which one was read.
+fn parent_through_link() -> TempDir {
+    let root = TempDir::new().unwrap();
+    let at = |rel: &str| root.path().join(rel);
+    fs::create_dir_all(at("real/sub")).unwrap();
+    fs::create_dir_all(at("y")).unwrap();
+    fs::write(at("real/f.md"), "PHYSICAL").unwrap();
+    fs::write(at("y/f.md"), "LEXICAL").unwrap();
+    symlink(at("real/sub"), at("y/link")).unwrap();
+    root
+}
+
+fn path_and_content(root: &TempDir, table: &str) -> Vec<(String, String)> {
+    let db = DirSQL::new(root.path(), vec![]).unwrap();
+    db.query(&format!("SELECT path, content FROM '{table}'"))
+        .unwrap()
+        .iter()
+        .map(|r| match (r.get("path"), r.get("content")) {
+            (Some(Value::Text(p)), Some(Value::Text(c))) => (p.clone(), c.clone()),
+            other => panic!("path and content were not text: {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn an_absolute_parent_through_a_symlinked_directory_resolves_physically() {
+    let root = parent_through_link();
+    let written = format!("{}/y/link/../f.md", root.path().display());
+
+    assert_eq!(
+        path_and_content(&root, &written),
+        vec![(written.clone(), "PHYSICAL".to_string())]
+    );
+}
+
+#[test]
+fn an_absolute_glob_after_a_parent_through_a_symlinked_directory_resolves_physically() {
+    let root = parent_through_link();
+    let dir = format!("{}/y/link/..", root.path().display());
+
+    assert_eq!(
+        path_and_content(&root, &format!("{dir}/*.md")),
+        vec![(format!("{dir}/f.md"), "PHYSICAL".to_string())]
+    );
+}
