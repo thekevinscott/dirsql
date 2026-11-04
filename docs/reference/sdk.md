@@ -223,7 +223,9 @@ db.query_with(sql: &str, params: &Params) -> Result<Vec<Row>>
 
 :::
 
-Executes a SQL query and returns rows keyed by column name.
+Executes a SQL query and returns rows keyed by column name. If a result repeats
+a column name, later occurrences receive `:N` suffixes (for example, `a` and
+`a:1`); suffixes avoid names already present in the result.
 
 **Bind parameters.** `params` reaches SQLite's own parameter binding; the
 values never enter the SQL text, so text holding quotes needs no escaping.

@@ -1639,7 +1639,8 @@ impl Db {
             return Err(DbError::WriteForbidden);
         }
         self.scope.warm(&reads);
-        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let column_names =
+            unique_column_names(stmt.column_names().iter().map(|s| s.to_string()).collect());
         Ok((stmt, column_names, reads))
     }
 
@@ -1999,6 +2000,27 @@ fn bind(stmt: &mut rusqlite::Statement<'_>, params: &Params) -> Result<()> {
     Ok(())
 }
 
+fn unique_column_names(names: Vec<String>) -> Vec<String> {
+    let reserved: HashSet<String> = names.iter().cloned().collect();
+    let mut used = HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            if used.insert(name.clone()) {
+                return name;
+            }
+            let mut suffix = 1;
+            loop {
+                let candidate = format!("{name}:{suffix}");
+                if !reserved.contains(&candidate) && used.insert(candidate.clone()) {
+                    return candidate;
+                }
+                suffix += 1;
+            }
+        })
+        .collect()
+}
+
 /// `cells` emptied and free to borrow anew, keeping its allocation.
 fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
     cells.clear();
@@ -2020,6 +2042,15 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_result_names_avoid_existing_projection_names() {
+        let names = ["a", "a", "a:1", "a"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(unique_column_names(names), ["a", "a:2", "a:1", "a:3"]);
+    }
 
     #[test]
     fn text_and_blob_values_bind_without_copying() {
