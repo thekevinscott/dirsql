@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1793810952,
+  "exit_code": 0,
+  "commit": "4c7824b3e1237f53c299d71eb09b6d8b8ed82ed7",
+  "branch": "bot/1575-ts-bind-params-1104"
+}
