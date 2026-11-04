@@ -359,16 +359,12 @@ impl PathGlob {
     /// Whether some word's components consume `rel_path` name by name; only a
     /// component spelled with a leading `.` consumes a dot-named one.
     fn spells_dot_names_of(&self, rel_path: &Path) -> bool {
-        let names: Vec<&OsStr> = rel_path.components().map(|c| c.as_os_str()).collect();
-        let last = names.len().saturating_sub(1);
-        let states = names
-            .iter()
-            .enumerate()
-            .fold(self.start(), |states, (i, name)| {
-                let kind = if i == last { Kind::File } else { Kind::Dir };
-                self.step(&states, name, kind)
-            });
-        !states.is_empty()
+        !rel_path
+            .components()
+            .fold(self.start(), |states, c| {
+                self.step(&states, c.as_os_str(), Kind::Dir)
+            })
+            .is_empty()
     }
 
     /// Whether a file named `name` may match: false when no word could match
