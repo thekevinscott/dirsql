@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/declared_table_name_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_query_test.py tests/e2e/use_case_dossier_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_notebook_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/fanout_test.py tests/e2e/plugin_discovery_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/extension_package_test.py tests/e2e/server_speed_test.py tests/e2e/query_contract_test.py tests/e2e/repl_interactive_test.py tests/e2e/watch_speed_test.py tests/e2e/sigint_interrupt_test.py -q",
+  "ran_at": 1793815824,
+  "exit_code": 0,
+  "commit": "501e509a06e56f8cdd91445dae06bb55180f2787",
+  "branch": "bot/1572-fresh-red-1104"
+}
