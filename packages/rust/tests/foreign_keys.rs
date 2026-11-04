@@ -217,13 +217,13 @@ fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
 
-    let message = db
-        .query("SELECT name FROM parent")
-        .unwrap_err()
-        .to_string();
+    let message = db.query("SELECT name FROM parent").unwrap_err().to_string();
 
     for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
-        assert!(message.contains(needle), "{needle:?} missing from: {message}");
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from: {message}"
+        );
     }
     fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();
     assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha again"]);
