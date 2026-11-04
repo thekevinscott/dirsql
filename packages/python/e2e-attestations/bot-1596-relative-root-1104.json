@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/relative_root_chdir_test.py tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1793818031,
+  "exit_code": 0,
+  "commit": "7f7519655ef9cd68b07b1d8f51eae327bf8bf53d",
+  "branch": "bot/1596-relative-root-1104"
+}
