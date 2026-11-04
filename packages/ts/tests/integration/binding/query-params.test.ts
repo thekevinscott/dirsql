@@ -120,7 +120,7 @@ describe("query bind parameters", () => {
     const db = new DirSQL({ root: dir });
     await expect(db.query("SELECT ?", [[1, 2]])).rejects.toThrow(TypeError);
     await expect(db.query("SELECT ?", [[1, 2]])).rejects.toThrow(
-      "unsupported parameter type: object",
+      "unsupported parameter type: Array",
     );
   });
 

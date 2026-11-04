@@ -212,7 +212,7 @@ await db.query(sql: str, params: Sequence | Mapping | None = None) -> list[dict]
 ```
 
 ```typescript [TypeScript]
-await db.query(sql: string) -> Record<string, unknown>[]
+await db.query(sql: string, params?: unknown[] | Record<string, unknown> | null) -> Record<string, unknown>[]
 // Runs on the libuv threadpool; the JS event loop stays responsive.
 ```
 
@@ -227,8 +227,9 @@ Executes a SQL query and returns rows keyed by column name.
 
 **Bind parameters.** `params` reaches SQLite's own parameter binding; the
 values never enter the SQL text, so text holding quotes needs no escaping.
-A sequence fills `?` placeholders in order; a mapping fills `:name`
-placeholders, keyed by the name without its prefix. It works for path-tables
+A sequence (a TypeScript array) fills `?` placeholders in order; a mapping
+(a TypeScript plain object) fills `:name`, `@name` and `$name` placeholders,
+keyed by the name without its prefix. It works for path-tables
 and declared tables alike:
 
 ::: code-group
@@ -239,6 +240,15 @@ await db.query(
     {"advice": text},
 )
 await db.query("SELECT * FROM notes WHERE author = ? AND year = ?", ("ann", 2024))
+```
+
+```typescript [TypeScript]
+await db.query(
+  "SELECT path FROM './*.json' WHERE content ->> 'advice' = :advice",
+  { advice: text },
+);
+await db.query("SELECT * FROM notes WHERE author = ? AND year = ?", ["ann", 2024]);
+// queryOrdered takes params the same way.
 ```
 
 ```rust [Rust]
@@ -259,20 +269,23 @@ db.query_with(
 
 :::
 
-TypeScript does not take bind parameters yet.
-
 - Values bind as SQLite's native types. Python accepts `None`, `int`
   (`bool` binds as `0`/`1`), `float`, `str`, `bytes` and `bytearray`;
   anything else raises `TypeError` rather than being stringified, and an
-  `int` outside the signed 64-bit range raises `OverflowError`. Rust binds a
-  `Value`.
+  `int` outside the signed 64-bit range raises `OverflowError`. TypeScript
+  accepts `null`, `number` (an integral value binds as an INTEGER, any other
+  as a REAL, so `1.0` binds as `1`), `bigint`, `boolean` (`0`/`1`), `string`,
+  and `Buffer` / `Uint8Array`; anything else, `undefined` included, rejects
+  with a `TypeError`, and a `bigint` outside the signed 64-bit range with a
+  `RangeError`. Rust binds a `Value`.
 - The params must fit the placeholders exactly, or the query fails with an
   error naming the problem: a wrong count for a sequence, a placeholder name
   the mapping lacks, a mapping key no placeholder uses, or a sequence for
   named placeholders (and a mapping for `?`). Python raises a
   `RuntimeError` for these, and a `TypeError` when `params` is neither a
-  sequence nor a mapping (a `str` counts as neither). Rust returns
-  `DbError::Params`.
+  sequence nor a mapping (a `str` counts as neither). TypeScript rejects
+  with an `Error` for these, and a `TypeError` when `params` is neither an
+  array nor a plain object. Rust returns `DbError::Params`.
 - Without `params`, a statement with placeholders fails the same way: a
   placeholder is never left unbound.
 
@@ -311,11 +324,12 @@ round-trips.
 ::: code-group
 
 ```typescript [TypeScript]
-await db.queryOrdered(sql: string) -> { columns: string[]; rows: Record<string, unknown>[] }
+await db.queryOrdered(sql: string, params?: unknown[] | Record<string, unknown> | null) -> { columns: string[]; rows: Record<string, unknown>[] }
 ```
 
 ```rust [Rust]
 db.query_ordered(sql: &str) -> Result<QueryResult>   // QueryResult { columns, rows }
+db.query_ordered_with(sql: &str, params: &Params) -> Result<QueryResult>
 ```
 
 :::
