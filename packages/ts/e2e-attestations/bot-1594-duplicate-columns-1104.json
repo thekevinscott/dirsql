@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1793815692,
+  "exit_code": 0,
+  "commit": "9cb796f0ec1566bc362bfe7c3facd22b7a88890e",
+  "branch": "bot/1594-duplicate-columns-1104"
+}
