@@ -1575,6 +1575,8 @@ mod tests {
         /// Reads of the `initial` column through SQLite on this thread: one
         /// per row the cursor hands back, since SQLite re-checks the equality.
         static INITIAL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        /// The length limit the last `words` table on this thread connected with.
+        static CONNECTED_MAX_LENGTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         /// The rows whose `shout` column was read ahead on this thread.
         static PREFETCHED: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -1588,7 +1590,8 @@ mod tests {
         const NAME: &'static str = "words";
         const LOOKUP_COLUMNS: &'static [usize] = &[1];
 
-        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], max_length: usize) -> Result<(String, Self)> {
+            CONNECTED_MAX_LENGTH.set(max_length);
             let words = Words {
                 words: vec!["ant", "bat", "bee"],
                 scans: std::sync::atomic::AtomicUsize::new(0),
@@ -1846,6 +1849,18 @@ mod tests {
             ),
             vec!["bat", "bee"]
         );
+    }
+
+    #[test]
+    fn a_source_connects_with_the_connection_length_limit() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 4096)
+            .unwrap();
+        load_module::<Words>(&conn, StatementScope::new()).unwrap();
+        conn.execute_batch("CREATE VIRTUAL TABLE w USING words")
+            .unwrap();
+
+        assert_eq!(CONNECTED_MAX_LENGTH.get(), 4096);
     }
 
     #[test]
