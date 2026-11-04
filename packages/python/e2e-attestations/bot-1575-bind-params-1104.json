@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py tests/e2e/declared_table_name_test.py tests/e2e/use_case_join_test.py tests/e2e/stat_speed_test.py -x -q",
+  "ran_at": 1793806695,
+  "exit_code": 0,
+  "commit": "7fec72fd59d31d22b5aa0d2331e545eddc5eee0e",
+  "branch": "bot/1575-bind-params-1104"
+}

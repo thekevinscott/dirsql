@@ -208,7 +208,7 @@ observe construction errors before issuing a query.
 ::: code-group
 
 ```python [Python]
-await db.query(sql: str) -> list[dict]
+await db.query(sql: str, params: Sequence | Mapping | None = None) -> list[dict]
 ```
 
 ```typescript [TypeScript]
@@ -218,11 +218,63 @@ await db.query(sql: string) -> Record<string, unknown>[]
 
 ```rust [Rust]
 db.query(sql: &str) -> Result<Vec<Row>>   // Row = HashMap<String, Value>
+db.query_with(sql: &str, params: &Params) -> Result<Vec<Row>>
 ```
 
 :::
 
 Executes a SQL query and returns rows keyed by column name.
+
+**Bind parameters.** `params` reaches SQLite's own parameter binding; the
+values never enter the SQL text, so text holding quotes needs no escaping.
+A sequence fills `?` placeholders in order; a mapping fills `:name`
+placeholders, keyed by the name without its prefix. It works for path-tables
+and declared tables alike:
+
+::: code-group
+
+```python [Python]
+await db.query(
+    "SELECT path FROM './*.json' WHERE content ->> 'advice' = :advice",
+    {"advice": text},
+)
+await db.query("SELECT * FROM notes WHERE author = ? AND year = ?", ("ann", 2024))
+```
+
+```rust [Rust]
+use dirsql::{Params, Value};
+use std::collections::HashMap;
+
+db.query_with(
+    "SELECT path FROM './*.json' WHERE content ->> 'advice' = :advice",
+    &Params::Named(HashMap::from([("advice".into(), Value::Text(text))])),
+)?;
+db.query_with(
+    "SELECT * FROM notes WHERE author = ?",
+    &Params::Positional(vec![Value::Text("ann".into())]),
+)?;
+// query_ordered_with and query_each_with bind the same way;
+// AsyncDirSQL::query_with is the async twin.
+```
+
+:::
+
+TypeScript does not take bind parameters yet.
+
+- Values bind as SQLite's native types. Python accepts `None`, `int`
+  (`bool` binds as `0`/`1`), `float`, `str`, `bytes` and `bytearray`;
+  anything else raises `TypeError` rather than being stringified, and an
+  `int` outside the signed 64-bit range raises `OverflowError`. Rust binds a
+  `Value`.
+- The params must fit the placeholders exactly, or the query fails with an
+  error naming the problem: a wrong count for a sequence, a placeholder name
+  the mapping lacks, a mapping key no placeholder uses, or a sequence for
+  named placeholders (and a mapping for `?`). Python raises a
+  `RuntimeError` for these, and a `TypeError` when `params` is neither a
+  sequence nor a mapping (a `str` counts as neither). Rust returns
+  `DbError::Params`.
+- Without `params`, a statement with placeholders fails the same way: a
+  placeholder is never left unbound.
 
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
