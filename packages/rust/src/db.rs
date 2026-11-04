@@ -49,6 +49,9 @@ pub enum DbError {
 
     #[error("{0}")]
     Params(String),
+
+    #[error("column {0:?} holds text that is not valid UTF-8")]
+    NotUtf8(String),
 }
 
 /// The reserved namespace for dirsql's internal bookkeeping tables. Every
@@ -1573,8 +1576,8 @@ impl Db {
         let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
             let mut cells = recycled(spare);
-            for i in 0..column_names.len() {
-                cells.push(row.get_ref(i)?);
+            for (i, column) in column_names.iter().enumerate() {
+                cells.push(utf8_checked(row.get_ref(i)?, column)?);
             }
             on_row(&mut state, &cells);
             spare = recycled(cells);
@@ -1592,7 +1595,7 @@ impl Db {
         while let Some(row) = rows.next()? {
             let mut map = HashMap::new();
             for (i, name) in column_names.iter().enumerate() {
-                let val: rusqlite::types::Value = row.get(i)?;
+                let val = rusqlite::types::Value::from(utf8_checked(row.get_ref(i)?, name)?);
                 map.insert(name.clone(), Value::from(val));
             }
             results.push(map);
@@ -1906,6 +1909,17 @@ fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
             *cell = Value::Text(String::from_utf8_lossy(bytes).into_owned())
         }
         _ => *cell = Value::from(rusqlite::types::Value::from(source)),
+    }
+}
+
+/// `cell`, unless it is text that is not valid UTF-8: rusqlite panics
+/// converting such text to an owned value.
+fn utf8_checked<'a>(cell: ValueRef<'a>, column: &str) -> Result<ValueRef<'a>> {
+    match cell {
+        ValueRef::Text(bytes) if std::str::from_utf8(bytes).is_err() => {
+            Err(DbError::NotUtf8(column.to_string()))
+        }
+        _ => Ok(cell),
     }
 }
 
@@ -2361,12 +2375,31 @@ mod tests {
     }
 
     #[test]
-    fn query_each_reads_text_that_is_not_utf8_lossily() {
+    fn query_each_fails_on_text_that_is_not_utf8() {
         let db = titled_docs(&["a"]);
 
-        let (_, rows) = folded(&db, "SELECT CAST(x'ff41' AS TEXT) AS t");
+        let error = db
+            .query_each("SELECT CAST(x'ff41' AS TEXT) AS t", |_| (), |_, _| {})
+            .unwrap_err();
 
-        assert_eq!(rows, [[Value::Text("\u{FFFD}A".into())]]);
+        assert_eq!(
+            error.to_string(),
+            "column \"t\" holds text that is not valid UTF-8"
+        );
+    }
+
+    #[test]
+    fn query_ordered_fails_on_text_that_is_not_utf8() {
+        let db = titled_docs(&["a"]);
+
+        let error = db
+            .query_ordered("SELECT CAST(x'ff41' AS TEXT) AS t")
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"t\" holds text that is not valid UTF-8"
+        );
     }
 
     fn owned(cell: &ValueRef<'_>) -> Value {
@@ -2415,7 +2448,7 @@ mod tests {
 
         let held = db
             .query_each_ref(
-                "SELECT CAST(x'ff41' AS TEXT) AS t",
+                "SELECT CAST(x'c3a941' AS TEXT) AS t",
                 &Params::default(),
                 |_| Vec::new(),
                 |held: &mut Vec<Vec<u8>>, cells| match cells {
@@ -2425,7 +2458,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(held, [b"\xffA".to_vec()]);
+        assert_eq!(held, [b"\xc3\xa9A".to_vec()]);
     }
 
     #[test]

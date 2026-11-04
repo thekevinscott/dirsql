@@ -128,6 +128,11 @@ several lines, and **anything longer than 60 characters is truncated with
 `…`** so one column cannot set the width of every row. `--format json`
 returns the values unaltered.
 
+A text value that is not valid UTF-8 (`CAST(x'ff' AS TEXT)`, `char(55296)`)
+fails the query in every format, with an error naming its column, rather
+than printing replacement characters. Wrap it in `hex()` or `CAST(… AS BLOB)`
+to read its bytes.
+
 Laying the table out to the terminal's width, and paging a long result, are
 both out of scope; pipe to `less` for the latter.
 
