@@ -234,3 +234,26 @@ CREATE VIRTUAL TABLE records_ext USING dirsql_testext_vtab();{extra}
         String::from_utf8_lossy(&third.stderr)
     );
 }
+
+#[test]
+fn ddl_column_with_embedded_quote_queries_through_cli() {
+    let root = fixture(
+        r#"
+[[table]]
+name = "records"
+glob = "data/*.json"
+on-file = "cat"
+ddl = 'CREATE TABLE records ("a""b" TEXT, id TEXT)'
+"#,
+    );
+
+    let out = query(&root, "SELECT id FROM records ORDER BY id");
+    assert!(
+        out.status.success(),
+        "quoted DDL column must load, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed = rows(&out);
+    let ids: Vec<&str> = parsed.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["one", "two"]);
+}
