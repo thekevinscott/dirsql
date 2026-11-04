@@ -429,7 +429,7 @@ fn reported_path(path_prefix: &Path, rel_path: &Path) -> Vec<u8> {
     path.extend_from_slice(prefix);
     if prefix
         .last()
-        .is_some_and(|&b| b != b'/' && b != NATIVE_SEPARATOR)
+        .is_some_and(|&b| !std::path::is_separator(char::from(b)))
     {
         path.push(b'/');
     }
