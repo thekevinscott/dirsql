@@ -230,8 +230,10 @@ Executes a SQL query and returns rows keyed by column name.
   query walks each named table's glob and stats every match; a file whose stat
   moved, or that changed within the last two seconds, is parsed again, and a
   file that is gone loses its rows. The row events those re-reads produce reach
-  [`watch`](#watch) streams and the next poll, once each. Rust and Python
-  today; a TypeScript query reads what the watcher has applied.
+  [`watch`](#watch) streams and the next poll, once each. If a file on disk
+  breaks a foreign key, the query fails with the error a build over that tree
+  returns. Rust and Python today; a TypeScript query reads what the watcher
+  has applied.
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
   `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `VACUUM`, … — is rejected
