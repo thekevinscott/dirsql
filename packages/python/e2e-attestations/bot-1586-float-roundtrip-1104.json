@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1793814794,
+  "exit_code": 0,
+  "commit": "4696a76d81c3080df86c416ef418d3d9b2dc0062",
+  "branch": "bot/1586-float-roundtrip-1104"
+}

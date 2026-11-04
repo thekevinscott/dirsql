@@ -363,7 +363,7 @@ pub(crate) fn shape_json_rows(
                 .0
                 .iter()
                 .map(|(key, _)| &**key)
-                .filter(|key| !columns.iter().any(|c| c == key))
+                .filter(|key| !columns.iter().any(|c| c.eq_ignore_ascii_case(key)))
                 .collect();
             if !extra.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
@@ -375,7 +375,7 @@ pub(crate) fn shape_json_rows(
             let missing: Vec<&str> = columns
                 .iter()
                 .map(String::as_str)
-                .filter(|c| !row.0.iter().any(|(key, _)| **key == **c))
+                .filter(|c| !row.0.iter().any(|(key, _)| key.eq_ignore_ascii_case(c)))
                 .collect();
             if !missing.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
@@ -394,7 +394,7 @@ pub(crate) fn shape_json_rows(
         }
         let mut shaped = vec![Value::Null; columns.len()];
         for (key, value) in row.0 {
-            if let Some(i) = columns.iter().position(|c| **c == *key) {
+            if let Some(i) = columns.iter().position(|c| c.eq_ignore_ascii_case(&key)) {
                 emitted[i] = true;
                 shaped[i] = json_into_value(value);
             }
@@ -755,7 +755,7 @@ impl Db {
         let mut cells = Vec::with_capacity(rows.len());
         for row in rows {
             for (i, column) in columns.iter().enumerate() {
-                emitted[i] |= row.contains_key(column);
+                emitted[i] |= row.keys().any(|key| key.eq_ignore_ascii_case(column));
             }
             let mut row = Self::normalize_against(table, &columns, row, strict)?;
             cells.push(
@@ -782,11 +782,11 @@ impl Db {
             for key in row.keys() {
                 validate_identifier(key)?;
             }
-            let column_set: std::collections::HashSet<&str> =
-                columns.iter().map(|s| s.as_str()).collect();
-            let row_keys: std::collections::HashSet<&str> =
-                row.keys().map(|s| s.as_str()).collect();
-            let extra: Vec<&str> = row_keys.difference(&column_set).copied().collect();
+            let extra: Vec<&str> = row
+                .keys()
+                .map(String::as_str)
+                .filter(|key| !columns.iter().any(|c| c.eq_ignore_ascii_case(key)))
+                .collect();
             if !extra.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
                     "extra columns not in table {}: {}",
@@ -794,7 +794,11 @@ impl Db {
                     extra.join(", ")
                 )));
             }
-            let missing: Vec<&str> = column_set.difference(&row_keys).copied().collect();
+            let missing: Vec<&str> = columns
+                .iter()
+                .map(String::as_str)
+                .filter(|c| !row.keys().any(|key| key.eq_ignore_ascii_case(c)))
+                .collect();
             if !missing.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
                     "missing columns for table {}: {}",
@@ -802,15 +806,19 @@ impl Db {
                     missing.join(", ")
                 )));
             }
-            Ok(row)
-        } else {
-            let mut normalized = HashMap::with_capacity(columns.len());
-            for col in columns {
-                let value = row.remove(col).unwrap_or(Value::Null);
-                normalized.insert(col.clone(), value);
-            }
-            Ok(normalized)
         }
+        let mut normalized = HashMap::with_capacity(columns.len());
+        for col in columns {
+            let value = row.remove(col).or_else(|| {
+                let key = row
+                    .keys()
+                    .find(|key| key.eq_ignore_ascii_case(col))?
+                    .clone();
+                row.remove(&key)
+            });
+            normalized.insert(col.clone(), value.unwrap_or(Value::Null));
+        }
+        Ok(normalized)
     }
 
     /// Insert a row into a table.
@@ -1631,7 +1639,8 @@ impl Db {
             return Err(DbError::WriteForbidden);
         }
         self.scope.warm(&reads);
-        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let column_names =
+            unique_column_names(stmt.column_names().iter().map(|s| s.to_string()).collect());
         Ok((stmt, column_names, reads))
     }
 
@@ -1991,6 +2000,27 @@ fn bind(stmt: &mut rusqlite::Statement<'_>, params: &Params) -> Result<()> {
     Ok(())
 }
 
+fn unique_column_names(names: Vec<String>) -> Vec<String> {
+    let reserved: HashSet<String> = names.iter().cloned().collect();
+    let mut used = HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            if used.insert(name.clone()) {
+                return name;
+            }
+            let mut suffix = 1;
+            loop {
+                let candidate = format!("{name}:{suffix}");
+                if !reserved.contains(&candidate) && used.insert(candidate.clone()) {
+                    return candidate;
+                }
+                suffix += 1;
+            }
+        })
+        .collect()
+}
+
 /// `cells` emptied and free to borrow anew, keeping its allocation.
 fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
     cells.clear();
@@ -2012,6 +2042,15 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_result_names_avoid_existing_projection_names() {
+        let names = ["a", "a", "a:1", "a"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(unique_column_names(names), ["a", "a:2", "a:1", "a:3"]);
+    }
 
     #[test]
     fn text_and_blob_values_bind_without_copying() {
@@ -2961,6 +3000,64 @@ mod tests {
         ]);
         let normalized = db.normalize_row("t", &row, true).unwrap();
         assert_eq!(normalized.len(), 2);
+    }
+
+    #[test]
+    fn normalize_row_keys_a_case_differing_key_by_its_column() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (Name TEXT)").unwrap();
+        let row = HashMap::from([("nAME".into(), Value::Text("apple".into()))]);
+        for strict in [false, true] {
+            let normalized = db.normalize_row("t", &row, strict).unwrap();
+            assert_eq!(
+                normalized,
+                HashMap::from([("Name".into(), Value::Text("apple".into()))])
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_row_prefers_the_exact_key_over_a_case_variant() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
+        let row = HashMap::from([
+            ("NAME".into(), Value::Text("variant".into())),
+            ("name".into(), Value::Text("exact".into())),
+        ]);
+        let normalized = db.normalize_row("t", &row, false).unwrap();
+        assert_eq!(normalized["name"], Value::Text("exact".into()));
+    }
+
+    #[test]
+    fn normalize_row_does_not_fold_non_ascii_case() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (\"é\" TEXT)").unwrap();
+        let row = HashMap::from([("É".into(), Value::Text("x".into()))]);
+        let normalized = db.normalize_row("t", &row, false).unwrap();
+        assert_eq!(normalized["é"], Value::Null);
+    }
+
+    #[test]
+    fn normalize_row_strict_names_exactly_the_unmatched_keys_and_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (Name TEXT, n INTEGER)")
+            .unwrap();
+        let extra = HashMap::from([
+            ("NAME".into(), Value::Null),
+            ("N".into(), Value::Null),
+            ("color".into(), Value::Null),
+        ]);
+        let err = db.normalize_row("t", &extra, true).unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "extra columns not in table t: color"),
+            "got: {err}"
+        );
+        let missing = HashMap::from([("NAME".into(), Value::Null)]);
+        let err = db.normalize_row("t", &missing, true).unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "missing columns for table t: n"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -3985,6 +4082,53 @@ mod tests {
         assert_eq!(
             out.cells,
             vec![vec![Value::Text("a".into()), Value::Integer(1)]]
+        );
+    }
+
+    #[test]
+    fn shape_rows_fills_a_column_from_a_key_differing_only_by_case() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (Id TEXT, n INTEGER)")
+            .unwrap();
+        for strict in [false, true] {
+            let out = db
+                .shape_rows(
+                    "t",
+                    json_rows(serde_json::json!([{"N":1,"iD":"a"}])),
+                    strict,
+                )
+                .unwrap();
+            assert_eq!(out.columns, vec!["Id", "n"]);
+            assert_eq!(out.emitted, vec![true, true]);
+            assert_eq!(
+                out.cells,
+                vec![vec![Value::Text("a".into()), Value::Integer(1)]]
+            );
+        }
+    }
+
+    #[test]
+    fn shape_rows_strict_names_exactly_the_unmatched_keys_and_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (Name TEXT, n INTEGER)")
+            .unwrap();
+        let err = db
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"NAME":"x","N":1,"color":"red"}])),
+                true,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "extra columns not in table t: color"),
+            "got: {err}"
+        );
+        let err = db
+            .shape_rows("t", json_rows(serde_json::json!([{"NAME":"x"}])), true)
+            .unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "missing columns for table t: n"),
+            "got: {err}"
         );
     }
 
@@ -5502,6 +5646,22 @@ mod tests {
                 vec![Value::Null, Value::Null, Value::Integer(1)],
             ]
         );
+    }
+
+    #[test]
+    fn shape_value_rows_marks_a_column_emitted_by_a_case_differing_key() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id INTEGER, Name TEXT)")
+            .unwrap();
+        let rows = vec![HashMap::from([(
+            "nAME".to_string(),
+            Value::Text("a".into()),
+        )])];
+
+        let out = db.shape_value_rows("t", rows, false).unwrap();
+
+        assert_eq!(out.emitted, vec![false, true]);
+        assert_eq!(out.cells, vec![vec![Value::Null, Value::Text("a".into())]]);
     }
 
     #[test]

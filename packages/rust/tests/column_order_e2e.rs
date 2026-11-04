@@ -79,3 +79,26 @@ fn json_keys_follow_the_select_list() {
         "expected `size` before `basename`, got: {text}"
     );
 }
+
+#[test]
+fn duplicate_projection_names_keep_both_values_in_json() {
+    let root = fixture();
+    let out = query(&root, "SELECT 1 AS a, 2 AS a", "json");
+    let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+
+    assert_eq!(rows, serde_json::json!([{"a": 1, "a:1": 2}]));
+}
+
+#[test]
+fn duplicate_projection_names_keep_both_values_in_table() {
+    let root = fixture();
+    let out = query(&root, "SELECT 1 AS a, 2 AS a", "table");
+    let rendered = stdout(&out);
+
+    assert_eq!(header(&out), vec!["a", "a:1"]);
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.split_whitespace().collect::<Vec<_>>() == ["1", "2"])
+    );
+}

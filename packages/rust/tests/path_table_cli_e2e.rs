@@ -443,3 +443,62 @@ fn a_doubled_separator_after_the_dot_resolves_under_the_working_directory() {
     );
     assert_eq!(paths(&run(&dir, "SELECT path FROM './/'")), vec!["root.md"]);
 }
+
+#[cfg(unix)]
+mod parent_through_a_symlink {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// `y/link -> real/sub` under `base`, so `y/link/..` is `real` to the
+    /// filesystem and `y` to a lexical fold. Each `f.md` names which.
+    fn link_under(base: &Path) {
+        fs::create_dir_all(base.join("real/sub")).unwrap();
+        fs::create_dir_all(base.join("y")).unwrap();
+        fs::write(base.join("real/f.md"), "PHYSICAL").unwrap();
+        fs::write(base.join("y/f.md"), "LEXICAL").unwrap();
+        symlink(base.join("real/sub"), base.join("y/link")).unwrap();
+    }
+
+    fn path_and_content(out: &Output) -> Vec<(String, String)> {
+        rows(out)
+            .into_iter()
+            .map(|r| {
+                (
+                    r["path"].as_str().unwrap().to_string(),
+                    r["content"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_absolute_path_reads_the_file_the_shell_reads() {
+        let dir = TempDir::new().unwrap();
+        link_under(dir.path());
+        let written = format!("{}/y/link/../f.md", dir.path().display());
+
+        let out = run(&dir, &format!("SELECT path, content FROM '{written}'"));
+
+        assert_eq!(
+            path_and_content(&out),
+            vec![(written, "PHYSICAL".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_home_relative_path_reads_the_file_the_shell_reads() {
+        let dir = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        link_under(home.path());
+
+        let out = run_with_home(&dir, &home, "SELECT path, content FROM '~/y/link/../f.md'");
+
+        assert_eq!(
+            path_and_content(&out),
+            vec![(
+                format!("{}/y/link/../f.md", home.path().display()),
+                "PHYSICAL".to_string()
+            )]
+        );
+    }
+}
