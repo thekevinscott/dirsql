@@ -2076,7 +2076,7 @@ impl DirSQLBuilder {
         // explicit `.root(...)` when given, else the process cwd. The config
         // file's own location plays no part in root derivation (#540).
         let root = match explicit_root {
-            Some(explicit) => explicit,
+            Some(explicit) => std::path::absolute(explicit).map_err(DirSqlError::config)?,
             None => std::env::current_dir().map_err(DirSqlError::config)?,
         };
 
@@ -3896,6 +3896,13 @@ mod internal_tests {
     }
 
     #[test]
+    fn resolve_makes_a_relative_root_absolute() {
+        let resolved = DirSQL::builder().root("tree").resolve().unwrap();
+        assert!(resolved.root.is_absolute(), "got {:?}", resolved.root);
+        assert!(resolved.root.ends_with("tree"), "got {:?}", resolved.root);
+    }
+
+    #[test]
     fn builder_no_ignore_flows_into_the_resolved_build() {
         let resolved = DirSQL::builder()
             .root("/idx")
@@ -5017,11 +5024,13 @@ mod internal_tests {
 
     #[test]
     fn resolve_explicit_root_is_used_verbatim() {
-        let resolved = DirSQL::builder()
-            .root("/some/explicit/root")
-            .resolve()
-            .unwrap();
-        assert_eq!(resolved.root, PathBuf::from("/some/explicit/root"));
+        let explicit = if cfg!(windows) {
+            r"C:\some\explicit\root"
+        } else {
+            "/some/explicit/root"
+        };
+        let resolved = DirSQL::builder().root(explicit).resolve().unwrap();
+        assert_eq!(resolved.root, PathBuf::from(explicit));
     }
 
     #[test]
