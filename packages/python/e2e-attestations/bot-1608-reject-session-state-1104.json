@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/repl_interactive_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1793826092,
+  "exit_code": 0,
+  "commit": "01970efc08f9ee9dbb1bb6eeef03173b89c8d3b4",
+  "branch": "bot/1608-reject-session-state-1104"
+}
