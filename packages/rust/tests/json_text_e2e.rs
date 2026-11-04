@@ -1,7 +1,6 @@
 //! End-to-end tests for text cells in the CLI's JSON output: the real
 //! `dirsql` binary must print each text cell as the JSON string
-//! `serde_json` writes for it, reading text SQLite holds as invalid UTF-8
-//! with replacement characters.
+//! `serde_json` writes for it.
 //!
 //! Nothing is mocked (real process, real filesystem, real SQLite).
 //!
@@ -28,14 +27,6 @@ fn json(sql: &str) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).expect("stdout must be UTF-8")
-}
-
-#[test]
-fn text_that_is_not_utf8_prints_with_replacement_characters() {
-    assert_eq!(
-        json("SELECT CAST(x'ff41' AS TEXT) AS t"),
-        "[{\"t\":\"\u{FFFD}A\"}]\n"
-    );
 }
 
 #[test]

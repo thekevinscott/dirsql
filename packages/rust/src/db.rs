@@ -2322,12 +2322,31 @@ mod tests {
     }
 
     #[test]
-    fn query_each_reads_text_that_is_not_utf8_lossily() {
+    fn query_each_fails_on_text_that_is_not_utf8() {
         let db = titled_docs(&["a"]);
 
-        let (_, rows) = folded(&db, "SELECT CAST(x'ff41' AS TEXT) AS t");
+        let error = db
+            .query_each("SELECT CAST(x'ff41' AS TEXT) AS t", |_| (), |_, _| {})
+            .unwrap_err();
 
-        assert_eq!(rows, [[Value::Text("\u{FFFD}A".into())]]);
+        assert_eq!(
+            error.to_string(),
+            "column \"t\" holds text that is not valid UTF-8"
+        );
+    }
+
+    #[test]
+    fn query_ordered_fails_on_text_that_is_not_utf8() {
+        let db = titled_docs(&["a"]);
+
+        let error = db
+            .query_ordered("SELECT CAST(x'ff41' AS TEXT) AS t")
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"t\" holds text that is not valid UTF-8"
+        );
     }
 
     fn owned(cell: &ValueRef<'_>) -> Value {

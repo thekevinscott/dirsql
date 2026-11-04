@@ -1,12 +1,14 @@
 """Binding-tier tests for text SQLite holds as invalid UTF-8.
 
-The query returns it with replacement characters, as the CLI prints it, and
-the instance stays usable afterwards.
+The query fails with an ordinary exception naming the column, and the
+instance stays usable afterwards.
 """
 
 import pytest
 
 from dirsql import DirSQL
+
+MESSAGE = 'column "v" holds text that is not valid UTF-8'
 
 
 @pytest.fixture
@@ -17,14 +19,15 @@ def root(tmp_path):
 
 def describe_text_not_utf8():
     @pytest.mark.asyncio
-    async def it_returns_replacement_characters(root):
+    async def it_raises_an_exception_naming_the_column(root):
         db = DirSQL(root)
-        rows = await db.query("SELECT CAST(x'ff41' AS TEXT) AS v")
-        assert rows == [{"v": "�A"}]
+        with pytest.raises(Exception, match=MESSAGE):
+            await db.query("SELECT CAST(x'ff41' AS TEXT) AS v")
 
     @pytest.mark.asyncio
     async def it_leaves_the_instance_usable(root):
         db = DirSQL(root)
-        await db.query("SELECT CAST(x'ff' AS TEXT) AS v FROM './a.json'")
+        with pytest.raises(Exception, match=MESSAGE):
+            await db.query("SELECT CAST(x'ff' AS TEXT) AS v FROM './a.json'")
         rows = await db.query("SELECT basename FROM './a.json'")
         assert rows == [{"basename": "a.json"}]
