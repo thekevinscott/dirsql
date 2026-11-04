@@ -1617,7 +1617,17 @@ impl Db {
         let _scope = self.scope.enter();
         let (mut stmt, column_names, reads) = self.prepare_reading(sql)?;
         let mut state = start(&column_names);
-        if self.read_directly(sql, &reads, &mut |cells| on_row(&mut state, cells)) {
+        let mut not_utf8 = Ok(());
+        let read = self.read_directly(sql, &reads, &mut |cells| {
+            if not_utf8.is_ok() {
+                not_utf8 = utf8_row(cells, &column_names);
+                if not_utf8.is_ok() {
+                    on_row(&mut state, cells);
+                }
+            }
+        });
+        not_utf8?;
+        if read {
             return Ok(state);
         }
         bind(&mut stmt, params)?;
@@ -1976,6 +1986,14 @@ fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
 
 /// `cell`, unless it is text that is not valid UTF-8: rusqlite panics
 /// converting such text to an owned value.
+/// `Ok` unless a cell of `cells` is text that is not valid UTF-8.
+fn utf8_row(cells: &[ValueRef<'_>], columns: &[String]) -> Result<()> {
+    cells
+        .iter()
+        .zip(columns)
+        .try_for_each(|(cell, column)| utf8_checked(*cell, column).map(drop))
+}
+
 fn utf8_checked<'a>(cell: ValueRef<'a>, column: &str) -> Result<ValueRef<'a>> {
     match cell {
         ValueRef::Text(bytes) if std::str::from_utf8(bytes).is_err() => {
@@ -2118,6 +2136,27 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_row_accepts_a_row_of_valid_cells() {
+        let cells = [
+            ValueRef::Text(b"a"),
+            ValueRef::Blob(&[0xff]),
+            ValueRef::Null,
+        ];
+        let columns = ["p".to_string(), "b".to_string(), "n".to_string()];
+        assert!(utf8_row(&cells, &columns).is_ok());
+    }
+
+    #[test]
+    fn utf8_row_names_the_column_whose_text_is_not_utf8() {
+        let cells = [ValueRef::Text(b"a"), ValueRef::Text(&[0xff])];
+        let columns = ["ok".to_string(), "path".to_string()];
+        assert_eq!(
+            utf8_row(&cells, &columns).unwrap_err().to_string(),
+            "column \"path\" holds text that is not valid UTF-8"
+        );
+    }
 
     #[test]
     fn duplicate_result_names_avoid_existing_projection_names() {

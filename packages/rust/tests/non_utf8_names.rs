@@ -105,6 +105,10 @@ fn an_on_file_command_receives_each_name_as_it_is_on_disk() {
         .config(root.path().join("dirsql.toml"))
         .build()
         .unwrap();
+    // A query's re-read rebuilds hook paths from the index's text keys,
+    // which cannot hold these names; this asserts what the build hands
+    // the command.
+    db.set_fresh_reads(false);
     assert_eq!(
         texts(
             &db,

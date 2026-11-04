@@ -25,6 +25,7 @@
 //!   captured only to enrich errors.
 //! - **Errors.** A non-zero exit is a failure carrying the tail of stderr.
 
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -63,6 +64,15 @@ impl Placeholder {
 /// unchanged.
 pub(crate) fn non_verbatim(path: &str) -> String {
     plain_form(path).unwrap_or_else(|| path.to_string())
+}
+
+/// [`non_verbatim`] for a path that need not be valid Unicode: such a path
+/// is handed over as it is, since its plain form cannot be spelled as text.
+pub(crate) fn non_verbatim_path(path: &Path) -> OsString {
+    path.to_str().map_or_else(
+        || path.as_os_str().to_owned(),
+        |text| non_verbatim(text).into(),
+    )
 }
 
 fn plain_form(path: &str) -> Option<String> {
@@ -288,14 +298,15 @@ const READ_BYTES: usize = 262_144;
 /// trailing newline). The child runs with stdin closed. A non-zero exit is an
 /// error after every block has been delivered. `on_eof` runs once stdout has
 /// closed, before the child's exit is known.
-pub(crate) fn run_argv_blocks(
+pub(crate) fn run_argv_blocks<S: AsRef<OsStr>>(
     command: &str,
-    argv: &[String],
+    argv: &[S],
     cwd: &Path,
     on_block: &mut dyn FnMut(&str),
     on_eof: &mut dyn FnMut(),
 ) -> Result<(), CommandError> {
-    let mut cmd = Command::new(&argv[0]);
+    let program = argv[0].as_ref();
+    let mut cmd = Command::new(program);
     push_args(&mut cmd, &argv[1..]);
     cmd.current_dir(cwd)
         .stdout(Stdio::piped())
@@ -303,7 +314,7 @@ pub(crate) fn run_argv_blocks(
         .stdin(Stdio::null());
     let mut child = cmd
         .spawn()
-        .map_err(|source| spawn_error(&argv[0], source, cwd))?;
+        .map_err(|source| spawn_error(&program.to_string_lossy(), source, cwd))?;
 
     let mut stderr_pipe = child.stderr.take().expect("stderr piped");
     let stderr_thread = std::thread::spawn(move || {
@@ -353,12 +364,12 @@ fn drain_then_reap<T>(
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
 // the uncompiled twin too, and no test on a Linux gate can kill that mutant.
-fn push_args(cmd: &mut Command, args: &[String]) {
+fn push_args<S: AsRef<OsStr>>(cmd: &mut Command, args: &[S]) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         for arg in args {
-            cmd.raw_arg(quote_windows_arg(arg));
+            cmd.raw_arg(quote_windows_arg(arg.as_ref()));
         }
     }
     #[cfg(not(windows))]
@@ -421,28 +432,36 @@ pub(crate) fn build_argv(
 /// unescapes any unquoted word, while an MSVCRT child parses the quoted form
 /// back to `arg` exactly.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn quote_windows_arg(arg: &str) -> String {
-    let mut out = String::with_capacity(arg.len() + 2);
-    out.push('"');
+#[expect(
+    unsafe_code,
+    reason = "std offers no checked conversion from encoded bytes to an OsString"
+)]
+pub(crate) fn quote_windows_arg(arg: &OsStr) -> OsString {
+    let arg = arg.as_encoded_bytes();
+    let mut out = Vec::with_capacity(arg.len() + 2);
+    out.push(b'"');
     let mut backslashes = 0;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
-                out.push('"');
+    for &byte in arg {
+        match byte {
+            b'\\' => backslashes += 1,
+            b'"' => {
+                out.extend(std::iter::repeat_n(b'\\', backslashes * 2 + 1));
+                out.push(b'"');
                 backslashes = 0;
             }
             _ => {
-                out.extend(std::iter::repeat_n('\\', backslashes));
-                out.push(ch);
+                out.extend(std::iter::repeat_n(b'\\', backslashes));
+                out.push(byte);
                 backslashes = 0;
             }
         }
     }
-    out.extend(std::iter::repeat_n('\\', backslashes * 2));
-    out.push('"');
-    out
+    out.extend(std::iter::repeat_n(b'\\', backslashes * 2));
+    out.push(b'"');
+    // SAFETY: `arg`'s encoded bytes with ASCII quotes and backslashes added
+    // beside ASCII bytes or at its ends: a mixture of encoded bytes and
+    // UTF-8, which the conversion accepts.
+    unsafe { OsString::from_encoded_bytes_unchecked(out) }
 }
 
 /// Replace every `{name}` in `token` with its placeholder value in a single
@@ -516,8 +535,59 @@ mod tests {
         build_argv(command, placeholders).expect("valid command")
     }
 
+    fn quoted(arg: &str) -> String {
+        quote_windows_arg(OsStr::new(arg)).into_string().unwrap()
+    }
+
     fn unchanged(path: &str) {
         assert_eq!(non_verbatim(path), path);
+    }
+
+    /// `before`, a unit that is not Unicode, then `after`: on Unix a lone
+    /// 0xff byte, on Windows an unpaired surrogate.
+    fn not_unicode(before: &str, after: &str) -> OsString {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec([before.as_bytes(), &[0xff], after.as_bytes()].concat())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            let wide: Vec<u16> = before
+                .encode_utf16()
+                .chain([0xD8FF])
+                .chain(after.encode_utf16())
+                .collect();
+            OsString::from_wide(&wide)
+        }
+    }
+
+    #[test]
+    fn quote_windows_arg_keeps_a_name_that_is_not_unicode() {
+        let arg = not_unicode("a\\\"", "b\\");
+        let quoted = quote_windows_arg(&arg);
+        let expected = [
+            b"\"a\\\\\\\"".as_slice(),
+            not_unicode("", "").as_encoded_bytes(),
+            b"b\\\\\"",
+        ]
+        .concat();
+        assert_eq!(quoted.as_encoded_bytes(), expected);
+    }
+
+    #[test]
+    fn non_verbatim_path_leaves_a_name_that_is_not_unicode_as_it_is() {
+        let path = PathBuf::from(not_unicode("dir/", ".json"));
+        assert_eq!(non_verbatim_path(&path), path.into_os_string());
+    }
+
+    #[test]
+    fn non_verbatim_path_strips_a_verbatim_prefix_from_a_unicode_path() {
+        assert_eq!(
+            non_verbatim_path(Path::new(r"\\?\C:\a.txt")),
+            OsString::from(r"C:\a.txt")
+        );
     }
 
     #[test]
@@ -716,43 +786,40 @@ mod tests {
 
     #[test]
     fn windows_quoting_wraps_a_plain_arg_in_quotes() {
-        assert_eq!(quote_windows_arg("hello"), r#""hello""#);
+        assert_eq!(quoted("hello"), r#""hello""#);
     }
 
     #[test]
     fn windows_quoting_keeps_an_empty_arg_as_an_empty_quoted_word() {
-        assert_eq!(quote_windows_arg(""), r#""""#);
+        assert_eq!(quoted(""), r#""""#);
     }
 
     #[test]
     fn windows_quoting_quotes_glob_and_brace_characters() {
-        assert_eq!(quote_windows_arg("[{}]"), r#""[{}]""#);
-        assert_eq!(quote_windows_arg("a?b*c"), r#""a?b*c""#);
+        assert_eq!(quoted("[{}]"), r#""[{}]""#);
+        assert_eq!(quoted("a?b*c"), r#""a?b*c""#);
     }
 
     #[test]
     fn windows_quoting_leaves_backslashes_not_before_a_quote_alone() {
-        assert_eq!(
-            quote_windows_arg(r"\\?\C:\Users\x.txt"),
-            r#""\\?\C:\Users\x.txt""#
-        );
+        assert_eq!(quoted(r"\\?\C:\Users\x.txt"), r#""\\?\C:\Users\x.txt""#);
     }
 
     #[test]
     fn windows_quoting_doubles_trailing_backslashes_before_the_closing_quote() {
-        assert_eq!(quote_windows_arg(r"C:\dir\"), r#""C:\dir\\""#);
-        assert_eq!(quote_windows_arg(r"a\\"), r#""a\\\\""#);
+        assert_eq!(quoted(r"C:\dir\"), r#""C:\dir\\""#);
+        assert_eq!(quoted(r"a\\"), r#""a\\\\""#);
     }
 
     #[test]
     fn windows_quoting_escapes_embedded_quotes() {
-        assert_eq!(quote_windows_arg(r#"[{"n":1}]"#), r#""[{\"n\":1}]""#);
+        assert_eq!(quoted(r#"[{"n":1}]"#), r#""[{\"n\":1}]""#);
     }
 
     #[test]
     fn windows_quoting_doubles_backslashes_before_an_embedded_quote() {
-        assert_eq!(quote_windows_arg(r#"a\"b"#), r#""a\\\"b""#);
-        assert_eq!(quote_windows_arg(r#"a\\"b"#), r#""a\\\\\"b""#);
+        assert_eq!(quoted(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(quoted(r#"a\\"b"#), r#""a\\\\\"b""#);
     }
 
     #[test]
