@@ -25,11 +25,15 @@ A callback that raises (for example `KeyError` on a missing key) now makes `read
 ```python
 import asyncio, json, os
 from dirsql import DirSQL, Table
-os.makedirs("d", exist_ok=True)
-open("d/a.json", "w").write('{"m": 1}')
-db = DirSQL(".", tables=[Table(name="t", ddl="CREATE TABLE t (n INTEGER)", glob="d/*.json",
-                               on_file=lambda p: [{"n": json.load(open(p))["n"]}])])
-asyncio.run(db.ready())
+
+async def main():
+    os.makedirs("d", exist_ok=True)
+    open("d/a.json", "w").write('{"m": 1}')
+    db = DirSQL(".", tables=[Table(name="t", ddl="CREATE TABLE t (n INTEGER)", glob="d/*.json",
+                                   on_file=lambda p: [{"n": json.load(open(p))["n"]}])])
+    await db.ready()
+
+asyncio.run(main())
 ```
 
 raises ``RuntimeError: table `t`, file `d/a.json`: KeyError: 'n'``.
