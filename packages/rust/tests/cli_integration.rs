@@ -508,6 +508,42 @@ async fn slow_query_exceeding_timeout_returns_408() {
 }
 
 #[tokio::test]
+async fn timed_out_query_stops_blocking_the_next_query() {
+    let (_root, db) = blog_fixture();
+    let config = ServerConfig::ephemeral().with_query_timeout(Duration::from_secs(1));
+    let handle = serve(config, db)
+        .await
+        .expect("server should bind on an ephemeral port");
+    let client = reqwest::Client::new();
+    let url = format!("{}/query", base_url(&handle));
+
+    let endless_sql = "WITH RECURSIVE r(x) AS (\
+        SELECT 1 UNION ALL SELECT x+1 FROM r LIMIT 100000\
+    ) SELECT count(*) AS n FROM r a, r b";
+    let resp = client
+        .post(&url)
+        .json(&json!({ "sql": endless_sql }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+
+    let resp = client
+        .post(&url)
+        .json(&json!({ "sql": "SELECT basename FROM posts ORDER BY basename" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a query after a 408 must not wait on the timed-out one: {}",
+        resp.text().await.unwrap_or_default(),
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn binding_an_in_use_port_surfaces_bind_error() {
     let (_root, db) = blog_fixture();
     let first = spawn_server(db).await;
