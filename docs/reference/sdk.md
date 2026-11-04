@@ -97,10 +97,13 @@ DirSQL::builder()
 :::
 
 Creates a SQLite index over a directory. The index root is the explicit
-`root` when given, else the **process cwd** — the `config` file's location
+`root` when given (a relative `root` resolves against the cwd once), else the
+**process cwd** — the `config` file's location
 never sets the root. A config's `[[table]]` globs anchor at the config file's
 own directory instead (see [glob anchor](./config.md#glob-anchor)); `root`
-governs programmatic tables and path-tables.
+governs programmatic tables and path-tables. The Python and TypeScript SDKs
+read the cwd when `DirSQL` is constructed, though the scan runs later, so a
+`chdir` after construction does not move the root.
 
 Constructing with **neither a `config` nor programmatic `tables`** defines
 **no named tables** — the same as the CLI with no
@@ -291,6 +294,24 @@ db.query_with(
 - Without `params`, a statement with placeholders fails the same way: a
   placeholder is never left unbound.
 
+- **Accurate to the filesystem.** A query reads what is on disk when it
+  starts: a file written, edited, renamed or deleted before the call is
+  reflected in its rows, with no watcher, wait or retry. Before reading, the
+  query walks each named table's glob and stats every match; a file whose stat
+  moved, or that changed within the last two seconds, is parsed again, and a
+  file that is gone loses its rows. The row events those re-reads produce reach
+  [`watch`](#watch) streams and the next poll, once each. If a file on disk
+  breaks a foreign key, the query fails with the error a build over that tree
+  returns. In TypeScript the re-reads run on the JavaScript thread, where
+  `onFile` runs, and the SQL then runs on the threadpool.
+
+  The check trusts the file's stat, so it shares the limits of every
+  stat-based tool (`make`, `rsync`, `git status`): a write through a shared
+  memory map can land without the file's times moving until the writer
+  unmaps or syncs it; a network filesystem that caches attributes can report
+  a stale stat; and a clock stepped backwards can stamp a new write with a
+  time older than the last read.
+
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
   `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `VACUUM`, … — is rejected
@@ -371,7 +392,9 @@ to stop.
 The watcher is live once both `watch()` and [`ready`](#ready) have returned,
 in either order (a Rust `DirSQL` is ready when `build()` returns); a file
 written after that point produces an event and reaches the index. A write
-made while the initial scan is still running may be missed.
+made while the initial scan is still running may be missed by the stream, but
+never by a query (see [`query`](#query)). A change a query read first still
+arrives on the stream, once.
 
 An instance with no named tables cannot be watched: path-tables emit no
 watch events, so `watch()` (and the polling primitives) raise an error naming

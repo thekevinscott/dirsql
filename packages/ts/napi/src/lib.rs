@@ -319,7 +319,8 @@ impl DirSQL {
 
     /// Execute a SQL query and return results as an array of objects.
     ///
-    /// Runs on the libuv threadpool so queries don't block the JS event loop.
+    /// Reads changed files on the JS thread, then runs the SQL on the libuv
+    /// threadpool so the event loop stays free while it runs.
     /// Returns a `Promise` in JS. `params` binds to the statement's
     /// placeholders: an array fills `?`, a plain object fills `:name` /
     /// `@name` / `$name`.
@@ -334,7 +335,7 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.inner.borrow().as_ref().cloned();
+        let inner = self.read_changes()?;
         Ok(AsyncTask::new(QueryTask { inner, sql, params }))
     }
 
@@ -351,8 +352,19 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryOrderedTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.inner.borrow().as_ref().cloned();
+        let inner = self.read_changes()?;
         Ok(AsyncTask::new(QueryOrderedTask { inner, sql, params }))
+    }
+
+    /// Reads the files changed since the last query here, on the JS thread,
+    /// because `onFile` can only be called there; the SQL then runs on the
+    /// threadpool.
+    fn read_changes(&self) -> Result<Option<CoreDirSQL>> {
+        let inner = self.inner.borrow().as_ref().cloned();
+        if let Some(db) = &inner {
+            db.read_changes().map_err(to_napi_err)?;
+        }
+        Ok(inner)
     }
 
     /// Start the file watcher. Must be called before pollEvents. Idempotent.
@@ -468,6 +480,8 @@ impl Task for OpenTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
+        // A query runs on a worker thread, where `on_file` cannot be called.
+        inner.set_fresh_reads(false);
         Ok(DirSQL {
             inner: RefCell::new(Some(inner)),
         })
@@ -630,8 +644,9 @@ fn required<V: FromNapiValue>(def: &Object<'_>, name: &str) -> Result<V> {
 /// A persistent reference to a JS function, safe to store across calls.
 ///
 /// SAFETY: All access happens on the JS main thread via `#[napi]` methods.
-/// `DirSQL::new` and `DirSQL::pollEvents` both run on that thread, and the
-/// onFile closure is only invoked synchronously within those methods.
+/// `DirSQL::new`, `query`, `queryOrdered`, and `pollEvents`'s resolve run on
+/// that thread, and the onFile closure is only invoked synchronously within
+/// them.
 struct FnRef {
     raw_env: napi::sys::napi_env,
     raw_ref: napi::sys::napi_ref,

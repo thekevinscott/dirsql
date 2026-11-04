@@ -102,6 +102,11 @@ class DirSQL:
         persist_path=None,
         extensions=None,
     ):
+        # Read now: the core is built on a worker thread after the first
+        # await, and a chdir in between must not move the root. An unreadable
+        # cwd stays the core's error, raised from ready() like any other.
+        with contextlib.suppress(OSError):
+            root = os.path.abspath(os.getcwd() if root is None else root)
         self._root = root
         self._tables = tables
         self._ignore = ignore

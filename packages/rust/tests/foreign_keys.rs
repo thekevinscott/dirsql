@@ -173,6 +173,7 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 #[test]
 fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
+    db.set_fresh_reads(false);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
 
@@ -209,6 +210,23 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
         names(&db, "SELECT name FROM parent ORDER BY id"),
         vec!["alpha", "beta renamed"]
     );
+}
+
+#[test]
+fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
+    let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
+    fs::remove_file(root.join("parents").join("1.txt")).unwrap();
+
+    let message = db.query("SELECT name FROM parent").unwrap_err().to_string();
+
+    for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from: {message}"
+        );
+    }
+    fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();
+    assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha again"]);
 }
 
 #[test]

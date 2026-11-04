@@ -141,6 +141,9 @@ fn resolve_as<S: Syntax>(
 ) -> Resolution {
     let target = trailing_separator_as_star::<S>(name);
     if let Some(rest) = target.strip_prefix("./") {
+        // Left on, a separator after `./` would make the rest an absolute
+        // path that replaces the index root when joined to it.
+        let rest = rest.trim_start_matches('/');
         return Resolution::Table(split_relative(index_root, rest, is_dir));
     }
     if target.starts_with("../") {
@@ -510,6 +513,22 @@ mod tests {
         assert_eq!(t.root, Path::new("/index/docs/"));
         assert_eq!(t.glob, "a.md");
         assert_eq!(t.path_prefix, "docs//");
+    }
+
+    #[test]
+    fn separators_after_the_leading_dot_resolve_under_the_index_root() {
+        let t = table(".//docs/a.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "a.md");
+        assert_eq!(t.path_prefix, "docs");
+        assert_eq!(
+            table(".///docs", &everything_is_a_dir),
+            table("./docs", &everything_is_a_dir)
+        );
+        assert_eq!(
+            table(".//", &nothing_is_a_dir),
+            table("./", &nothing_is_a_dir)
+        );
     }
 
     #[test]

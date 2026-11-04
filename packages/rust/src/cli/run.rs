@@ -426,6 +426,10 @@ async fn run_query(args: QueryArgs, out: &mut dyn Write) -> u8 {
         }
     };
     let state = load_state(&args.common, parser);
+    // The query runs straight after the build's own read of every file.
+    if let AppState::Ready(db) = &state {
+        db.set_fresh_reads(false);
+    }
 
     // Unbounded: the process IS the query, so `timeout(1)` expresses any cap
     // natively; only the long-lived server enforces `query_timeout` (408).

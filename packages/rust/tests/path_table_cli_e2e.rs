@@ -425,6 +425,25 @@ fn a_brace_sequence_expands_like_bash() {
     assert_eq!(paths(&out), vec!["br/a1.md", "br/a3.md"]);
 }
 
+#[test]
+fn a_doubled_separator_after_the_dot_resolves_under_the_working_directory() {
+    let dir = nested();
+
+    assert_eq!(
+        paths(&run(&dir, "SELECT path FROM './/folder/a.md'")),
+        vec!["folder/a.md"]
+    );
+    assert_eq!(
+        paths(&run(&dir, "SELECT path FROM './/folder'")),
+        vec!["folder/a.md"]
+    );
+    assert_eq!(
+        paths(&run(&dir, "SELECT path FROM './/folder/*.md'")),
+        vec!["folder/a.md"]
+    );
+    assert_eq!(paths(&run(&dir, "SELECT path FROM './/'")), vec!["root.md"]);
+}
+
 #[cfg(unix)]
 mod parent_through_a_symlink {
     use super::*;
