@@ -6,6 +6,14 @@ import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("./core.js");
+vi.mock("node:path", async () => {
+  const actual = await vi.importActual<typeof import("node:path")>("node:path");
+  return {
+    ...actual,
+    default: actual,
+    resolve: vi.fn((...parts: string[]) => `abs:${parts.join("|")}`),
+  };
+});
 vi.mock("./resolve-extension.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-extension.js")>(
     "./resolve-extension.js",
@@ -156,7 +164,7 @@ describe("DirSQL", () => {
       const db = new DirSQL("/cfg.toml");
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/cfg.toml"],
@@ -179,7 +187,7 @@ describe("DirSQL", () => {
         "/b.toml",
       ]);
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/a.toml", "/b.toml"],
@@ -197,7 +205,7 @@ describe("DirSQL", () => {
       const db = new DirSQL({ config: "/elsewhere/.dirsql.toml" });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/elsewhere/.dirsql.toml"],
@@ -209,27 +217,20 @@ describe("DirSQL", () => {
       );
     });
 
-    describe("with a stubbed cwd", () => {
-      afterEach(() => vi.restoreAllMocks());
+    it("resolves the root before the constructor returns", () => {
+      installFakeCore(makeInner());
+      new DirSQL({ root: "tree" });
+      expect(resolve).toHaveBeenCalledWith("tree");
+    });
 
-      it("resolves a relative root against the cwd at construction", async () => {
-        const openAsync = installFakeCore(makeInner());
-        const cwd = vi.spyOn(process, "cwd").mockReturnValue(resolve("/built"));
-        const db = new DirSQL({ root: "tree" });
-        cwd.mockReturnValue(resolve("/moved"));
-        await db.ready;
-        expect(openAsync.mock.calls[0]?.[0]).toBe(resolve("/built", "tree"));
+    it("leaves an unreadable cwd for the core to report", async () => {
+      const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolve).mockImplementation(() => {
+        throw new Error("ENOENT: uv_cwd");
       });
-
-      it("leaves an unreadable cwd for the core to report", async () => {
-        const openAsync = installFakeCore(makeInner());
-        vi.spyOn(process, "cwd").mockImplementation(() => {
-          throw new Error("ENOENT: uv_cwd");
-        });
-        const db = new DirSQL({ root: "tree" });
-        await db.ready;
-        expect(openAsync.mock.calls[0]?.[0]).toBe("tree");
-      });
+      const db = new DirSQL({ root: "tree" });
+      await db.ready;
+      expect(openAsync.mock.calls[0]?.[0]).toBe("tree");
     });
 
     it("appends resolved config extensions and suppresses the core's own loading", async () => {
@@ -246,7 +247,7 @@ describe("DirSQL", () => {
         "/cfg/.dirsql.toml",
       ]);
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/cfg/.dirsql.toml"],
@@ -269,7 +270,7 @@ describe("DirSQL", () => {
       const db = new DirSQL("/cfg/.dirsql.toml");
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/cfg/.dirsql.toml"],
@@ -290,7 +291,7 @@ describe("DirSQL", () => {
       });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        process.cwd(),
+        resolve(process.cwd()),
         null,
         null,
         ["/cfg/.dirsql.toml"],
