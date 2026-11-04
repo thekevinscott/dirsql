@@ -97,11 +97,13 @@ DirSQL::builder()
 :::
 
 Creates a SQLite index over a directory. The index root is the explicit
-`root` when given (a relative `root` resolves against the cwd once, at build
-time), else the **process cwd** — the `config` file's location
+`root` when given (a relative `root` resolves against the cwd once), else the
+**process cwd** — the `config` file's location
 never sets the root. A config's `[[table]]` globs anchor at the config file's
 own directory instead (see [glob anchor](./config.md#glob-anchor)); `root`
-governs programmatic tables and path-tables.
+governs programmatic tables and path-tables. The Python and TypeScript SDKs
+read the cwd when `DirSQL` is constructed, though the scan runs later, so a
+`chdir` after construction does not move the root.
 
 Constructing with **neither a `config` nor programmatic `tables`** defines
 **no named tables** — the same as the CLI with no

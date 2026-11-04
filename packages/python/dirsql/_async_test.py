@@ -113,7 +113,7 @@ def describe_DirSQL_async():
 
                 results = await db.query("SELECT 1")
 
-                assert db._db.root == "/tmp/root"
+                assert db._db.root == os.path.abspath("/tmp/root")
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
                 # Programmatic entries resolve against the cwd and keep
@@ -450,15 +450,34 @@ def describe_DirSQL_async():
 
     def describe_construction():
         @pytest.mark.asyncio
-        async def it_constructs_without_a_root_or_config():
-            # With neither root nor config the core roots at the cwd;
-            # construction must not raise.
+        async def it_roots_at_the_cwd_without_a_root_or_config():
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL()
                 await db.ready()
 
-                assert db._db.root is None
+                assert db._db.root == os.getcwd()
                 assert db._db.config is None
+
+        @pytest.mark.asyncio
+        async def it_resolves_a_relative_root_against_the_cwd_at_construction():
+            built = os.path.abspath("/built")
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                with patch.object(async_mod.os, "getcwd", return_value=built):
+                    db = async_mod.DirSQL("tree")
+                await db.ready()
+
+            assert db._db.root == os.path.join(built, "tree")
+
+        @pytest.mark.asyncio
+        async def it_leaves_an_unreadable_cwd_for_the_core_to_report():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                with patch.object(
+                    async_mod.os, "getcwd", side_effect=FileNotFoundError
+                ):
+                    db = async_mod.DirSQL()
+                await db.ready()
+
+            assert db._db.root is None
 
     def describe_docstring():
         def it_names_no_cache_path_inside_the_root():

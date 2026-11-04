@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCore } from "./core.js";
 import { DirSQL } from "./dirsql.js";
@@ -62,7 +63,7 @@ describe("DirSQL", () => {
       });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        "/data",
+        resolve("/data"),
         [],
         ["*.tmp"],
         null,
@@ -89,7 +90,7 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/data", tables });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        "/data",
+        resolve("/data"),
         tables,
         null,
         null,
@@ -117,7 +118,7 @@ describe("DirSQL", () => {
         false,
       );
       expect(openAsync).toHaveBeenCalledWith(
-        "/data",
+        resolve("/data"),
         null,
         null,
         null,
@@ -137,7 +138,7 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/data", noIgnore: true });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        "/data",
+        resolve("/data"),
         null,
         null,
         null,
@@ -155,7 +156,7 @@ describe("DirSQL", () => {
       const db = new DirSQL("/cfg.toml");
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/cfg.toml"],
@@ -178,7 +179,7 @@ describe("DirSQL", () => {
         "/b.toml",
       ]);
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/a.toml", "/b.toml"],
@@ -190,15 +191,13 @@ describe("DirSQL", () => {
       );
     });
 
-    it("forwards a null root when only a config is given (#540: the config never sets the root)", async () => {
-      // The SDK never derives an index root from the config file's location;
-      // it forwards `root: null` and the core defaults to the process cwd.
+    it("roots at the cwd, not the config's directory, when only a config is given", async () => {
       const openAsync = installFakeCore(makeInner());
       vi.mocked(resolveConfigsExtensionSpecs).mockReturnValue(null);
       const db = new DirSQL({ config: "/elsewhere/.dirsql.toml" });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/elsewhere/.dirsql.toml"],
@@ -208,6 +207,29 @@ describe("DirSQL", () => {
         false,
         null,
       );
+    });
+
+    describe("with a stubbed cwd", () => {
+      afterEach(() => vi.restoreAllMocks());
+
+      it("resolves a relative root against the cwd at construction", async () => {
+        const openAsync = installFakeCore(makeInner());
+        const cwd = vi.spyOn(process, "cwd").mockReturnValue(resolve("/built"));
+        const db = new DirSQL({ root: "tree" });
+        cwd.mockReturnValue(resolve("/moved"));
+        await db.ready;
+        expect(openAsync.mock.calls[0]?.[0]).toBe(resolve("/built", "tree"));
+      });
+
+      it("leaves an unreadable cwd for the core to report", async () => {
+        const openAsync = installFakeCore(makeInner());
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: uv_cwd");
+        });
+        const db = new DirSQL({ root: "tree" });
+        await db.ready;
+        expect(openAsync.mock.calls[0]?.[0]).toBe("tree");
+      });
     });
 
     it("appends resolved config extensions and suppresses the core's own loading", async () => {
@@ -224,7 +246,7 @@ describe("DirSQL", () => {
         "/cfg/.dirsql.toml",
       ]);
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/cfg/.dirsql.toml"],
@@ -247,7 +269,7 @@ describe("DirSQL", () => {
       const db = new DirSQL("/cfg/.dirsql.toml");
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/cfg/.dirsql.toml"],
@@ -268,7 +290,7 @@ describe("DirSQL", () => {
       });
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
-        null,
+        process.cwd(),
         null,
         null,
         ["/cfg/.dirsql.toml"],

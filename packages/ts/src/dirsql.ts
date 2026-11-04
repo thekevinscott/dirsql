@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
 import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
@@ -193,6 +194,13 @@ export class DirSQL {
         : typeof options.config === "string"
           ? [options.config]
           : options.config;
+    // Read now: the core is built after the constructor returns, and a chdir
+    // in between must not move the root. An unreadable cwd stays the core's
+    // error, rejecting `ready` like any other.
+    let root = options.root ?? null;
+    try {
+      root = resolve(root ?? process.cwd());
+    } catch {}
     const Ctor = getCore().DirSQL;
     // Extension paths (possibly bare package names) are resolved inside the
     // promise chain so a resolution error rejects `ready` rather than
@@ -217,7 +225,7 @@ export class DirSQL {
             ? [...(extensions ?? []), ...configExtensions]
             : extensions;
         return Ctor.openAsync(
-          options.root ?? null,
+          root,
           options.tables ?? null,
           options.ignore ?? null,
           configPaths.length > 0 ? configPaths : null,
