@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fresh-declared-repros query-contract fanout",
+  "ran_at": 1793828673,
+  "exit_code": 0,
+  "commit": "f701c789b97e1a9a2aa8fe0778c21ebf23cb0661",
+  "branch": "bot/1616-watch-batch-isolation-1104"
+}
