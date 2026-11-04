@@ -83,7 +83,36 @@ const READERS: usize = 8;
 /// `size` is what the row's stat reported, so the buffer is sized without
 /// stat'ing again; a file that has grown since is still read whole.
 fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    read_text_with(path, size, |path| File::open(path))
+    read_text_with(path, size, open_regular)
+}
+
+/// Open `path` only if what is there now is a regular file. The scan saw a
+/// regular file, but the path can have been replaced since: a FIFO would block
+/// the open and a device like `/dev/zero` never ends. The check is on the open
+/// handle, so nothing can be swapped in between it and the read.
+fn open_regular(path: &Path) -> io::Result<File> {
+    let file = open_nonblocking(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
+}
+
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> io::Result<File> {
+    File::open(path)
 }
 
 fn read_text_with<R: Read>(
@@ -835,6 +864,37 @@ mod tests {
 
         assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
+    fn open_regular_opens_a_regular_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        assert!(open_regular(&path).is_ok());
+    }
+
+    #[test]
+    fn open_regular_refuses_a_directory() {
+        let err = open_regular(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap_err();
+
+        if cfg!(unix) {
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_refuses_a_device() {
+        let err = open_regular(Path::new("/dev/null")).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_regular_fails_on_a_missing_path() {
+        let err = open_regular(Path::new("/no/such/dirsql/path")).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
