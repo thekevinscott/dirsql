@@ -9,7 +9,8 @@ another origin can reach it only after that opt-in.
 ## `POST /query`
 
 Run a read-only SQL query — statements SQLite classifies as writes are
-rejected. That rule governs SQL against the index; dirsql separately never
+rejected, as are `BEGIN`, `SAVEPOINT` and `PRAGMA` setters, which would
+otherwise change every client's later queries. That rule governs SQL against the index; dirsql separately never
 modifies the files it indexes, which is
 [permanent by design](../explanation#read-only-by-design). Request body is
 JSON:

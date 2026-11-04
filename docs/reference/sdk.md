@@ -321,6 +321,10 @@ db.query_with(
   This is the query-layer half of dirsql's broader guarantee that it never
   modifies your files — see
   [Read-only by design](../explanation#read-only-by-design).
+- **No session state.** `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`,
+  `RELEASE`, and any `PRAGMA` that sets a value are rejected as not
+  authorized, so a statement returns the same rows whatever ran before it.
+  Reading pragmas (`PRAGMA table_info(t)`, `PRAGMA cache_size`) still work.
 - Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are
   excluded from `SELECT *` results; name them explicitly to see them.
 - **Column order.** Python row dicts are keyed in the order the SELECT list
