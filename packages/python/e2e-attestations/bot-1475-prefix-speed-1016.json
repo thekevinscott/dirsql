@@ -1,7 +1,7 @@
 {
   "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/stat_speed_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/repl_interactive_test.py tests/e2e/server_speed_test.py -q",
-  "ran_at": 1793727994,
+  "ran_at": 1793763290,
   "exit_code": 0,
-  "commit": "1404c15d5c3baf22a495ea5a700fe036f74c300d",
+  "commit": "80d1da9e6e85a68d69a48840dc58f00a09775b11",
   "branch": "bot/1475-prefix-speed-1016"
 }
