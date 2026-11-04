@@ -170,10 +170,10 @@ fn content_is_null_for_non_utf8_files() {
 #[test]
 fn content_over_the_length_limit_is_null_without_erroring_the_query() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("at_limit.txt"), "x".repeat(10)).unwrap();
-    fs::write(dir.path().join("over_limit.txt"), "x".repeat(11)).unwrap();
+    fs::write(dir.path().join("at_limit.txt"), "x".repeat(256)).unwrap();
+    fs::write(dir.path().join("over_limit.txt"), "x".repeat(257)).unwrap();
     let conn = Connection::open_in_memory().unwrap();
-    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, 10).unwrap();
+    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, 256).unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
     conn.execute_batch(&format!(
         "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '*', '', 'gitignore')",
