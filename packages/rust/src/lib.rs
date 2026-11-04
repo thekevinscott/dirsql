@@ -32,6 +32,7 @@ mod listing;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;
+mod params;
 #[doc(hidden)]
 #[doc(hidden)]
 pub mod parsed_vtab;
@@ -88,6 +89,7 @@ use thiserror::Error;
 pub use crate::config::ExtensionSpec as Extension;
 pub use crate::db::{ColumnInfo, DbError, QueryResult, TableInfo, Value};
 pub use crate::differ::RowEvent;
+pub use crate::params::Params;
 #[doc(hidden)]
 pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
 #[doc(hidden)]
@@ -603,9 +605,22 @@ impl DirSQL {
     /// [`QueryResult::columns`]. A [`Row`] is a `HashMap`, so a caller that
     /// renders columns in the order the user asked for needs this instead.
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
+        self.query_ordered_with(sql, &Params::default())
+    }
+
+    /// [`query`](Self::query), binding `params` to the statement's
+    /// placeholders. The values never enter the SQL text.
+    pub fn query_with(&self, sql: &str, params: &Params) -> Result<Vec<Row>> {
+        self.query_ordered_with(sql, params)
+            .map(|result| result.rows)
+    }
+
+    /// [`query_ordered`](Self::query_ordered), binding `params` as
+    /// [`query_with`](Self::query_with) does.
+    pub fn query_ordered_with(&self, sql: &str, params: &Params) -> Result<QueryResult> {
         let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_ordered(sql).map_err(map_db_error)
+        db.query_ordered_with(sql, params).map_err(map_db_error)
     }
 
     /// Turn off reading the named tables' files at query time, for a caller
@@ -766,9 +781,22 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
+        self.query_each_with(sql, &Params::default(), start, on_row)
+    }
+
+    /// [`query_each`](Self::query_each), binding `params` as
+    /// [`query_with`](Self::query_with) does.
+    pub fn query_each_with<S>(
+        &self,
+        sql: &str,
+        params: &Params,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
         let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_each(sql, start, on_row).map_err(map_db_error)
+        db.query_each_with(sql, params, start, on_row)
+            .map_err(map_db_error)
     }
 
     /// [`query_each`](Self::query_each) handing each row's cells as SQLite
@@ -782,7 +810,8 @@ impl DirSQL {
     ) -> Result<S> {
         let _fresh = self.refresh()?;
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_each_ref(sql, start, on_row).map_err(map_db_error)
+        db.query_each_ref(sql, &Params::default(), start, on_row)
+            .map_err(map_db_error)
     }
 
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
@@ -3432,9 +3461,15 @@ impl AsyncDirSQL {
     }
 
     pub async fn query(&self, sql: &str) -> Result<Vec<Row>> {
+        self.query_with(sql, &Params::default()).await
+    }
+
+    /// [`DirSQL::query_with`] off the async runtime's worker threads.
+    pub async fn query_with(&self, sql: &str, params: &Params) -> Result<Vec<Row>> {
         let db = self.sync()?;
         let sql = sql.to_string();
-        tokio::task::spawn_blocking(move || db.query(&sql))
+        let params = params.clone();
+        tokio::task::spawn_blocking(move || db.query_with(&sql, &params))
             .await
             .map_err(|e| DirSqlError::Lock(format!("join error: {e}")))?
     }
@@ -4809,6 +4844,75 @@ mod internal_tests {
         let (_dir, db) = simple_db();
         poison(&db.inner.db);
         let err = db.query("SELECT 1").unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    #[test]
+    fn query_with_binds_the_params() {
+        let (_dir, db) = simple_db();
+        let rows = db
+            .query_with(
+                "SELECT :n AS n",
+                &Params::Named(HashMap::from([("n".into(), Value::Integer(4))])),
+            )
+            .unwrap();
+        assert_eq!(rows, [HashMap::from([("n".into(), Value::Integer(4))])]);
+    }
+
+    #[test]
+    fn query_ordered_with_binds_the_params_in_projection_order() {
+        let (_dir, db) = simple_db();
+        let result = db
+            .query_ordered_with(
+                "SELECT ? AS b, ? AS a",
+                &Params::Positional(vec![Value::Integer(1), Value::Integer(2)]),
+            )
+            .unwrap();
+        assert_eq!(result.columns, ["b", "a"]);
+        assert_eq!(result.rows[0]["a"], Value::Integer(2));
+    }
+
+    #[test]
+    fn query_ordered_binds_no_params() {
+        let (_dir, db) = simple_db();
+        let err = db.query_ordered("SELECT ?").unwrap_err();
+        assert!(
+            matches!(err, DirSqlError::Core(DbError::Params(_))),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn query_each_with_binds_the_params() {
+        let (_dir, db) = simple_db();
+        let rows = db
+            .query_each_with(
+                "SELECT ? AS n",
+                &Params::Positional(vec![Value::Text("x".into())]),
+                |_| Vec::new(),
+                |rows, cells| rows.push(cells.to_vec()),
+            )
+            .unwrap();
+        assert_eq!(rows, [[Value::Text("x".into())]]);
+    }
+
+    #[test]
+    fn query_each_binds_no_params() {
+        let (_dir, db) = simple_db();
+        let err = db.query_each("SELECT ?", |_| (), |_, _| {}).unwrap_err();
+        assert!(
+            matches!(err, DirSqlError::Core(DbError::Params(_))),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn query_each_with_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.db);
+        let err = db
+            .query_each_with("SELECT 1", &Params::default(), |_| (), |_, _| {})
+            .unwrap_err();
         assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
@@ -6236,6 +6340,15 @@ mod internal_tests {
         adb.ready().await.unwrap();
         let rows = adb.query("SELECT 1 AS n").await.unwrap();
         assert_eq!(rows[0]["n"], Value::Integer(1));
+        let bound = adb
+            .query_with(
+                "SELECT ? AS n",
+                &Params::Positional(vec![Value::Integer(9)]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bound[0]["n"], Value::Integer(9));
+        assert!(adb.query("SELECT ?").await.is_err());
         assert!(adb.sync().unwrap().query("SELECT 1").is_ok());
         adb.start_watching().unwrap();
         assert!(

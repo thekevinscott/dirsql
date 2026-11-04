@@ -20,8 +20,8 @@
 
 use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
-    DirSQL as CoreDirSQL, Extension, PreparedBuild, QueryResult as CoreQueryResult, RawFileEvent,
-    Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
+    DirSQL as CoreDirSQL, Extension, Params, PreparedBuild, QueryResult as CoreQueryResult,
+    RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -321,18 +321,39 @@ impl DirSQL {
     ///
     /// Reads changed files on the JS thread, then runs the SQL on the libuv
     /// threadpool so the event loop stays free while it runs.
-    /// Returns a `Promise` in JS.
-    #[napi(ts_return_type = "Promise<Record<string, unknown>[]>")]
-    pub fn query(&self, sql: String) -> Result<AsyncTask<QueryTask>> {
+    /// Returns a `Promise` in JS. `params` binds to the statement's
+    /// placeholders: an array fills `?`, a plain object fills `:name` /
+    /// `@name` / `$name`.
+    #[napi(
+        ts_args_type = "sql: string, params?: unknown[] | Record<string, unknown> | null",
+        ts_return_type = "Promise<Record<string, unknown>[]>"
+    )]
+    pub fn query(
+        &self,
+        env: Env,
+        sql: String,
+        params: Option<Unknown<'_>>,
+    ) -> Result<AsyncTask<QueryTask>> {
+        let params = js_to_params(&env, params)?;
         let inner = self.read_changes()?;
-        Ok(AsyncTask::new(QueryTask { inner, sql }))
+        Ok(AsyncTask::new(QueryTask { inner, sql, params }))
     }
 
     /// [`query`](Self::query), plus the column order the SELECT list names.
-    #[napi(js_name = "queryOrdered", ts_return_type = "Promise<QueryResult>")]
-    pub fn query_ordered(&self, sql: String) -> Result<AsyncTask<QueryOrderedTask>> {
+    #[napi(
+        js_name = "queryOrdered",
+        ts_args_type = "sql: string, params?: unknown[] | Record<string, unknown> | null",
+        ts_return_type = "Promise<QueryResult>"
+    )]
+    pub fn query_ordered(
+        &self,
+        env: Env,
+        sql: String,
+        params: Option<Unknown<'_>>,
+    ) -> Result<AsyncTask<QueryOrderedTask>> {
+        let params = js_to_params(&env, params)?;
         let inner = self.read_changes()?;
-        Ok(AsyncTask::new(QueryOrderedTask { inner, sql }))
+        Ok(AsyncTask::new(QueryOrderedTask { inner, sql, params }))
     }
 
     /// Reads the files changed since the last query here, on the JS thread,
@@ -473,6 +494,7 @@ impl Task for OpenTask {
 pub struct QueryTask {
     inner: Option<CoreDirSQL>,
     sql: String,
+    params: Params,
 }
 
 impl Task for QueryTask {
@@ -484,7 +506,9 @@ impl Task for QueryTask {
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        let rows = inner.query(&self.sql).map_err(to_napi_err)?;
+        let rows = inner
+            .query_with(&self.sql, &self.params)
+            .map_err(to_napi_err)?;
         rows.iter().map(value_row_to_js).collect()
     }
 
@@ -520,6 +544,7 @@ fn query_result_to_js(result: &CoreQueryResult) -> Result<QueryResult> {
 pub struct QueryOrderedTask {
     inner: Option<CoreDirSQL>,
     sql: String,
+    params: Params,
 }
 
 impl Task for QueryOrderedTask {
@@ -531,7 +556,9 @@ impl Task for QueryOrderedTask {
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        let result = inner.query_ordered(&self.sql).map_err(to_napi_err)?;
+        let result = inner
+            .query_ordered_with(&self.sql, &self.params)
+            .map_err(to_napi_err)?;
         query_result_to_js(&result)
     }
 
@@ -775,24 +802,27 @@ fn rows_from_js(result: Unknown<'_>) -> Result<Vec<Row>> {
         .collect()
 }
 
+/// A JS number as SQLite stores it: an integral value within the `i64` range
+/// is an INTEGER, anything else a REAL.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "the range guard plus Rust's saturating float-to-int cast keep the conversion \
+              defined; JS integers beyond 2^53 already lost precision in the double"
+)]
+fn number_to_value(n: f64) -> Value {
+    if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+        Value::Integer(n as i64)
+    } else {
+        Value::Real(n)
+    }
+}
+
 fn js_to_value(val: Unknown<'_>) -> Result<Value> {
     match val.get_type()? {
         ValueType::Undefined | ValueType::Null => Ok(Value::Null),
         ValueType::Boolean => Ok(Value::Integer(i64::from(bool::from_unknown(val)?))),
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            reason = "the range guard plus Rust's saturating float-to-int cast keep the conversion \
-                      defined; JS integers beyond 2^53 already lost precision in the double"
-        )]
-        ValueType::Number => {
-            let n = f64::from_unknown(val)?;
-            if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
-                Ok(Value::Integer(n as i64))
-            } else {
-                Ok(Value::Real(n))
-            }
-        }
+        ValueType::Number => Ok(number_to_value(f64::from_unknown(val)?)),
         ValueType::String => Ok(Value::Text(String::from_unknown(val)?)),
         // BigInt: an INTEGER within i64, or an explicit range error. Never a
         // silent TEXT fallback (the lossy behavior this replaces).
@@ -811,6 +841,123 @@ fn js_to_value(val: Unknown<'_>) -> Result<Value> {
             None => Value::Text(coerce_to_string(val)?),
         }),
     }
+}
+
+/// Why a JS value cannot bind, as the JS error class it surfaces as.
+enum ParamError {
+    Type(String),
+    Range(String),
+    Js(Error),
+}
+
+impl From<Error> for ParamError {
+    fn from(e: Error) -> Self {
+        ParamError::Js(e)
+    }
+}
+
+/// The bind parameters a query's `params` argument names, or a thrown
+/// `TypeError` / `RangeError` when they cannot bind.
+fn js_to_params(env: &Env, params: Option<Unknown<'_>>) -> Result<Params> {
+    let message = match params.map(|p| parse_params(env, p)).transpose() {
+        Ok(params) => return Ok(params.unwrap_or_default()),
+        Err(ParamError::Js(e)) => return Err(e),
+        Err(ParamError::Type(message)) => env.throw_type_error(&message, None).map(|()| message),
+        Err(ParamError::Range(message)) => env.throw_range_error(&message, None).map(|()| message),
+    }?;
+    Err(Error::new(Status::PendingException, message))
+}
+
+fn parse_params(env: &Env, params: Unknown<'_>) -> std::result::Result<Params, ParamError> {
+    if params.is_array()? {
+        let array = Array::from_unknown(params)?;
+        let values = (0..array.len())
+            .map(|i| param_to_value(array.get_element::<Unknown<'_>>(i)?))
+            .collect::<std::result::Result<_, _>>()?;
+        return Ok(Params::Positional(values));
+    }
+    if is_plain_object(env, params)? {
+        let object = Object::from_unknown(params)?;
+        let mut named = HashMap::new();
+        for key in Object::keys(&object)? {
+            let value = object.get_named_property::<Unknown<'_>>(&key)?;
+            named.insert(key, param_to_value(value)?);
+        }
+        return Ok(Params::Named(named));
+    }
+    Err(ParamError::Type(format!(
+        "params must be an array or a plain object, not {}",
+        js_type_name(params)?
+    )))
+}
+
+/// An object literal or `Object.create(null)`: the only objects whose keys
+/// are unambiguously parameter names.
+fn is_plain_object(env: &Env, val: Unknown<'_>) -> Result<bool> {
+    if val.get_type()? != ValueType::Object {
+        return Ok(false);
+    }
+    let proto = Object::from_unknown(val)?.get_prototype()?;
+    if proto.get_type()? == ValueType::Null {
+        return Ok(true);
+    }
+    let object_proto: Unknown<'_> = env
+        .get_global()?
+        .get_named_property::<Unknown<'_>>("Object")?
+        .coerce_to_object()?
+        .get_named_property("prototype")?;
+    env.strict_equals(proto, object_proto)
+}
+
+fn param_to_value(val: Unknown<'_>) -> std::result::Result<Value, ParamError> {
+    Ok(match val.get_type()? {
+        ValueType::Null => Value::Null,
+        ValueType::Boolean => Value::Integer(i64::from(bool::from_unknown(val)?)),
+        ValueType::Number => number_to_value(f64::from_unknown(val)?),
+        ValueType::String => Value::Text(String::from_unknown(val)?),
+        ValueType::BigInt => match BigInt::from_unknown(val)?.get_i64() {
+            (i, true) => Value::Integer(i),
+            _ => {
+                return Err(ParamError::Range(format!(
+                    "BigInt {} exceeds the 64-bit signed range dirsql can store",
+                    coerce_to_string(val)?
+                )));
+            }
+        },
+        _ => match u8_array_bytes(val)? {
+            Some(bytes) => Value::Blob(bytes),
+            None => {
+                return Err(ParamError::Type(format!(
+                    "unsupported parameter type: {}",
+                    js_type_name(val)?
+                )));
+            }
+        },
+    })
+}
+
+/// `typeof value`, except that an object reports its constructor's name
+/// (`Array`, `Map`, `Date`), as a Python error names the value's type.
+fn js_type_name(val: Unknown<'_>) -> Result<String> {
+    Ok(match val.get_type()? {
+        ValueType::Undefined => "undefined".into(),
+        ValueType::Null => "null".into(),
+        ValueType::Boolean => "boolean".into(),
+        ValueType::Number => "number".into(),
+        ValueType::String => "string".into(),
+        ValueType::Symbol => "symbol".into(),
+        ValueType::Function => "function".into(),
+        ValueType::BigInt => "bigint".into(),
+        ValueType::Object => Object::from_unknown(val)?
+            .get::<Unknown<'_>>("constructor")?
+            .filter(|c| matches!(c.get_type(), Ok(ValueType::Function)))
+            .map(|c| c.coerce_to_object()?.get::<String>("name"))
+            .transpose()?
+            .flatten()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "object".into()),
+        _ => "object".into(),
+    })
 }
 
 /// `String(value)` semantics.

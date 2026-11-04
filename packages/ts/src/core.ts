@@ -2,6 +2,7 @@
 
 import type {
   ExtensionSpec,
+  QueryParams,
   QueryResult,
   RowEvent,
   ScanFailure,
@@ -11,8 +12,8 @@ import type { TableDef } from "./table.js";
 
 // Shape of the napi-rs-exposed class. The `DirSQL` wrapper drives this.
 export interface NativeDirSQL {
-  query(sql: string): Promise<Record<string, unknown>[]>;
-  queryOrdered(sql: string): Promise<QueryResult>;
+  query(sql: string, params?: QueryParams): Promise<Record<string, unknown>[]>;
+  queryOrdered(sql: string, params?: QueryParams): Promise<QueryResult>;
   // Synchronous so that `watch()` can return a stream whose watcher is live.
   startWatcher(): void;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;

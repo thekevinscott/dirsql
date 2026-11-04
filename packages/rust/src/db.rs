@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
 use crate::infer::JsonRow;
+use crate::params::Params;
 use crate::parsed_vtab;
 use crate::path_table::{self, DEFAULT_IGNORES, PathTable, Resolution};
 use crate::scanner;
@@ -45,6 +46,9 @@ pub enum DbError {
 
     #[error("{}", .0.message)]
     ForeignKey(crate::foreign_key::ForeignKeyViolation),
+
+    #[error("{0}")]
+    Params(String),
 }
 
 /// The reserved namespace for dirsql's internal bookkeeping tables. Every
@@ -1463,6 +1467,12 @@ impl Db {
     /// [`QueryResult::columns`]; a renderer that re-derives its columns from
     /// row keys prints them alphabetically instead.
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
+        self.query_ordered_with(sql, &Params::default())
+    }
+
+    /// [`query_ordered`](Self::query_ordered), binding `params` to the
+    /// statement's placeholders.
+    pub fn query_ordered_with(&self, sql: &str, params: &Params) -> Result<QueryResult> {
         // Bracket the whole statement, prepare included: a worker-backed
         // function called on every row makes this the slowest thing dirsql
         // does, and the guard is what erases the counter before the caller
@@ -1471,13 +1481,13 @@ impl Db {
         let _scope = self.scope.enter();
 
         if self.batched.is_empty() {
-            return self.run_statement(sql);
+            return self.run_statement(sql, params);
         }
         let _collected = ClearOnDrop(&self.batched);
         for worker in &self.batched {
             worker.begin_collect().map_err(worker_error)?;
         }
-        let collected = self.run_statement(sql);
+        let collected = self.run_statement(sql, params);
         let mut invoked = false;
         for worker in &self.batched {
             invoked |= worker.end_collect().map_err(worker_error)?;
@@ -1485,7 +1495,7 @@ impl Db {
         if !invoked {
             return collected;
         }
-        self.run_statement(sql)
+        self.run_statement(sql, params)
     }
 
     /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
@@ -1495,10 +1505,22 @@ impl Db {
         &self,
         sql: &str,
         start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        self.query_each_with(sql, &Params::default(), start, on_row)
+    }
+
+    /// [`query_each`](Self::query_each), binding `params` to the statement's
+    /// placeholders.
+    pub fn query_each_with<S>(
+        &self,
+        sql: &str,
+        params: &Params,
+        start: impl FnOnce(&[String]) -> S,
         mut on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
         let mut cells = Vec::new();
-        self.query_each_ref(sql, start, |state, sources| {
+        self.query_each_ref(sql, params, start, |state, sources| {
             cells.resize(sources.len(), Value::Null);
             for (cell, source) in cells.iter_mut().zip(sources) {
                 fill_cell(cell, *source);
@@ -1512,13 +1534,14 @@ impl Db {
     pub(crate) fn query_each_ref<S>(
         &self,
         sql: &str,
+        params: &Params,
         start: impl FnOnce(&[String]) -> S,
         mut on_row: impl FnMut(&mut S, &[ValueRef<'_>]),
     ) -> Result<S> {
         if !self.batched.is_empty() {
             // A batched worker may force a second run, so the rows of the
             // first are not final until it ends.
-            let result = self.query_ordered(sql)?;
+            let result = self.query_ordered_with(sql, params)?;
             let mut state = start(&result.columns);
             for row in &result.rows {
                 let cells: Vec<ValueRef<'_>> = result
@@ -1537,7 +1560,8 @@ impl Db {
         if self.read_directly(sql, &reads, &mut |cells| on_row(&mut state, cells)) {
             return Ok(state);
         }
-        let mut rows = stmt.query([])?;
+        bind(&mut stmt, params)?;
+        let mut rows = stmt.raw_query();
         let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
             let mut cells = recycled(spare);
@@ -1552,20 +1576,18 @@ impl Db {
 
     /// Prepare and run one read-only statement, registering the path-tables
     /// it names along the way.
-    fn run_statement(&self, sql: &str) -> Result<QueryResult> {
+    fn run_statement(&self, sql: &str, params: &Params) -> Result<QueryResult> {
         let (mut stmt, column_names) = self.prepare_statement(sql)?;
-        let rows = stmt.query_map([], |row| {
+        bind(&mut stmt, params)?;
+        let mut rows = stmt.raw_query();
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
             let mut map = HashMap::new();
             for (i, name) in column_names.iter().enumerate() {
                 let val: rusqlite::types::Value = row.get(i)?;
                 map.insert(name.clone(), Value::from(val));
             }
-            Ok(map)
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
+            results.push(map);
         }
         Ok(QueryResult {
             columns: column_names,
@@ -1955,6 +1977,20 @@ fn scanned_columns(program: &[Op]) -> Option<Vec<usize>> {
         .flatten()
 }
 
+/// Bind `params` to `stmt`'s placeholders, refusing values that do not fit
+/// them.
+fn bind(stmt: &mut rusqlite::Statement<'_>, params: &Params) -> Result<()> {
+    let names: Vec<Option<String>> = (1..=stmt.parameter_count())
+        .map(|i| stmt.parameter_name(i).map(str::to_owned))
+        .collect();
+    let names: Vec<Option<&str>> = names.iter().map(Option::as_deref).collect();
+    let values = crate::params::plan(&names, params).map_err(DbError::Params)?;
+    for (i, value) in values.into_iter().enumerate() {
+        stmt.raw_bind_parameter(i + 1, value)?;
+    }
+    Ok(())
+}
+
 /// `cells` emptied and free to borrow anew, keeping its allocation.
 fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
     cells.clear();
@@ -2305,8 +2341,13 @@ mod tests {
     }
 
     fn folded_refs(db: &Db, sql: &str) -> (Vec<String>, Vec<Vec<Value>>) {
+        folded_refs_with(db, sql, &Params::default())
+    }
+
+    fn folded_refs_with(db: &Db, sql: &str, params: &Params) -> (Vec<String>, Vec<Vec<Value>>) {
         db.query_each_ref(
             sql,
+            params,
             |columns| (columns.to_vec(), Vec::new()),
             |(_, rows), cells| rows.push(cells.iter().map(owned).collect()),
         )
@@ -2336,6 +2377,7 @@ mod tests {
         let held = db
             .query_each_ref(
                 "SELECT CAST(x'ff41' AS TEXT) AS t",
+                &Params::default(),
                 |_| Vec::new(),
                 |held: &mut Vec<Vec<u8>>, cells| match cells {
                     [ValueRef::Text(bytes)] => held.push(bytes.to_vec()),
@@ -2372,11 +2414,138 @@ mod tests {
     }
 
     #[test]
+    fn query_ordered_with_binds_a_parameter() {
+        let db = titled_docs(&["a", "b"]);
+
+        let result = db
+            .query_ordered_with(
+                "SELECT title FROM docs WHERE title = ?",
+                &Params::Positional(vec![Value::Text("b".into())]),
+            )
+            .unwrap();
+
+        assert_eq!(texts(&result, "title"), [Value::Text("b".into())]);
+    }
+
+    #[test]
+    fn query_ordered_with_refuses_params_that_do_not_fit() {
+        let db = titled_docs(&["a"]);
+
+        let err = db
+            .query_ordered_with("SELECT ?", &Params::Positional(Vec::new()))
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::Params(_)), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "the query has 1 parameter(s), but 0 value(s) were given"
+        );
+    }
+
+    #[test]
+    fn query_refuses_an_unbound_placeholder() {
+        let db = titled_docs(&["a"]);
+
+        let err = db.query("SELECT ?").unwrap_err();
+
+        assert!(matches!(err, DbError::Params(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn query_ordered_with_binds_both_runs_of_a_batched_function() {
+        let mut db = titled_docs(&["a", "b", "c"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"results": [{"ok": "C"}]}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let result = db
+            .query_ordered_with(
+                "SELECT up(title) AS v FROM docs WHERE title != :skip ORDER BY title",
+                &Params::Named(HashMap::from([("skip".into(), Value::Text("b".into()))])),
+            )
+            .unwrap();
+
+        assert_eq!(
+            texts(&result, "v"),
+            [Value::Text("A".into()), Value::Text("C".into())]
+        );
+    }
+
+    #[test]
+    fn query_each_with_folds_the_bound_rows() {
+        let db = titled_docs(&["a", "b"]);
+
+        let rows = db
+            .query_each_with(
+                "SELECT ? AS n, title FROM docs WHERE title = ?",
+                &Params::Positional(vec![Value::Integer(5), Value::Text("a".into())]),
+                |_| Vec::new(),
+                |rows, cells| rows.push(cells.to_vec()),
+            )
+            .unwrap();
+
+        assert_eq!(rows, [[Value::Integer(5), Value::Text("a".into())]]);
+    }
+
+    #[test]
+    fn query_each_ref_binds_a_parameter() {
+        let db = titled_docs(&["a", "b"]);
+
+        let (_, rows) = folded_refs_with(
+            &db,
+            "SELECT title FROM docs WHERE title = ?",
+            &Params::Positional(vec![Value::Text("b".into())]),
+        );
+
+        assert_eq!(rows, [[Value::Text("b".into())]]);
+    }
+
+    #[test]
+    fn query_each_ref_refuses_params_that_do_not_fit() {
+        let db = titled_docs(&["a"]);
+
+        let err = db
+            .query_each_ref(
+                "SELECT title FROM docs WHERE title = ?",
+                &Params::default(),
+                |_| (),
+                |_, _| {},
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::Params(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn query_each_ref_binds_through_a_batched_function() {
+        let mut db = titled_docs(&["a", "b", "c"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"results": [{"ok": "C"}]}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let (_, rows) = folded_refs_with(
+            &db,
+            "SELECT up(title) AS v FROM docs WHERE title != ? ORDER BY title",
+            &Params::Positional(vec![Value::Text("b".into())]),
+        );
+
+        assert_eq!(rows, [[Value::Text("A".into())], [Value::Text("C".into())]]);
+    }
+
+    #[test]
     fn query_each_ref_refuses_a_write() {
         let db = titled_docs(&["a"]);
 
         let err = db
-            .query_each_ref("DELETE FROM docs", |_| (), |_, _| {})
+            .query_each_ref("DELETE FROM docs", &Params::default(), |_| (), |_, _| {})
             .unwrap_err();
 
         assert!(matches!(err, DbError::WriteForbidden));

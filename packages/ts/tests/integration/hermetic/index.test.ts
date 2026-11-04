@@ -173,7 +173,7 @@ describe("DirSQL delegation", () => {
     // No explicit `await db.ready` — query must wait for the scan itself.
     const sql = "SELECT name FROM users WHERE age > 30 -- comment";
     expect(await db.query(sql)).toEqual([{ name: "ada" }]);
-    expect(inner.query).toHaveBeenCalledWith(sql);
+    expect(inner.query).toHaveBeenCalledWith(sql, undefined);
   });
 
   it("queryOrdered awaits ready then forwards the SQL untouched", async () => {
@@ -188,7 +188,19 @@ describe("DirSQL delegation", () => {
     const db = new DirSQL({ root: "/data" });
     const sql = "SELECT name, age FROM users";
     expect(await db.queryOrdered(sql)).toEqual(result);
-    expect(inner.queryOrdered).toHaveBeenCalledWith(sql);
+    expect(inner.queryOrdered).toHaveBeenCalledWith(sql, undefined);
+  });
+
+  it("query and queryOrdered forward bind params untouched", async () => {
+    const inner = makeInner();
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    const sql = "SELECT path FROM './*.json' WHERE content ->> 'a' = :a";
+    const params = { a: "it's" };
+    await db.query(sql, params);
+    await db.queryOrdered("SELECT ?", ["x"]);
+    expect(inner.query).toHaveBeenCalledWith(sql, params);
+    expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT ?", ["x"]);
   });
 
   it("forwards a path-table name without rewriting it", async () => {
@@ -199,7 +211,7 @@ describe("DirSQL delegation", () => {
     const db = new DirSQL({ root: "/data" });
     const sql = "SELECT basename FROM './docs/*.md'";
     await db.query(sql);
-    expect(inner.query).toHaveBeenCalledWith(sql);
+    expect(inner.query).toHaveBeenCalledWith(sql, undefined);
   });
 
   it("startWatcher and pollEvents delegate to the core instance", async () => {

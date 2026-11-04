@@ -141,6 +141,17 @@ describe("NativeDirSQL interface", () => {
     expect(await queryOrdered("SELECT b, a")).toEqual(result);
   });
 
+  it("takes bind params on query() and queryOrdered()", async () => {
+    const query: NativeDirSQL["query"] = vi.fn().mockResolvedValue([]);
+    const queryOrdered: NativeDirSQL["queryOrdered"] = vi
+      .fn()
+      .mockResolvedValue({ columns: [], rows: [] });
+    await query("SELECT ?", [1]);
+    await queryOrdered("SELECT :a", { a: 1 });
+    expect(query).toHaveBeenCalledWith("SELECT ?", [1]);
+    expect(queryOrdered).toHaveBeenCalledWith("SELECT :a", { a: 1 });
+  });
+
   it("includes close() method for cleanup (#598)", () => {
     const instance = {
       query: vi.fn().mockResolvedValue([]),

@@ -13,10 +13,13 @@
 #[cfg(feature = "extension-module")]
 mod python {
     use ::dirsql::extension_resolution::{self, ConfigSource, PlanEntry};
-    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, flatten_row_event};
-    use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyValueError};
+    use ::dirsql::{DirSQL, Extension, Params, Row, RowEvent, Table, Value, flatten_row_event};
+    use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError};
     use pyo3::prelude::*;
-    use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
+    use pyo3::types::{
+        PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PySequence,
+        PyString,
+    };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -191,10 +194,17 @@ mod python {
             Ok(Self { inner })
         }
 
-        fn query(&self, py: Python<'_>, sql: String) -> PyResult<Py<PyList>> {
+        #[pyo3(signature = (sql, params=None))]
+        fn query(
+            &self,
+            py: Python<'_>,
+            sql: String,
+            params: Option<Bound<'_, PyAny>>,
+        ) -> PyResult<Py<PyList>> {
+            let params = py_to_params(params.as_ref())?;
             let db = self.inner.clone();
             let result = py
-                .detach(move || db.query_ordered(&sql))
+                .detach(move || db.query_ordered_with(&sql, &params))
                 .map_err(to_py_err)?;
 
             let list = PyList::empty(py);
@@ -371,6 +381,69 @@ mod python {
     }
 
     /// The range-error message for a Python int that does not fit `i64`.
+    fn py_to_params(params: Option<&Bound<'_, PyAny>>) -> PyResult<Params> {
+        let Some(params) = params.filter(|p| !p.is_none()) else {
+            return Ok(Params::default());
+        };
+        // A str or bytes is a sequence too; binding it character by
+        // character is never what the caller meant.
+        let textual = params.is_instance_of::<PyString>()
+            || params.is_instance_of::<PyBytes>()
+            || params.is_instance_of::<PyByteArray>();
+        if !textual {
+            if let Ok(mapping) = params.cast::<PyMapping>() {
+                let mut named = HashMap::new();
+                for item in mapping.items()?.iter() {
+                    let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = item.extract()?;
+                    let key: String = key
+                        .extract()
+                        .map_err(|_| PyTypeError::new_err("params mapping keys must be str"))?;
+                    named.insert(key, param_to_value(&value)?);
+                }
+                return Ok(Params::Named(named));
+            }
+            if let Ok(sequence) = params.cast::<PySequence>() {
+                let values = sequence
+                    .try_iter()?
+                    .map(|value| param_to_value(&value?))
+                    .collect::<PyResult<Vec<_>>>()?;
+                return Ok(Params::Positional(values));
+            }
+        }
+        Err(PyTypeError::new_err(format!(
+            "params must be a sequence or a mapping, not {}",
+            params.get_type().name()?
+        )))
+    }
+
+    fn param_to_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+        if value.is_none() {
+            return Ok(Value::Null);
+        }
+        if value.is_instance_of::<PyBool>() {
+            return Ok(Value::Integer(i64::from(value.extract::<bool>()?)));
+        }
+        if value.is_instance_of::<PyInt>() {
+            return value
+                .extract::<i64>()
+                .map(Value::Integer)
+                .map_err(|_| PyOverflowError::new_err(int_overflow_message(&value.to_string())));
+        }
+        if value.is_instance_of::<PyFloat>() {
+            return Ok(Value::Real(value.extract()?));
+        }
+        if value.is_instance_of::<PyString>() {
+            return Ok(Value::Text(value.extract()?));
+        }
+        if value.is_instance_of::<PyBytes>() || value.is_instance_of::<PyByteArray>() {
+            return Ok(Value::Blob(value.extract()?));
+        }
+        Err(PyTypeError::new_err(format!(
+            "unsupported parameter type: {}",
+            value.get_type().name()?
+        )))
+    }
+
     fn int_overflow_message(repr: &str) -> String {
         format!("integer {repr} exceeds the 64-bit signed range dirsql can store")
     }

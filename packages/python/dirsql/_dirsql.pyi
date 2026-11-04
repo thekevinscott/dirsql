@@ -9,7 +9,7 @@ Whenever ``src/lib.rs`` adds, renames, or removes a ``#[pyclass]``,
 same PR -- and ``PARITY.md`` is the canonical reminder.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from os import PathLike
 from typing import Any, TypedDict
 
@@ -84,7 +84,9 @@ class DirSQL:
         extensions: list[ExtensionSpec] | None = None,
         suppress_config_extensions: bool = False,
     ) -> None: ...
-    def query(self, sql: str) -> list[Row]: ...
+    def query(
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None
+    ) -> list[Row]: ...
     def scan_failures(self) -> list[ScanFailure]: ...
     def _start_watcher(self) -> None: ...
     def _poll_events(self, timeout_ms: int) -> list[RowEvent]: ...

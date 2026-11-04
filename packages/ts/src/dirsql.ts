@@ -90,6 +90,14 @@ export interface RowEvent {
   filePath?: string | null;
 }
 
+/**
+ * Bind parameters for {@link DirSQL.query}: an array fills `?` placeholders
+ * in order; a plain object fills `:name`, `@name` and `$name` placeholders,
+ * keyed by the name without its prefix. Values bind as SQLite's native types:
+ * `null`, `number`, `bigint`, `boolean`, `string`, `Buffer` / `Uint8Array`.
+ */
+export type QueryParams = readonly unknown[] | Record<string, unknown> | null;
+
 /** The result of {@link DirSQL.queryOrdered}. */
 export interface QueryResult {
   /**
@@ -241,10 +249,21 @@ export class DirSQL {
    * files that changed since the last query, so the rows match the disk.
    * The query itself runs on the libuv threadpool, so the JS event loop
    * stays responsive even for large result sets or long-running queries.
+   *
+   * `params` binds to the statement's placeholders through SQLite, so the
+   * values never enter the SQL text:
+   *
+   * ```ts
+   * await db.query("SELECT path FROM './*.json' WHERE content ->> 'a' = :a", { a: text });
+   * await db.query("SELECT * FROM notes WHERE author = ?", ["ann"]);
+   * ```
    */
-  async query(sql: string): Promise<Record<string, unknown>[]> {
+  async query(
+    sql: string,
+    params?: QueryParams,
+  ): Promise<Record<string, unknown>[]> {
     await this.ready;
-    return this._inner.query(sql);
+    return this._inner.query(sql, params);
   }
 
   /**
@@ -256,9 +275,9 @@ export class DirSQL {
    * // columns: ["path", "size"]
    * ```
    */
-  async queryOrdered(sql: string): Promise<QueryResult> {
+  async queryOrdered(sql: string, params?: QueryParams): Promise<QueryResult> {
     await this.ready;
-    return this._inner.queryOrdered(sql);
+    return this._inner.queryOrdered(sql, params);
   }
 
   /**

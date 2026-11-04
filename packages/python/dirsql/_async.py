@@ -207,8 +207,12 @@ class DirSQL:
         if self._init_error is not None:
             raise self._init_error
 
-    async def query(self, sql):
+    async def query(self, sql, params=None):
         """Execute a SQL query asynchronously.
+
+        ``params`` binds values to the statement's placeholders through
+        SQLite, never into the SQL text: a sequence fills ``?`` placeholders
+        in order, a mapping fills ``:name`` placeholders by name.
 
         Awaits :meth:`ready` first, so calling ``query`` before an explicit
         ``await db.ready()`` waits for the background scan (and re-raises any
@@ -217,7 +221,7 @@ class DirSQL:
         await self.ready()
         db = self._db
         assert db is not None  # ready() returned, so _init_bg set _db
-        return await asyncio.to_thread(db.query, sql)
+        return await asyncio.to_thread(db.query, sql, params)
 
     async def scan_failures(self):
         """The files the initial scan could not index.
