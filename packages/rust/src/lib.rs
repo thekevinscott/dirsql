@@ -640,15 +640,17 @@ impl DirSQL {
         self.reconcile(&mut state)
     }
 
-    /// Bring every named table in line with the files on disk now, and hold
-    /// the index still until the returned guard drops.
-    fn refresh(&self) -> Result<Option<MutexGuard<'_, FreshState>>> {
-        if self.inner.groups.is_empty() || !self.inner.fresh_reads.load(Ordering::SeqCst) {
-            return Ok(None);
-        }
+    /// Hold the index still until the returned guard drops, first bringing
+    /// every named table in line with the files on disk when fresh reads are
+    /// on. A watch batch releases the database between statements inside its
+    /// transaction, so a query that took only the database could read it
+    /// half applied.
+    fn refresh(&self) -> Result<MutexGuard<'_, FreshState>> {
         let mut state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
-        self.reconcile(&mut state)?;
-        Ok(Some(state))
+        if !self.inner.groups.is_empty() && self.inner.fresh_reads.load(Ordering::SeqCst) {
+            self.reconcile(&mut state)?;
+        }
+        Ok(state)
     }
 
     /// Walk each anchor, read every file whose stat says it may differ from
@@ -7749,6 +7751,16 @@ mod internal_tests {
         assert_eq!(row_names(&db), vec!["one"]);
         db.set_fresh_reads(true);
         assert_eq!(row_names(&db), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn a_query_with_fresh_reads_off_still_holds_the_index_still() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.set_fresh_reads(false);
+        let held = db.refresh().unwrap();
+        assert!(db.inner.fresh.try_lock().is_err());
+        drop(held);
+        assert!(db.inner.fresh.try_lock().is_ok());
     }
 
     #[test]
