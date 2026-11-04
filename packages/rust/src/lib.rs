@@ -5024,11 +5024,13 @@ mod internal_tests {
 
     #[test]
     fn resolve_explicit_root_is_used_verbatim() {
-        let resolved = DirSQL::builder()
-            .root("/some/explicit/root")
-            .resolve()
-            .unwrap();
-        assert_eq!(resolved.root, PathBuf::from("/some/explicit/root"));
+        let explicit = if cfg!(windows) {
+            r"C:\some\explicit\root"
+        } else {
+            "/some/explicit/root"
+        };
+        let resolved = DirSQL::builder().root(explicit).resolve().unwrap();
+        assert_eq!(resolved.root, PathBuf::from(explicit));
     }
 
     #[test]
