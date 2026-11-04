@@ -72,6 +72,31 @@ const INTERNAL_TABLE_DENIED_MSG: &str = "not authorized: dirsql's internal bookk
 const ATTACH_DENIED_MSG: &str = "not authorized: query() does not permit ATTACH or DETACH; \
      attaching external databases is disabled on this surface";
 
+/// The message carried by [`DbError::Unauthorized`] when `query()` rejects a
+/// statement that changes the connection's session state.
+const SESSION_STATE_DENIED_MSG: &str = "not authorized: query() does not permit BEGIN, COMMIT, ROLLBACK, \
+     SAVEPOINT, RELEASE or a PRAGMA that sets a value";
+
+/// The pragmas whose argument names what to read rather than a value to set.
+const READING_PRAGMAS: [&str; 10] = [
+    "foreign_key_check",
+    "foreign_key_list",
+    "index_info",
+    "index_list",
+    "index_xinfo",
+    "integrity_check",
+    "quick_check",
+    "table_info",
+    "table_list",
+    "table_xinfo",
+];
+
+fn sets_session_state(pragma_name: &str) -> bool {
+    !READING_PRAGMAS
+        .iter()
+        .any(|reading| reading.eq_ignore_ascii_case(pragma_name))
+}
+
 fn is_internal_table(name: &str) -> bool {
     name.starts_with(INTERNAL_TABLE_PREFIX)
 }
@@ -1723,6 +1748,19 @@ impl Db {
                     *denial_cb.lock().unwrap() = Some(ATTACH_DENIED_MSG);
                     Authorization::Deny
                 }
+                // These outlive the statement on the connection every query
+                // shares, yet SQLite classifies them as read-only.
+                AuthAction::Pragma {
+                    pragma_name,
+                    pragma_value: Some(_),
+                } if sets_session_state(pragma_name) => {
+                    *denial_cb.lock().unwrap() = Some(SESSION_STATE_DENIED_MSG);
+                    Authorization::Deny
+                }
+                AuthAction::Transaction { .. } | AuthAction::Savepoint { .. } => {
+                    *denial_cb.lock().unwrap() = Some(SESSION_STATE_DENIED_MSG);
+                    Authorization::Deny
+                }
                 _ => Authorization::Allow,
             }));
         let prepared = self.conn.prepare(sql);
@@ -3265,6 +3303,25 @@ mod tests {
         let err = db.query("DETACH ext").unwrap_err();
         assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
         assert!(err.to_string().contains("not authorized"), "got: {err}");
+    }
+
+    #[test]
+    fn sets_session_state_spares_only_the_reading_pragmas() {
+        assert!(!sets_session_state("table_info"));
+        assert!(!sets_session_state("TABLE_INFO"));
+        assert!(!sets_session_state("integrity_check"));
+        assert!(sets_session_state("case_sensitive_like"));
+        assert!(sets_session_state("cache_size"));
+    }
+
+    #[test]
+    fn query_denies_session_state_changes() {
+        let db = Db::new().unwrap();
+        for sql in ["BEGIN", "SAVEPOINT a", "PRAGMA case_sensitive_like=1"] {
+            let err = db.query(sql).unwrap_err();
+            assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+            assert_eq!(err.to_string(), SESSION_STATE_DENIED_MSG);
+        }
     }
 
     #[test]
