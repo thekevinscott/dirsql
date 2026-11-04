@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1793831191,
+  "exit_code": 0,
+  "commit": "0464d5d481caffa6a34841c7a89b0424929424a1",
+  "branch": "bot/1588-quoted-ddl-columns-1104"
+}
