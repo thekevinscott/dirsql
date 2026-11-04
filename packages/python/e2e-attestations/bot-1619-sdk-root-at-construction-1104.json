@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/root_at_construction_test.py tests/e2e/relative_root_chdir_test.py -x -q",
+  "ran_at": 1793820942,
+  "exit_code": 0,
+  "commit": "fde4505025279fcd85540007d6a7432acd974610",
+  "branch": "bot/1619-sdk-root-at-construction-1104"
+}

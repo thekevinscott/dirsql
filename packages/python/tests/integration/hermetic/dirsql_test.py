@@ -13,6 +13,7 @@ the Rust core's own suites.
 """
 
 import asyncio
+import os
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -302,7 +303,7 @@ def describe_binding_layer():
 
             inst = _FakeRustDirSQL.instances[-1]
             assert inst.config == ["/some/.dirsql.toml"]
-            assert inst.root is None
+            assert inst.root == os.getcwd()
 
             result = await db.query("SELECT 1")
             assert result == [{"from_config": ["/some/.dirsql.toml"]}]
@@ -317,16 +318,14 @@ def describe_binding_layer():
                 await db.ready()
 
         @pytest.mark.asyncio
-        async def it_forwards_construction_without_root_or_config_to_the_core(
+        async def it_roots_at_the_cwd_without_root_or_config(
             mock_core,
         ):
-            # With neither root nor config the core roots at the cwd; the
-            # wrapper forwards both as None.
             db = mock_core()
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[-1]
-            assert inst.root is None
+            assert inst.root == os.getcwd()
             assert inst.config is None
 
     def describe_ignore_kwarg():
@@ -339,7 +338,7 @@ def describe_binding_layer():
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[0]
-            assert inst.root == "/root"
+            assert inst.root == os.path.abspath("/root")
             assert inst.tables == ["t"]
             assert inst.ignore == ignore
 
