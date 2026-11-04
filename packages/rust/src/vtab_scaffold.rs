@@ -61,8 +61,9 @@ pub trait TableSource: Sized + Send + Sync + 'static {
     const NAME: &'static str;
 
     /// Decode the module arguments into the table's source and the schema it
-    /// declares to SQLite.
-    fn connect(args: &[&[u8]]) -> Result<(String, Self)>;
+    /// declares to SQLite. `max_length` is the longest string or blob the
+    /// connection accepts as a value.
+    fn connect(args: &[&[u8]], max_length: usize) -> Result<(String, Self)>;
 
     /// Push the row set one statement reads into `rows`, in order. It is
     /// taken on the statement's first `xFilter` over the table and held for
@@ -538,6 +539,16 @@ fn rowid_of(position: usize) -> i64 {
     i64::try_from(position).unwrap_or(i64::MAX)
 }
 
+/// The connection's `SQLITE_LIMIT_LENGTH`: a longer value fails the whole
+/// statement rather than the one cell.
+#[expect(unsafe_code, reason = "rusqlite's `limits` API needs a `Connection`")]
+fn length_limit(db: &mut VTabConnection) -> usize {
+    // SAFETY: the handle is the live connection running this `xConnect`, and
+    // a negative new value only reads the limit.
+    let limit = unsafe { ffi::sqlite3_limit(db.handle(), ffi::SQLITE_LIMIT_LENGTH, -1) };
+    usize::try_from(limit).unwrap_or(0)
+}
+
 #[repr(C)]
 pub struct ScaffoldTab<S: TableSource> {
     /// Base class. Must be first.
@@ -552,12 +563,12 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
     type Cursor = ScaffoldCursor<S>;
 
     fn connect(
-        _db: &mut VTabConnection,
+        db: &mut VTabConnection,
         aux: Option<&Arc<StatementScope>>,
         args: &[&[u8]],
     ) -> Result<(String, Self)> {
         let scope = aux.ok_or_else(|| no_scope_error(S::NAME))?;
-        let (schema, source) = S::connect(args)?;
+        let (schema, source) = S::connect(args, length_limit(db))?;
         let source = Arc::new(source);
         let cache = Arc::new(RowCache::new(Arc::clone(&source)));
         scope.adopt(
@@ -1179,7 +1190,7 @@ mod tests {
         type Row = usize;
         const NAME: &'static str = "counted";
 
-        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
             unreachable!()
         }
 
@@ -1213,7 +1224,7 @@ mod tests {
         type Row = Noted;
         const NAME: &'static str = "many";
 
-        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
             unreachable!()
         }
 
@@ -1404,7 +1415,7 @@ mod tests {
         type Row = i64;
         const NAME: &'static str = "tens";
 
-        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
             unreachable!()
         }
 
@@ -1538,7 +1549,7 @@ mod tests {
         type Row = ();
         const NAME: &'static str = "fake";
 
-        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
             unreachable!()
         }
 
@@ -1577,7 +1588,7 @@ mod tests {
         const NAME: &'static str = "words";
         const LOOKUP_COLUMNS: &'static [usize] = &[1];
 
-        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+        fn connect(_args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
             let words = Words {
                 words: vec!["ant", "bat", "bee"],
                 scans: std::sync::atomic::AtomicUsize::new(0),
