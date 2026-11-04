@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py tests/e2e/watch_speed_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1793828589,
+  "exit_code": 0,
+  "commit": "63315e05f4ba70bccf37e4a551cb4f7e9b7322d3",
+  "branch": "bot/1616-watch-batch-isolation-1104"
+}
