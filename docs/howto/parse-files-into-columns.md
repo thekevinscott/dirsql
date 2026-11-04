@@ -83,7 +83,7 @@ the fastest way to see whether a parser produces the rows you expect.
 
 The inline flag re-scans and re-parses every file on every query, defines one
 parser for the whole query, and forgets everything when the process exits. When
-you want a **watcher** that keeps the rows fresh, **persistence** across
+you want **row events** as files change, **persistence** across
 restarts, or **different parsers for different file sets**, move the parser into
 a `.dirsql.toml` [`[[table]]`](../reference/config.md#table) — and paste the
 command in verbatim:
@@ -110,7 +110,8 @@ dirsql query "SELECT title, author FROM posts ORDER BY title" -c ./.dirsql.toml
 ```
 
 Same command, same rows. The difference is what a declared table brings: it is
-indexed on build, kept fresh by the watcher, survives restarts with
+indexed on build, re-reads only the files that changed on each query, streams
+row events as files change, survives restarts with
 [`--persist`](./persist.md), and a config can declare
 [many tables](./define-tables.md) — each with its own `on-file` — where the flag
 gives every path-table one parser. In both spellings the table's columns are

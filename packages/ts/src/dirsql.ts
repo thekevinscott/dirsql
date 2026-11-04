@@ -237,9 +237,10 @@ export class DirSQL {
   /**
    * Execute a SQL query and return results as an array of row objects.
    *
-   * Awaits the initial scan if it has not yet finished, then runs the
-   * query on the libuv threadpool, so the JS event loop stays responsive
-   * even for large result sets or long-running queries.
+   * Awaits the initial scan if it has not yet finished, then reads the
+   * files that changed since the last query, so the rows match the disk.
+   * The query itself runs on the libuv threadpool, so the JS event loop
+   * stays responsive even for large result sets or long-running queries.
    */
   async query(sql: string): Promise<Record<string, unknown>[]> {
     await this.ready;

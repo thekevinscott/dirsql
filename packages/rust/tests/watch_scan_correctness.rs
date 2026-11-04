@@ -98,7 +98,7 @@ fn rename_out_deletes_rows() {
 
     let mut saw_delete = false;
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && paths(&db).iter().any(|p| p == "a.txt") {
+    while Instant::now() < deadline && !saw_delete {
         for e in db.poll_events(Duration::from_millis(200)).unwrap() {
             if matches!(e, RowEvent::Delete { .. }) {
                 saw_delete = true;
@@ -129,6 +129,7 @@ fn dir_moved_into_root_indexes_its_files() {
     fs::write(stage.path().join("moved/a.txt"), "alpha").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.set_fresh_reads(false);
     db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
@@ -163,6 +164,7 @@ fn dir_moved_into_root_indexes_nested_files() {
     fs::write(stage.path().join("moved/one/two/deep.txt"), "deep").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.set_fresh_reads(false);
     db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
@@ -227,7 +229,7 @@ fn dir_moved_out_of_root_deletes_its_rows() {
 
     let mut deleted = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !under_leaving(&db).is_empty() {
+    while Instant::now() < deadline && deleted.len() < 2 {
         for e in db.poll_events(Duration::from_millis(200)).unwrap() {
             if let RowEvent::Delete { file_path, .. } = e {
                 deleted.push(file_path);
@@ -279,7 +281,7 @@ fn dir_renamed_within_root_deletes_rows_under_old_name() {
 
     let mut saw_delete = false;
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && paths(&db).iter().any(|p| p.starts_with("a/")) {
+    while Instant::now() < deadline && !saw_delete {
         for e in db.poll_events(Duration::from_millis(200)).unwrap() {
             if matches!(&e, RowEvent::Delete { file_path, .. } if file_path == "a/x.txt") {
                 saw_delete = true;

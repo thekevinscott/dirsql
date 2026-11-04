@@ -173,6 +173,7 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 #[test]
 fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
+    db.set_fresh_reads(false);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
 
