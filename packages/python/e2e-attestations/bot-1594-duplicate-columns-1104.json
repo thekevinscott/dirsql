@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/use_case_join_test.py tests/e2e/on_file_query_test.py -q",
+  "ran_at": 1793815574,
+  "exit_code": 0,
+  "commit": "cc34ffac114dcf2d3dda9dca56e0a09353455ab3",
+  "branch": "bot/1594-duplicate-columns-1104"
+}
