@@ -23,7 +23,9 @@ afterEach(async () => {
 describe("DirSQL text that is not UTF-8", () => {
   it("rejects with an error naming the column", async () => {
     const db = new DirSQL({ root: dir });
-    await expect(db.query("SELECT CAST(x'ff41' AS TEXT) AS v")).rejects.toThrow(MESSAGE);
+    await expect(db.query("SELECT CAST(x'ff41' AS TEXT) AS v")).rejects.toThrow(
+      MESSAGE,
+    );
   });
 
   it("leaves the instance usable", async () => {
