@@ -25,6 +25,7 @@ def describe_relative_root():
     @pytest.mark.asyncio
     async def it_keeps_path_tables_on_the_build_time_root_after_a_chdir(relroot):
         db = DirSQL("tree")
+        await db.ready()
         os.chdir(relroot / "tree" / "sub")
 
         rows = await db.query("SELECT path FROM './**'")
@@ -38,6 +39,7 @@ def describe_relative_root():
             "{}\n", encoding="utf-8"
         )
         db = DirSQL("tree")
+        await db.ready()
         os.chdir(relroot / "tree" / "sub")
 
         rows = await db.query("SELECT path FROM './*.json'")
