@@ -38,6 +38,9 @@ pub enum DbError {
     )]
     WriteForbidden,
 
+    #[error("query() runs one statement at a time; remove the SQL after the first statement")]
+    MultipleStatements,
+
     #[error("{0}")]
     Unauthorized(String),
 
@@ -1714,6 +1717,7 @@ impl Db {
     /// installed and cleared around every attempt, so a re-prepare after
     /// registering a path-table is gated identically to the first.
     fn prepare_guarded(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, HashSet<String>)> {
+        use rusqlite::fallible_iterator::FallibleIterator;
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         use std::sync::{Arc, Mutex};
 
@@ -1763,14 +1767,21 @@ impl Db {
                 }
                 _ => Authorization::Allow,
             }));
-        let prepared = self.conn.prepare(sql);
+        let mut statements = rusqlite::Batch::new(&self.conn, sql);
+        let prepared = statements.next();
         // Clear the authorizer so it only ever gates this one user query; the
         // shared connection's internal write paths must not see it.
         self.conn
             .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
 
         match prepared {
-            Ok(stmt) => Ok((stmt, std::mem::take(&mut *reads.lock().unwrap()))),
+            Ok(Some(stmt)) => {
+                if !matches!(statements.next(), Ok(None)) {
+                    return Err(DbError::MultipleStatements);
+                }
+                Ok((stmt, std::mem::take(&mut *reads.lock().unwrap())))
+            }
+            Ok(None) => Ok((self.conn.prepare(sql)?, HashSet::new())),
             Err(e)
                 if e.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
@@ -3277,6 +3288,34 @@ mod tests {
         let (_, reads) = db.prepare_guarded("SELECT count(*) FROM a").unwrap();
 
         assert_eq!(reads, HashSet::from(["a".to_string()]));
+    }
+
+    #[test]
+    fn prepare_guarded_rejects_a_second_statement() {
+        let db = Db::new().unwrap();
+
+        let err = db.prepare_guarded("SELECT 1; SELECT 2").err().unwrap();
+
+        assert!(matches!(err, DbError::MultipleStatements), "got: {err:?}");
+    }
+
+    #[test]
+    fn prepare_guarded_accepts_trailing_terminators_and_comments() {
+        let db = Db::new().unwrap();
+
+        let (stmt, _) = db.prepare_guarded("SELECT 1;; -- done").unwrap();
+
+        assert_eq!(stmt.column_count(), 1);
+    }
+
+    #[test]
+    fn prepare_guarded_leaves_sql_with_no_statement_to_sqlite() {
+        let db = Db::new().unwrap();
+
+        let (stmt, reads) = db.prepare_guarded("-- nothing").unwrap();
+
+        assert_eq!(stmt.column_count(), 0);
+        assert!(reads.is_empty());
     }
 
     #[test]

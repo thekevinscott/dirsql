@@ -154,6 +154,11 @@ The `...>` prompt says the statement is still open. `exit`, `quit`, and a blank
 line are not SQL, so they are taken as typed rather than waiting for a
 terminator.
 
+Each entry runs exactly one statement, as it does in
+[`dirsql query`](#dirsql-query) and `POST /query`: `SELECT 1; SELECT 2;` on one
+line is an error, not two results, so a typo after a `;` cannot be dropped
+unseen. A trailing `;`, whitespace, or a comment after the statement is fine.
+
 ### Editing and history
 
 The prompt is a full line editor ([reedline](https://github.com/nushell/reedline)),

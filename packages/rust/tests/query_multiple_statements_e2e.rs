@@ -45,7 +45,10 @@ fn a_one_shot_query_with_a_second_statement_fails() {
     ] {
         let out = dirsql(&args, "");
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "{args:?} must fail, stderr: {stderr}");
+        assert!(
+            !out.status.success(),
+            "{args:?} must fail, stderr: {stderr}"
+        );
         assert_eq!(String::from_utf8_lossy(&out.stdout), "", "{args:?}");
         assert!(stderr.contains("one statement"), "{args:?}: {stderr}");
     }
