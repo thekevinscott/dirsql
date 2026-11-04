@@ -50,6 +50,7 @@ mod row_stream;
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
+mod table_refs;
 mod tree_walk;
 #[doc(hidden)]
 pub mod vtab;
