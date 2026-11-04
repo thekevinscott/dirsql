@@ -623,6 +623,19 @@ impl DirSQL {
         db.query_ordered_with(sql, params).map_err(map_db_error)
     }
 
+    /// [`query_ordered`](Self::query_ordered), abandoned once `cancelled` is
+    /// set, releasing the index for the next query.
+    #[cfg(feature = "cli")]
+    pub(crate) fn query_ordered_until(
+        &self,
+        sql: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<QueryResult> {
+        let _fresh = self.refresh()?;
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_ordered_until(sql, cancelled).map_err(map_db_error)
+    }
+
     /// Turn off reading the named tables' files at query time, for a caller
     /// that queries once, straight after the build, or that cannot run
     /// `on_file` on the thread a query runs on.

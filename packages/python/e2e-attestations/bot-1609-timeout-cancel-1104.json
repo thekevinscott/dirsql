@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1793821538,
+  "exit_code": 0,
+  "commit": "a1102d3b94e6fbe38c7cb2f083d53d787288f68b",
+  "branch": "bot/1609-timeout-cancel-1104"
+}

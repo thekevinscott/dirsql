@@ -471,6 +471,11 @@ const USER_TABLES: &str = "SELECT name FROM pragma_table_list WHERE schema = 'ma
 const TABLE_COLUMNS: &str = "SELECT name, type FROM pragma_table_xinfo(?1, 'main') \
      WHERE hidden <> 1 ORDER BY cid";
 
+/// VM instructions between checks of a cancellable query's flag: frequent
+/// enough to stop within microseconds, rare enough to cost nothing.
+#[cfg(feature = "cli")]
+const CANCEL_CHECK_OPS: std::os::raw::c_int = 1000;
+
 pub struct Db {
     conn: Connection,
     /// Where this connection's path tables hold their rows for the statement in
@@ -1534,6 +1539,25 @@ impl Db {
         self.run_statement(sql, params)
     }
 
+    /// [`query_ordered`](Self::query_ordered), abandoned with an interrupt
+    /// error once `cancelled` is set, so a caller that stopped waiting stops
+    /// holding the connection.
+    #[cfg(feature = "cli")]
+    pub(crate) fn query_ordered_until(
+        &self,
+        sql: &str,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<QueryResult> {
+        self.conn.progress_handler(
+            CANCEL_CHECK_OPS,
+            Some(move || cancelled.load(std::sync::atomic::Ordering::Relaxed)),
+        );
+        let result = self.query_ordered(sql);
+        self.conn
+            .progress_handler(CANCEL_CHECK_OPS, None::<fn() -> bool>);
+        result
+    }
+
     /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
     /// projection order, into the state `start` makes from the projection,
     /// as SQLite yields them rather than collected first.
@@ -2583,6 +2607,48 @@ mod tests {
             texts(&result, "v"),
             [Value::Text("A".into()), Value::Text("C".into())]
         );
+    }
+
+    #[cfg(feature = "cli")]
+    const COUNT_TO_A_MILLION: &str = "WITH RECURSIVE c(x) AS \
+        (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 1000000) SELECT count(*) AS n FROM c";
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn query_ordered_until_runs_to_completion_while_not_cancelled() {
+        let db = Db::new().unwrap();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let result = db
+            .query_ordered_until(COUNT_TO_A_MILLION, cancelled)
+            .unwrap();
+
+        assert_eq!(texts(&result, "n"), [Value::Integer(1_000_000)]);
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn query_ordered_until_is_interrupted_once_cancelled() {
+        let db = Db::new().unwrap();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+        let err = db
+            .query_ordered_until(COUNT_TO_A_MILLION, cancelled)
+            .expect_err("a cancelled query must not finish");
+
+        assert!(err.to_string().contains("interrupted"), "got: {err}");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn query_ordered_until_leaves_later_queries_uncancelled() {
+        let db = Db::new().unwrap();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let _ = db.query_ordered_until(COUNT_TO_A_MILLION, cancelled);
+
+        let result = db.query_ordered(COUNT_TO_A_MILLION).unwrap();
+
+        assert_eq!(texts(&result, "n"), [Value::Integer(1_000_000)]);
     }
 
     #[test]

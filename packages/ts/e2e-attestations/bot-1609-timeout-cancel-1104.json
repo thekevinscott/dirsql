@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e -- tests/e2e/query-contract.test.ts",
+  "ran_at": 1793821611,
+  "exit_code": 0,
+  "commit": "9af90f4fa717b2b54dd331ea0593cf06a20a0c59",
+  "branch": "bot/1609-timeout-cancel-1104"
+}
