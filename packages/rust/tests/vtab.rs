@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dirsql::vtab::{StatementScope, load_module};
 use rusqlite::Connection;
+use rusqlite::limits::Limit;
 use tempfile::TempDir;
 
 /// Strip every permission bit from `path`, reporting whether the OS actually
@@ -164,6 +165,38 @@ fn content_is_null_for_non_utf8_files() {
         .query_row("SELECT content FROM t", [], |r| r.get(0))
         .unwrap();
     assert_eq!(body, None, "invalid UTF-8 yields NULL, never an error");
+}
+
+#[test]
+fn content_over_the_length_limit_is_null_without_erroring_the_query() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("at_limit.txt"), "x".repeat(10)).unwrap();
+    fs::write(dir.path().join("over_limit.txt"), "x".repeat(11)).unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, 10).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '*', '', 'gitignore')",
+        dir.path().display()
+    ))
+    .unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT basename, typeof(content) FROM t ORDER BY basename")
+        .unwrap();
+    let types: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(
+        types,
+        vec![
+            ("at_limit.txt".to_string(), "text".to_string()),
+            ("over_limit.txt".to_string(), "null".to_string()),
+        ]
+    );
 }
 
 #[test]
