@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1793843767,
+  "exit_code": 0,
+  "commit": "45831a6f5c9cd08c5eabe770a4dece77e2a88071",
+  "branch": "bot/1589-dup-json-key-1104"
+}
