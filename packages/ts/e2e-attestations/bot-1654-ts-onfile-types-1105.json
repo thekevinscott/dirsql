@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e -- tests/e2e/on-file-value-types.test.ts tests/e2e/query-params.test.ts tests/e2e/declared-table-name.test.ts tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts",
+  "ran_at": 1793920682,
+  "exit_code": 0,
+  "commit": "d98c99608f95e001f851c144bb32f685c4165d13",
+  "branch": "bot/1654-ts-onfile-types-1105"
+}

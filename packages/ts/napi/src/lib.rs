@@ -794,7 +794,7 @@ fn rows_from_js(result: Unknown<'_>) -> Result<Vec<Row>> {
                 .map(|key| {
                     let value = row
                         .get::<Unknown<'_>>(&key)?
-                        .map_or(Ok(Value::Null), js_to_value)?;
+                        .map_or(Ok(Value::Null), |v| js_to_value(&key, v))?;
                     Ok((key, value))
                 })
                 .collect::<Result<Row>>()
@@ -818,28 +818,19 @@ fn number_to_value(n: f64) -> Value {
     }
 }
 
-fn js_to_value(val: Unknown<'_>) -> Result<Value> {
-    match val.get_type()? {
-        ValueType::Undefined | ValueType::Null => Ok(Value::Null),
-        ValueType::Boolean => Ok(Value::Integer(i64::from(bool::from_unknown(val)?))),
-        ValueType::Number => Ok(number_to_value(f64::from_unknown(val)?)),
-        ValueType::String => Ok(Value::Text(String::from_unknown(val)?)),
-        // BigInt: an INTEGER within i64, or an explicit range error. Never a
-        // silent TEXT fallback (the lossy behavior this replaces).
-        ValueType::BigInt => match BigInt::from_unknown(val)?.get_i64() {
-            (i, true) => Ok(Value::Integer(i)),
-            _ => Err(to_napi_err(format!(
-                "BigInt {} exceeds the i64 range dirsql can store",
-                coerce_to_string(val)?
-            ))),
-        },
-        // `Buffer` / `Uint8Array` (Buffer is a Uint8Array subclass)
-        // marshals to a BLOB; any other object shape falls through to
-        // string coercion.
-        _ => Ok(match u8_array_bytes(val)? {
-            Some(bytes) => Value::Blob(bytes),
-            None => Value::Text(coerce_to_string(val)?),
-        }),
+fn js_to_value(column: &str, val: Unknown<'_>) -> Result<Value> {
+    if val.get_type()? == ValueType::Undefined {
+        return Ok(Value::Null);
+    }
+    match supported_value(val) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(to_napi_err(format!(
+            "column '{column}': unsupported value type {}; expected null, boolean, number, \
+             bigint, string, or Buffer/Uint8Array",
+            js_type_name(val)?
+        ))),
+        Err(ParamError::Type(message) | ParamError::Range(message)) => Err(to_napi_err(message)),
+        Err(ParamError::Js(e)) => Err(e),
     }
 }
 
@@ -910,7 +901,17 @@ fn is_plain_object(env: &Env, val: Unknown<'_>) -> Result<bool> {
 }
 
 fn param_to_value(val: Unknown<'_>) -> std::result::Result<Value, ParamError> {
-    Ok(match val.get_type()? {
+    supported_value(val)?.ok_or_else(|| {
+        js_type_name(val).map_or_else(ParamError::Js, |name| {
+            ParamError::Type(format!("unsupported parameter type: {name}"))
+        })
+    })
+}
+
+/// `None` for a type outside the documented value types: coercing it with
+/// `String()` would store a lossy value silently.
+fn supported_value(val: Unknown<'_>) -> std::result::Result<Option<Value>, ParamError> {
+    Ok(Some(match val.get_type()? {
         ValueType::Null => Value::Null,
         ValueType::Boolean => Value::Integer(i64::from(bool::from_unknown(val)?)),
         ValueType::Number => number_to_value(f64::from_unknown(val)?),
@@ -926,14 +927,9 @@ fn param_to_value(val: Unknown<'_>) -> std::result::Result<Value, ParamError> {
         },
         _ => match u8_array_bytes(val)? {
             Some(bytes) => Value::Blob(bytes),
-            None => {
-                return Err(ParamError::Type(format!(
-                    "unsupported parameter type: {}",
-                    js_type_name(val)?
-                )));
-            }
+            None => return Ok(None),
         },
-    })
+    }))
 }
 
 /// `typeof value`, except that an object reports its constructor's name
@@ -980,8 +976,7 @@ fn exception_message(exception: Unknown<'_>) -> Result<String> {
 
 /// The bytes of a `Buffer` / `Uint8Array` / `Uint8ClampedArray`, or `None`
 /// for any other JS value (including other TypedArray element types, whose
-/// numeric interpretation would be lossy — they keep the string-coercion
-/// fallback).
+/// numeric interpretation would be lossy).
 fn u8_array_bytes(val: Unknown<'_>) -> Result<Option<Vec<u8>>> {
     if !val.is_typedarray()? {
         return Ok(None);
