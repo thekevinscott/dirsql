@@ -744,6 +744,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_query_names_infinite_reals_in_a_table() {
+        let mut out = Vec::new();
+        let args = query_args(&[
+            "dirsql",
+            "query",
+            "--format",
+            "table",
+            "SELECT 9e999 AS p, -9e999 AS m",
+        ]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"p    m\n---  ----\ninf  -inf\n\n1 row\n");
+    }
+
+    #[tokio::test]
     async fn run_query_exits_one_and_writes_nothing_when_the_query_fails() {
         let mut out = Vec::new();
         let args = query_args(&["dirsql", "query", "--format", "json", "SELECT nope"]);
