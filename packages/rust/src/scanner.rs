@@ -659,6 +659,8 @@ impl<'a> Place<'a> {
         if self.walk.gitignore && listing.holds(OsStr::new(".git")) && holds_git(&self.dir) {
             self.walk.in_repo = true;
             self.walk.frames.clear();
+            let excludes = Frame::repo_excludes(&self.dir).into_iter().map(Arc::new);
+            self.walk.frames.extend(excludes);
         }
         if self.walk.in_repo
             && listing.holds(OsStr::new(".gitignore"))
@@ -1001,16 +1003,23 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
     }
 }
 
-/// The `.gitignore` files above `start`, up to and including the repo root
-/// `top`, outermost first, each read by `load`.
+/// The ignore files in force above `start`, up to and including the repo
+/// root `top`, lowest precedence first: the repo-wide exclude files when `top`
+/// lies strictly above `start`, then each `.gitignore` as `load` reads it.
 fn gitignores_above(
     start: &Path,
     top: &Path,
     load: &dyn Fn(&Path) -> Option<Frame>,
 ) -> Vec<Arc<Frame>> {
-    dirs_above(start, top)
+    let dirs = dirs_above(start, top);
+    let excludes = if dirs.is_empty() {
+        Vec::new()
+    } else {
+        Frame::repo_excludes(top)
+    };
+    excludes
         .into_iter()
-        .filter_map(load)
+        .chain(dirs.into_iter().filter_map(load))
         .map(Arc::new)
         .collect()
 }
@@ -1704,7 +1713,36 @@ mod tests {
             .iter()
             .map(|frame| frame.gitignore().path())
             .collect();
-        assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
+        assert!(roots.ends_with(&[Path::new("/r"), Path::new("/r/a/b")]));
+    }
+
+    #[test]
+    fn gitignores_above_puts_the_repo_excludes_first() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        fs::write(repo.path().join(".git/info/exclude"), "*.txt\n").unwrap();
+        let load = |dir: &Path| Some(Frame::from_lines(dir, &["!a.txt"]));
+        let frames = gitignores_above(&repo.path().join("sub"), repo.path(), &load);
+
+        assert!(is_gitignored(
+            &frames,
+            &repo.path().join("sub/b.txt"),
+            false
+        ));
+        assert!(!is_gitignored(
+            &frames,
+            &repo.path().join("sub/a.txt"),
+            false
+        ));
+    }
+
+    #[test]
+    fn gitignores_above_leaves_the_repo_excludes_to_the_walk_at_the_top() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        fs::write(repo.path().join(".git/info/exclude"), "*.txt\n").unwrap();
+
+        assert!(gitignores_above(repo.path(), repo.path(), &Frame::load).is_empty());
     }
 
     #[test]

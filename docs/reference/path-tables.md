@@ -254,8 +254,11 @@ as it hides any other.
 Path-table scans also respect `.gitignore` files by default, inside a git
 repo, the way git, fd and ripgrep do: a `.gitignore` applies below its own
 directory, deeper files override shallower ones, `!pattern` re-includes, and
-an ignored directory is pruned rather than walked. In a typical repo this
-excludes build output, virtualenvs, and caches with zero ceremony.
+an ignored directory is pruned rather than walked. The repo's
+`.git/info/exclude` and the global `core.excludesFile` (by default
+`~/.config/git/ignore`) apply too, below every `.gitignore` in precedence, as
+in git. In a typical repo this excludes build output, virtualenvs, and caches
+with zero ceremony.
 
 A `.gitignore` never hides a path the pattern spells out: `'./debug.log'` lists
 that file even when `*.log` is ignored, while `'./*.log'` does not.
