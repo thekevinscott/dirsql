@@ -127,9 +127,16 @@ impl<'de> Visitor<'de> for RowSeed<'_> {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<JsonRow, A::Error> {
-        let mut pairs = Vec::new();
+        let mut pairs: Vec<(Arc<str>, serde_json::Value)> = Vec::new();
         while let Some(Key(key)) = map.next_key::<Key<'de>>()? {
-            pairs.push((self.0.intern(&key), map.next_value::<serde_json::Value>()?));
+            let key = self.0.intern(&key);
+            let value = map.next_value::<serde_json::Value>()?;
+            // A repeated key keeps its last value, as jq and JSON.parse read it;
+            // interned keys make the lookup a pointer compare.
+            match pairs.iter_mut().find(|(seen, _)| Arc::ptr_eq(seen, &key)) {
+                Some((_, slot)) => *slot = value,
+                None => pairs.push((key, value)),
+            }
         }
         Ok(JsonRow(pairs))
     }
@@ -350,6 +357,28 @@ mod tests {
     fn parse_rows_reads_a_key_spelled_with_an_escape() {
         let row = &rows(&[r#"{"a\u0062":1}"#])[0];
         assert_eq!(row.get("ab"), Some(&serde_json::json!(1)));
+    }
+
+    #[test]
+    fn parse_rows_keeps_the_last_value_of_a_repeated_key_in_its_first_place() {
+        let row = &rows(&[r#"{"k":"first","z":0,"k":"second"}"#])[0];
+        assert_eq!(
+            row.0
+                .iter()
+                .map(|(k, v)| (&**k, v.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("k", serde_json::json!("second")),
+                ("z", serde_json::json!(0))
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_rows_keeps_a_repeated_key_spelled_with_an_escape_once() {
+        let row = &rows(&[r#"{"ab":1,"ab":2}"#])[0];
+        assert_eq!(row.0.len(), 1);
+        assert_eq!(row.get("ab"), Some(&serde_json::json!(2)));
     }
 
     #[test]
