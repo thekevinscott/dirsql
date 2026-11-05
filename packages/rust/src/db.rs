@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -320,6 +320,25 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
 
 /// `, "a", "b"` for `columns` `a` and `b`, each behind `prefix`, to follow a
 /// `rowid` in a select list.
+/// The column affinity SQLite gives a column `declared` with this type (the
+/// rules of its datatype3 page, in their order); a STRICT table's `ANY`
+/// column has none, which `BLOB` names.
+fn affinity(declared: &str, strict: bool) -> &'static str {
+    let declared = declared.to_ascii_uppercase();
+    let has = |parts: &[&str]| parts.iter().any(|part| declared.contains(part));
+    if has(&["INT"]) {
+        "INTEGER"
+    } else if has(&["CHAR", "CLOB", "TEXT"]) {
+        "TEXT"
+    } else if has(&["BLOB"]) || declared.is_empty() || (strict && declared == "ANY") {
+        "BLOB"
+    } else if has(&["REAL", "FLOA", "DOUB"]) {
+        "REAL"
+    } else {
+        "NUMERIC"
+    }
+}
+
 fn select_list(prefix: &str, columns: &[String]) -> String {
     columns
         .iter()
@@ -513,6 +532,9 @@ pub struct Db {
     /// version: reading them takes three pragma queries, and a watched
     /// change would otherwise pay for them every time.
     keys: RefCell<HashMap<String, (i64, KeyCandidates)>>,
+    /// An in-memory database [`Self::as_stored`] stores rows in to read them
+    /// back after column affinity, opened on first use.
+    scratch: OnceCell<Connection>,
 }
 
 /// A table's `PRIMARY KEY` column names, then each plain `UNIQUE` index's.
@@ -570,6 +592,7 @@ impl Db {
             calls: CallReporter::new(),
             batched: Vec::new(),
             keys: RefCell::default(),
+            scratch: OnceCell::new(),
         })
     }
 
@@ -596,6 +619,7 @@ impl Db {
             calls: CallReporter::new(),
             batched: Vec::new(),
             keys: RefCell::default(),
+            scratch: OnceCell::new(),
         })
     }
 
@@ -1080,6 +1104,73 @@ impl Db {
         Ok(())
     }
 
+    /// `rows` as `table` would store them, after its column affinity: a
+    /// number in a `TEXT` column becomes text, a numeric string in an
+    /// `INTEGER` column an integer, and so on.
+    ///
+    /// The rows round-trip through a scratch in-memory database rather than
+    /// a table on this connection, so comparing writes nothing here.
+    pub fn as_stored(&self, table: &str, rows: &ShapedRows) -> Result<ShapedRows> {
+        validate_identifier(table)?;
+        if rows.cells.is_empty() || rows.columns.is_empty() {
+            return Ok(rows.clone());
+        }
+        let strict: bool = self
+            .conn
+            .prepare_cached("SELECT strict FROM pragma_table_list(?1)")?
+            .query_row([table], |r| r.get(0))?;
+        let declared: HashMap<String, String> = self
+            .conn
+            .prepare_cached("SELECT name, type FROM pragma_table_xinfo(?1)")?
+            .query_map([table], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let affinities: Vec<&str> = rows
+            .columns
+            .iter()
+            .map(|name| affinity(declared.get(name).map_or("", String::as_str), strict))
+            .collect();
+        let scratch = match self.scratch.get() {
+            Some(scratch) => scratch,
+            None => {
+                let opened = Connection::open_in_memory()?;
+                self.scratch.get_or_init(|| opened)
+            }
+        };
+        let name = format!("s_{}", affinities.join("_"));
+        let columns: Vec<String> = affinities
+            .iter()
+            .enumerate()
+            .map(|(i, affinity)| format!("c{i} {affinity}"))
+            .collect();
+        scratch.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS {name} ({})",
+            columns.join(", ")
+        ))?;
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let mut insert =
+            scratch.prepare_cached(&format!("INSERT INTO {name} VALUES ({placeholders})"))?;
+        for row in &rows.cells {
+            for (i, value) in row.iter().enumerate() {
+                insert.raw_bind_parameter(i + 1, value)?;
+            }
+            insert.raw_execute()?;
+        }
+        let cells = scratch
+            .prepare_cached(&format!("SELECT * FROM {name} ORDER BY rowid"))?
+            .query_map([], |row| {
+                (0..columns.len())
+                    .map(|i| row.get::<_, rusqlite::types::Value>(i).map(Value::from))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        scratch.execute_batch(&format!("DELETE FROM {name}"))?;
+        Ok(ShapedRows {
+            columns: rows.columns.clone(),
+            cells,
+            emitted: rows.emitted.clone(),
+        })
+    }
+
     /// Make the `stored` rows equal `rows`, writing only the difference, and
     /// return the changes with the rowid each of `rows` ends up at. Only the
     /// columns the rows emit are compared or written, so a column the hook
@@ -1099,6 +1190,7 @@ impl Db {
         rows: &ShapedRows,
         key: Option<&[usize]>,
     ) -> Result<(RowChanges, Vec<i64>)> {
+        let rows = &self.as_stored(table, rows)?;
         let columns = &rows.columns;
         let compared: Vec<usize> = (0..columns.len()).filter(|&i| rows.emitted[i]).collect();
         let ident = |cells: &[Value], at: &[usize]| {
@@ -5894,5 +5986,116 @@ mod tests {
         ] {
             assert!(!changes.is_empty(), "{changes:?}");
         }
+    }
+
+    #[test]
+    fn affinity_follows_sqlites_declared_type_rules_in_order() {
+        for (declared, strict, expected) in [
+            ("INTEGER", false, "INTEGER"),
+            ("bigint", false, "INTEGER"),
+            ("CHARINT", false, "INTEGER"),
+            ("VARCHAR(10)", false, "TEXT"),
+            ("clob", false, "TEXT"),
+            ("TEXT", false, "TEXT"),
+            ("BLOB", false, "BLOB"),
+            ("", false, "BLOB"),
+            ("ANY", true, "BLOB"),
+            ("ANY", false, "NUMERIC"),
+            ("REAL", false, "REAL"),
+            ("FLOAT", false, "REAL"),
+            ("DOUBLE PRECISION", false, "REAL"),
+            ("DECIMAL(10,2)", false, "NUMERIC"),
+        ] {
+            assert_eq!(affinity(declared, strict), expected, "{declared} {strict}");
+        }
+    }
+
+    fn cells_as_stored(ddl: &str, payload: serde_json::Value) -> Vec<Vec<Value>> {
+        let db = Db::new().unwrap();
+        db.create_table("t", ddl).unwrap();
+        db.as_stored("t", &shaped(&db, "t", payload)).unwrap().cells
+    }
+
+    #[test]
+    fn as_stored_applies_each_columns_affinity() {
+        let cells = cells_as_stored(
+            "CREATE TABLE t (s TEXT, i INTEGER, r REAL, n NUMERIC, b BLOB)",
+            serde_json::json!([
+                {"s": 5, "i": "7", "r": 1, "n": "2.0", "b": "3"},
+                {"s": "x", "i": "seven", "r": -0.0, "n": 1.5, "b": 4},
+            ]),
+        );
+        assert_eq!(
+            format!("{cells:?}"),
+            format!(
+                "{:?}",
+                vec![
+                    vec![
+                        Value::Text("5".into()),
+                        Value::Integer(7),
+                        Value::Real(1.0),
+                        Value::Integer(2),
+                        Value::Text("3".into()),
+                    ],
+                    vec![
+                        Value::Text("x".into()),
+                        Value::Text("seven".into()),
+                        Value::Real(0.0),
+                        Value::Real(1.5),
+                        Value::Integer(4),
+                    ],
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn as_stored_leaves_a_strict_any_column_as_given() {
+        let cells = cells_as_stored(
+            "CREATE TABLE t (a ANY) STRICT",
+            serde_json::json!([{"a": "7"}]),
+        );
+        assert_eq!(cells, vec![vec![Value::Text("7".into())]]);
+    }
+
+    #[test]
+    fn as_stored_returns_only_the_rows_of_each_call() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (i INTEGER)").unwrap();
+        let first = shaped(&db, "t", serde_json::json!([{"i": "1"}, {"i": "2"}]));
+        let second = shaped(&db, "t", serde_json::json!([{"i": "3"}]));
+        db.as_stored("t", &first).unwrap();
+        let cells = db.as_stored("t", &second).unwrap().cells;
+        assert_eq!(cells, vec![vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn as_stored_writes_nothing_to_the_database() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (i INTEGER)").unwrap();
+        let rows = shaped(&db, "t", serde_json::json!([{"i": "1"}]));
+        let before = db.conn().total_changes();
+        db.as_stored("t", &rows).unwrap();
+        assert_eq!(db.conn().total_changes(), before);
+    }
+
+    #[test]
+    fn as_stored_passes_no_rows_through() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (i INTEGER)").unwrap();
+        let rows = shaped(&db, "t", serde_json::json!([]));
+        assert_eq!(db.as_stored("t", &rows).unwrap(), rows);
+    }
+
+    #[test]
+    fn as_stored_rejects_an_invalid_table_name() {
+        let db = Db::new().unwrap();
+        let rows = ShapedRows {
+            columns: vec!["a".into()],
+            cells: vec![vec![Value::Null]],
+            emitted: vec![true],
+        };
+        let err = db.as_stored("bad name", &rows).unwrap_err();
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "{err:?}");
     }
 }
