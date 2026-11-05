@@ -352,7 +352,7 @@ impl PathSpans {
 }
 
 /// The stat-derived columns, each `None` when the file could not be stat'ed
-/// or the platform cannot supply the fact (or it predates the epoch).
+/// or the platform cannot supply the fact.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct StatFacts {
     size: Option<i64>,
@@ -370,9 +370,18 @@ impl StatFacts {
     }
 }
 
+/// Whole Unix seconds, floored like `st_mtime`, so a pre-epoch time is
+/// negative.
 fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
-    let since = time?.duration_since(UNIX_EPOCH).ok()?;
-    i64::try_from(since.as_secs()).ok()
+    match time?.duration_since(UNIX_EPOCH) {
+        Ok(since) => i64::try_from(since.as_secs()).ok(),
+        Err(before) => {
+            let before = before.duration();
+            let whole = i64::try_from(before.as_secs()).ok()?;
+            let floored = whole.checked_add(i64::from(before.subsec_nanos() > 0))?;
+            Some(-floored)
+        }
+    }
 }
 
 fn text(bytes: Option<&[u8]>) -> ValueRef<'_> {
@@ -1452,10 +1461,31 @@ mod tests {
     }
 
     #[test]
-    fn epoch_secs_is_absent_before_the_epoch_or_without_a_time() {
-        let t = UNIX_EPOCH - std::time::Duration::from_secs(1);
-        assert_eq!(epoch_secs(Some(t)), None);
+    fn epoch_secs_is_absent_without_a_time() {
         assert_eq!(epoch_secs(None), None);
+    }
+
+    #[test]
+    fn epoch_secs_is_negative_before_the_epoch() {
+        let t = UNIX_EPOCH - std::time::Duration::from_secs(86_400);
+        assert_eq!(epoch_secs(Some(t)), Some(-86_400));
+    }
+
+    #[test]
+    fn epoch_secs_floors_a_fractional_pre_epoch_time() {
+        let t = UNIX_EPOCH - std::time::Duration::from_millis(1_500);
+        assert_eq!(epoch_secs(Some(t)), Some(-2));
+    }
+
+    #[test]
+    fn epoch_secs_is_absent_when_it_overflows_i64() {
+        let past = std::time::Duration::from_secs(u64::MAX / 2 + 1);
+        if let Some(t) = UNIX_EPOCH.checked_sub(past) {
+            assert_eq!(epoch_secs(Some(t)), None);
+        }
+        if let Some(t) = UNIX_EPOCH.checked_add(past) {
+            assert_eq!(epoch_secs(Some(t)), None);
+        }
     }
 
     #[test]
