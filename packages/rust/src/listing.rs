@@ -335,12 +335,9 @@ fn seen(kind: rustix::fs::FileType) -> Seen {
 }
 
 #[cfg(unix)]
-fn open_dir(dir: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
-    use rustix::fs::{Mode, OFlags};
-    let flags = OFlags::RDONLY
-        .union(OFlags::DIRECTORY)
-        .union(OFlags::CLOEXEC);
-    rustix::fs::open(dir, flags, Mode::empty())
+fn open_dir(dir: &Path) -> std::io::Result<rustix::fd::OwnedFd> {
+    use rustix::fs::OFlags;
+    crate::long_path::open(dir, OFlags::RDONLY.union(OFlags::DIRECTORY))
 }
 
 /// The entries of `dir` in the order the filesystem lists them, handed to

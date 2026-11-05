@@ -1,5 +1,4 @@
 use std::ffi::c_int;
-use std::fs::{self, File};
 use std::io::{self, Read};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -83,7 +82,7 @@ const READERS: usize = 8;
 /// `size` is what the row's stat reported, so the buffer is sized without
 /// stat'ing again; a file that has grown since is still read whole.
 fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    read_text_with(path, size, |path| File::open(path))
+    read_text_with(path, size, crate::long_path::open_file)
 }
 
 fn read_text_with<R: Read>(
@@ -388,7 +387,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
 
 impl ScanSpec {
     fn stat(&self, row: &FileRow) -> StatFacts {
-        fs::metadata(self.root.join(row.rel())).map_or_else(
+        crate::long_path::metadata(&self.root.join(row.rel()), true).map_or_else(
             |_| StatFacts::default(),
             |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
         )
@@ -539,6 +538,7 @@ pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     // Real vtab behavior over a real directory is covered by `tests/vtab.rs`
     // (unit-lint isolation); only the pure helpers are tested here.

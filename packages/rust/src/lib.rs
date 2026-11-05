@@ -29,6 +29,7 @@ pub mod infer;
 #[doc(hidden)]
 pub mod launcher;
 mod listing;
+mod long_path;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;

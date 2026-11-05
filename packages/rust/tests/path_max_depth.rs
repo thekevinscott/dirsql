@@ -7,7 +7,7 @@ use std::fs;
 use dirsql::{DirSQL, Value};
 use tempfile::TempDir;
 
-const LEVELS: usize = 30;
+const LEVELS: i64 = 30;
 
 /// `LEVELS` nested directories with 200-character names, one file in each,
 /// so the deepest files sit far past a 4096-byte absolute path. Built from
@@ -38,7 +38,7 @@ fn a_double_star_keeps_files_past_the_path_limit() {
     let rows = db
         .query("SELECT COUNT(*) n, COUNT(size) sized, COUNT(content) read FROM './**'")
         .unwrap();
-    let expected = Value::Integer(LEVELS as i64);
+    let expected = Value::Integer(LEVELS);
     assert_eq!(rows[0]["n"], expected);
     assert_eq!(rows[0]["sized"], expected);
     assert_eq!(rows[0]["read"], expected);

@@ -5,7 +5,6 @@ use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use std::borrow::Cow;
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -948,12 +947,7 @@ struct Stat {
 
 /// The stat of `path`, through a symlink when `follow` is set.
 fn stat_of(path: &Path, follow: bool) -> Option<Stat> {
-    let metadata = if follow {
-        fs::metadata(path)
-    } else {
-        fs::symlink_metadata(path)
-    };
-    let file_type = metadata.ok()?.file_type();
+    let file_type = crate::long_path::metadata(path, follow).ok()?.file_type();
     Some(Stat {
         is_link: file_type.is_symlink(),
         is_dir: file_type.is_dir(),
@@ -1061,6 +1055,7 @@ fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Condvar, Mutex};
     use std::time::Duration;
