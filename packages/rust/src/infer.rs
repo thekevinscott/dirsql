@@ -9,6 +9,9 @@
 //! - **Columns are the union of keys** across every sampled row, in
 //!   **first-seen order** — the order the parser emitted them, not sorted
 //!   order — so `SELECT *` is stable across runs.
+//! - **Keys differing only in ASCII case are one column**, named by the
+//!   first-seen spelling, since SQLite identifiers are case-insensitive and
+//!   could not declare both.
 //! - **Types** come from the JSON values: string → `TEXT`, integer →
 //!   `INTEGER`, float → `REAL`, bool → `INTEGER`, nested object/array → its
 //!   JSON text as `TEXT`.
@@ -157,8 +160,10 @@ pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>
                 "line {number} is a JSON array; print one JSON object per line instead"
             ));
         }
-        let row = parse_row(line, &mut keys)
-            .map_err(|e| format!("line {number} is not a JSON object: {e}"))?;
+        let row = parse_row(line, &mut keys).map_err(|e| match lone_surrogate(line) {
+            Some(escape) => format!("line {number}: lone surrogate {escape} is not valid Unicode"),
+            None => format!("line {number} is not a JSON object: {e}"),
+        })?;
         rows.push(row);
     }
     Ok(rows)
@@ -171,6 +176,38 @@ fn parse_row(line: &str, keys: &mut Keys) -> serde_json::Result<JsonRow> {
     let row = RowSeed(keys).deserialize(&mut deserializer)?;
     deserializer.end()?;
     Ok(row)
+}
+
+/// The first `\uXXXX` escape in `line` naming a UTF-16 surrogate that is not
+/// half of a high-low pair, spelled as the line spells it. JSON's grammar
+/// admits it, but it names no Unicode scalar value, so no string can hold it.
+fn lone_surrogate(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let unit = |at: usize| -> Option<u16> {
+        let escape = line.get(at..at + 6)?;
+        let digits = escape.strip_prefix("\\u")?;
+        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        u16::from_str_radix(digits, 16).ok()
+    };
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let Some(code) = unit(at) else {
+            at += 2;
+            continue;
+        };
+        match code {
+            0xD800..=0xDBFF if matches!(unit(at + 6), Some(0xDC00..=0xDFFF)) => at += 12,
+            0xD800..=0xDFFF => return Some(&line[at..at + 6]),
+            _ => at += 6,
+        }
+    }
+    None
 }
 
 /// What the rows have said about one key so far.
@@ -227,32 +264,45 @@ fn value_type(value: &serde_json::Value) -> Option<SqlType> {
 /// Infer the column list for `rows`: the union of their keys in first-seen
 /// order, each typed by every value that appeared under it.
 pub fn infer_schema(rows: &[JsonRow]) -> Vec<Column> {
-    let mut order: Vec<String> = Vec::new();
-    let mut observed: HashMap<&str, Observed> = HashMap::new();
+    let mut columns: Vec<(String, Observed)> = Vec::new();
+    // Exact spellings resolve without folding, so the per-cell cost of case
+    // insensitivity is paid once per distinct spelling, not once per row.
+    let mut by_spelling: HashMap<&str, usize> = HashMap::new();
+    let mut by_folded: HashMap<String, usize> = HashMap::new();
 
     for row in rows {
         for (key, value) in &row.0 {
-            let entry = observed.entry(&**key).or_insert_with(|| {
-                order.push(key.to_string());
-                Observed::Untyped
+            let index = *by_spelling.entry(&**key).or_insert_with(|| {
+                *by_folded
+                    .entry(key.to_ascii_lowercase())
+                    .or_insert_with(|| {
+                        columns.push((key.to_string(), Observed::Untyped));
+                        columns.len() - 1
+                    })
             });
-            *entry = entry.observe(value);
+            let observed = &mut columns[index].1;
+            *observed = observed.observe(value);
         }
     }
 
-    order
+    columns
         .into_iter()
-        .map(|name| {
-            let ty = observed[name.as_str()].resolve();
-            Column { name, ty }
+        .map(|(name, observed)| Column {
+            name,
+            ty: observed.resolve(),
         })
         .collect()
 }
 
-/// The value of `column` in `row` — NULL when the row omits the key, which is
+/// The value of `column` in `row`, matching the key ASCII-case-insensitively
+/// as [`infer_schema`] grouped it — NULL when the row omits the key, which is
 /// how a union schema stays rectangular over ragged rows.
 pub fn cell(row: &JsonRow, column: &str) -> Value {
-    row.get(column).map(json_to_value).unwrap_or(Value::Null)
+    row.0
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(column))
+        .map(|(_, value)| json_to_value(value))
+        .unwrap_or(Value::Null)
 }
 
 /// The `CREATE TABLE` statement declaring `columns`, for a vtab's schema.
@@ -362,6 +412,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_rows_names_a_lone_surrogate_and_its_line() {
+        let err = parse_rows("{}\n{\"a\":\"\\ud800\"}").unwrap_err();
+        assert_eq!(err, r"line 2: lone surrogate \ud800 is not valid Unicode");
+    }
+
+    #[test]
+    fn lone_surrogate_finds_an_unpaired_leading_or_trailing_half() {
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800"}"#), Some(r"\ud800"));
+        assert_eq!(lone_surrogate(r#"{"a":"\uDBFF\u0041"}"#), Some(r"\uDBFF"));
+        assert_eq!(lone_surrogate(r#"{"a":"x\udc00"}"#), Some(r"\udc00"));
+        assert_eq!(lone_surrogate(r#"{"a":"\uDFFF"}"#), Some(r"\uDFFF"));
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800"#), Some(r"\ud800"));
+    }
+
+    #[test]
+    fn lone_surrogate_passes_pairs_other_escapes_and_escaped_backslashes() {
+        assert_eq!(lone_surrogate(r#"{"a":"\ud83d\ude00"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\uD7FF\uE000\n\""}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\\ud800"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\ud8"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\uzzzz"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\u+d80"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800x\udc00"}"#), Some(r"\ud800"));
+        assert_eq!(lone_surrogate("\\"), None);
+    }
+
+    #[test]
+    fn lone_surrogate_finds_a_lone_half_after_another_escape() {
+        assert_eq!(lone_surrogate(r#"{"a":"\u0041\ud800"}"#), Some(r"\ud800"));
+    }
+
+    #[test]
+    fn lone_surrogate_finds_a_lone_half_after_a_pair() {
+        assert_eq!(
+            lone_surrogate(r#"{"a":"\ud83d\ude00","b":"\ude00"}"#),
+            Some(r"\ude00")
+        );
+    }
+
+    #[test]
     fn parse_rows_rejects_invalid_json() {
         assert!(parse_rows("not json").is_err());
     }
@@ -404,6 +494,24 @@ mod tests {
     fn a_repeated_key_does_not_repeat_its_column() {
         let columns = infer_schema(&rows(&[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":3}"#]));
         assert_eq!(names(&columns), vec!["a"]);
+    }
+
+    #[test]
+    fn keys_differing_only_in_case_are_one_column_named_by_the_first_spelling() {
+        let columns = infer_schema(&rows(&[r#"{"title":1}"#, r#"{"Title":2,"TITLE":3}"#]));
+        assert_eq!(names(&columns), vec!["title"]);
+    }
+
+    #[test]
+    fn keys_differing_only_in_case_type_one_column_together() {
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"M":"two"}"#]));
+        assert_eq!(ty_of(&columns, "m"), SqlType::Text);
+    }
+
+    #[test]
+    fn keys_differing_beyond_ascii_case_stay_separate_columns() {
+        let columns = infer_schema(&rows(&[r#"{"é":1,"É":2}"#]));
+        assert_eq!(names(&columns), vec!["é", "É"]);
     }
 
     #[test]
@@ -562,6 +670,12 @@ mod tests {
         let row = &rows(&[r#"{"s":"x","i":1}"#])[0];
         assert_eq!(cell(row, "s"), Value::Text("x".into()));
         assert_eq!(cell(row, "i"), Value::Integer(1));
+    }
+
+    #[test]
+    fn cell_reads_a_key_differing_from_the_column_only_in_case() {
+        let row = &rows(&[r#"{"Title":"x"}"#])[0];
+        assert_eq!(cell(row, "title"), Value::Text("x".into()));
     }
 
     #[test]

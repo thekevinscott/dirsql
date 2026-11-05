@@ -8,6 +8,7 @@
 //! non-zero exit, or output that is not one JSON object per line --
 //! fails the whole table.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,13 +67,13 @@ pub(crate) fn run(
 /// the paths it carries.
 struct Job {
     index: usize,
-    args: Vec<String>,
+    args: Vec<OsString>,
 }
 
 /// What the invocations share: the command, where it runs, and how they fail.
 struct Pool<'a> {
     command: &'a str,
-    argv: &'a [String],
+    argv: &'a [OsString],
     cwd: &'a Path,
     jobs: Mutex<Receiver<Job>>,
     aborted: AtomicBool,
@@ -145,7 +146,11 @@ fn run_streaming_on(
         return Ok(());
     };
     let placeholders = [Placeholder::path("root", &root.to_string_lossy())];
-    let argv = command::build_argv(command, &placeholders).map_err(spawn_failure)?;
+    let argv: Vec<OsString> = command::build_argv(command, &placeholders)
+        .map_err(spawn_failure)?
+        .into_iter()
+        .map(OsString::from)
+        .collect();
     let budget = ARG_BUDGET.saturating_sub(argv_bytes(&argv));
 
     let mut known_rest;
@@ -195,7 +200,7 @@ fn run_streaming_on(
                 if pool.aborted.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some(full) = packer.push(command::non_verbatim(&path.to_string_lossy())) {
+                if let Some(full) = packer.push(command::non_verbatim_path(&path)) {
                     dispatch.send(full);
                 }
                 if dispatch.tally.sent == 0 {
@@ -230,10 +235,14 @@ fn run_streaming_on(
 
 /// The one argument list `paths` make when they fit one invocation and their
 /// data does not justify a second.
-fn lone_run(paths: &[PathBuf], budget: usize, cpus: impl FnOnce() -> usize) -> Option<Vec<String>> {
-    let args: Vec<String> = paths
+fn lone_run(
+    paths: &[PathBuf],
+    budget: usize,
+    cpus: impl FnOnce() -> usize,
+) -> Option<Vec<OsString>> {
+    let args: Vec<OsString> = paths
         .iter()
-        .map(|path| command::non_verbatim(&path.to_string_lossy()))
+        .map(|path| command::non_verbatim_path(path))
         .collect();
     if argv_bytes(&args) > budget {
         return None;
@@ -272,7 +281,7 @@ impl Tally {
 }
 
 impl Dispatch<'_, '_> {
-    fn send(&mut self, args: Vec<String>) {
+    fn send(&mut self, args: Vec<OsString>) {
         let (index, spawn) = self.tally.next();
         let _ = self.jobs.send(Job { index, args });
         if spawn {
@@ -287,7 +296,7 @@ impl Dispatch<'_, '_> {
 /// drained rather than cut short so the child never dies on a broken pipe.
 fn run_invocation(
     command: &str,
-    full: &[String],
+    full: &[OsString],
     cwd: &Path,
     send: &mut dyn FnMut(Vec<JsonRow>),
     end: &mut dyn FnMut(),
@@ -331,7 +340,8 @@ fn spawn_failure(error: command::CommandError) -> String {
 /// the kernel exceed the bytes of the argument itself.
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
 // the uncompiled twin too, and no test on a Linux gate can kill that mutant.
-fn arg_cost(arg: &str) -> usize {
+fn arg_cost(arg: impl AsRef<OsStr>) -> usize {
+    let arg = arg.as_ref();
     #[cfg(windows)]
     let spawned = command::quote_windows_arg(arg).len();
     #[cfg(not(windows))]
@@ -340,8 +350,8 @@ fn arg_cost(arg: &str) -> usize {
 }
 
 /// The bytes `argv` costs: every argument at its [`arg_cost`].
-fn argv_bytes(argv: &[String]) -> usize {
-    argv.iter().map(|arg| arg_cost(arg)).sum()
+fn argv_bytes(argv: &[OsString]) -> usize {
+    argv.iter().map(arg_cost).sum()
 }
 
 /// Fills argument lists up to `budget` bytes, in order. A single argument over
@@ -350,7 +360,7 @@ fn argv_bytes(argv: &[String]) -> usize {
 struct Packer {
     budget: usize,
     used: usize,
-    args: Vec<String>,
+    args: Vec<OsString>,
 }
 
 impl Packer {
@@ -363,7 +373,7 @@ impl Packer {
     }
 
     /// Add `arg`, returning the list it overflowed.
-    fn push(&mut self, arg: String) -> Option<Vec<String>> {
+    fn push(&mut self, arg: OsString) -> Option<Vec<OsString>> {
         let cost = arg_cost(&arg);
         let full = (!self.args.is_empty() && self.used + cost > self.budget).then(|| {
             self.used = 0;
@@ -374,7 +384,7 @@ impl Packer {
         full
     }
 
-    fn rest(self) -> Vec<String> {
+    fn rest(self) -> Vec<OsString> {
         self.args
     }
 }
@@ -389,11 +399,7 @@ fn cpus() -> usize {
 
 /// [`spread`] over the machine's CPUs, asking for the count only when the
 /// data could fill more than one run: the query reads cgroup files each time.
-fn spread_runs<'a>(
-    args: &'a [String],
-    sizes: &[u64],
-    cpus: impl FnOnce() -> usize,
-) -> Vec<&'a [String]> {
+fn spread_runs<'a, T>(args: &'a [T], sizes: &[u64], cpus: impl FnOnce() -> usize) -> Vec<&'a [T]> {
     let by_data = usize::try_from(sizes.iter().sum::<u64>() / MIN_RUN_BYTES).unwrap_or(usize::MAX);
     if by_data.min(args.len()) <= 1 {
         return vec![args];
@@ -412,7 +418,7 @@ fn file_sizes(paths: &[PathBuf]) -> Vec<u64> {
 /// Split `args` into at most `parts` consecutive runs holding about equal
 /// bytes of file data, preserving order, and never more runs than
 /// [`MIN_RUN_BYTES`] of data justify. `sizes` runs parallel to `args`.
-fn spread<'a>(args: &'a [String], sizes: &[u64], parts: usize) -> Vec<&'a [String]> {
+fn spread<'a, T>(args: &'a [T], sizes: &[u64], parts: usize) -> Vec<&'a [T]> {
     let total: u64 = sizes.iter().sum();
     let parts = parts
         .min(args.len())
@@ -455,17 +461,17 @@ mod tests {
     }
     use super::*;
 
-    fn args(words: &[&str]) -> Vec<String> {
-        words.iter().map(|w| w.to_string()).collect()
+    fn args(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
     }
 
-    fn lens<T: AsRef<[String]>>(chunks: &[T]) -> Vec<usize> {
+    fn lens<T: AsRef<[OsString]>>(chunks: &[T]) -> Vec<usize> {
         chunks.iter().map(|chunk| chunk.as_ref().len()).collect()
     }
 
-    fn chunks(args: &[String], budget: usize) -> Vec<Vec<String>> {
+    fn chunks(args: &[OsString], budget: usize) -> Vec<Vec<OsString>> {
         let mut packer = Packer::new(budget);
-        let mut out: Vec<Vec<String>> = args
+        let mut out: Vec<Vec<OsString>> = args
             .iter()
             .filter_map(|arg| packer.push(arg.clone()))
             .collect();
@@ -765,11 +771,11 @@ mod tests {
         assert_eq!(*order.lock().unwrap(), vec![1, 0]);
     }
 
-    fn two_paths() -> (Vec<PathBuf>, Vec<String>, usize) {
+    fn two_paths() -> (Vec<PathBuf>, Vec<OsString>, usize) {
         let paths = vec![PathBuf::from("/a"), PathBuf::from("/b")];
-        let spawned: Vec<String> = paths
+        let spawned: Vec<OsString> = paths
             .iter()
-            .map(|path| command::non_verbatim(&path.to_string_lossy()))
+            .map(|path| command::non_verbatim_path(path))
             .collect();
         let bytes = argv_bytes(&spawned);
         (paths, spawned, bytes)

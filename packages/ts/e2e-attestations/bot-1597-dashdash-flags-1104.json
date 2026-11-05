@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/extension-package.test.ts",
+  "ran_at": 1793839315,
+  "exit_code": 0,
+  "commit": "a74edb0c8e3ef95c5c318fd621ffe82e345e8e36",
+  "branch": "bot/1597-dashdash-flags-1104"
+}

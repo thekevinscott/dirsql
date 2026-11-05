@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .._dirsql import config_paths_from_argv
 from ..resolve_configs_extension_specs import resolve_configs_extension_specs
+from .insert_flags import insert_flags
 
 # Config extensions the binary dispatches to `dirsql interpret`; never
 # pre-resolved here (that path resolves via the handshake).
@@ -44,4 +45,4 @@ def with_resolved_extensions(argv: list[str]) -> list[str]:
         flags.append(
             f"{spec['path']}::{entrypoint}" if entrypoint is not None else spec["path"]
         )
-    return [*argv, *flags]
+    return insert_flags(argv, flags)

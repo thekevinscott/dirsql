@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/plugin_discovery_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/extension_package_test.py -x -q",
+  "ran_at": 1793839224,
+  "exit_code": 0,
+  "commit": "40bba91930ada27955ca16f673c593ac04de5b38",
+  "branch": "bot/1597-dashdash-flags-1104"
+}

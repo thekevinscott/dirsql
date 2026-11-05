@@ -332,52 +332,20 @@ mod python {
     ) -> PyResult<HashMap<String, Value>> {
         let mut row = HashMap::new();
         for (key, val) in py_row {
-            row.insert(key.clone(), py_to_value(py, val)?);
+            row.insert(key.clone(), py_to_value(py, key, val)?);
         }
         Ok(row)
     }
 
-    fn py_to_value(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Value> {
+    fn py_to_value(py: Python<'_>, column: &str, obj: &Py<PyAny>) -> PyResult<Value> {
         let bound = obj.bind(py);
-
-        if bound.is_none() {
-            return Ok(Value::Null);
+        match supported_value(bound)? {
+            Some(value) => Ok(value),
+            None => Err(PyTypeError::new_err(format!(
+                "column '{column}': unsupported value type {}; expected str, int, float, bytes, or None",
+                bound.get_type().name()?
+            ))),
         }
-
-        // bool must precede int (bool is a subclass of int in Python).
-        if bound.is_instance_of::<PyBool>() {
-            let b: bool = bound.extract()?;
-            return Ok(Value::Integer(if b { 1 } else { 0 }));
-        }
-
-        // A Python int must round-trip losslessly or fail loudly. Falling
-        // through to f64/str would silently corrupt an out-of-i64 value
-        // (lossy Real, or a TEXT repr).
-        if bound.is_instance_of::<PyInt>() {
-            return match bound.extract::<i64>() {
-                Ok(i) => Ok(Value::Integer(i)),
-                Err(_) => Err(PyOverflowError::new_err(int_overflow_message(
-                    &bound.str()?.to_string(),
-                ))),
-            };
-        }
-
-        if let Ok(f) = bound.extract::<f64>() {
-            return Ok(Value::Real(f));
-        }
-        if let Ok(s) = bound.extract::<String>() {
-            return Ok(Value::Text(s));
-        }
-        // Only genuine binary types map to BLOB. A list/tuple of ints must
-        // NOT be probed as bytes (that turned `[1,2,3]` into a BLOB by
-        // magnitude); it falls through to the repr like any other sequence.
-        if bound.is_instance_of::<PyBytes>() || bound.is_instance_of::<PyByteArray>() {
-            let b: Vec<u8> = bound.extract()?;
-            return Ok(Value::Blob(b));
-        }
-
-        // Fall back to the Python repr.
-        Ok(Value::Text(bound.str()?.to_string()))
     }
 
     /// The range-error message for a Python int that does not fit `i64`.
@@ -417,31 +385,41 @@ mod python {
     }
 
     fn param_to_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
-        if value.is_none() {
-            return Ok(Value::Null);
+        match supported_value(value)? {
+            Some(value) => Ok(value),
+            None => Err(PyTypeError::new_err(format!(
+                "unsupported parameter type: {}",
+                value.get_type().name()?
+            ))),
         }
+    }
+
+    /// `None` for a type outside the documented value types: coercing it
+    /// through `__float__` or its repr would store a lossy value silently.
+    fn supported_value(value: &Bound<'_, PyAny>) -> PyResult<Option<Value>> {
+        if value.is_none() {
+            return Ok(Some(Value::Null));
+        }
+        // bool must precede int (bool is a subclass of int in Python).
         if value.is_instance_of::<PyBool>() {
-            return Ok(Value::Integer(i64::from(value.extract::<bool>()?)));
+            return Ok(Some(Value::Integer(i64::from(value.extract::<bool>()?))));
         }
         if value.is_instance_of::<PyInt>() {
             return value
                 .extract::<i64>()
-                .map(Value::Integer)
+                .map(|i| Some(Value::Integer(i)))
                 .map_err(|_| PyOverflowError::new_err(int_overflow_message(&value.to_string())));
         }
         if value.is_instance_of::<PyFloat>() {
-            return Ok(Value::Real(value.extract()?));
+            return Ok(Some(Value::Real(value.extract()?)));
         }
         if value.is_instance_of::<PyString>() {
-            return Ok(Value::Text(value.extract()?));
+            return Ok(Some(Value::Text(value.extract()?)));
         }
         if value.is_instance_of::<PyBytes>() || value.is_instance_of::<PyByteArray>() {
-            return Ok(Value::Blob(value.extract()?));
+            return Ok(Some(Value::Blob(value.extract()?)));
         }
-        Err(PyTypeError::new_err(format!(
-            "unsupported parameter type: {}",
-            value.get_type().name()?
-        )))
+        Ok(None)
     }
 
     fn int_overflow_message(repr: &str) -> String {

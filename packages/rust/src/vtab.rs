@@ -1,4 +1,4 @@
-use std::ffi::c_int;
+use std::ffi::{OsStr, c_int};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::num::NonZeroU32;
@@ -14,7 +14,7 @@ use rusqlite::{Connection, Result, ffi};
 
 use crate::matcher::TableMatcher;
 use crate::row_stream::RowStream;
-use crate::scanner::{PathGlob, scan_glob_rows, to_slash};
+use crate::scanner::{PathGlob, scan_glob_rows};
 use crate::vtab_scaffold::{self, TableSource};
 
 pub use crate::vtab_scaffold::StatementScope;
@@ -77,22 +77,59 @@ fn column_type(column: &str) -> &'static str {
 /// almost perfectly; past eight the box, not the count, sets the pace.
 const READERS: usize = 8;
 
-/// Read `path` as text, yielding `None` when it is unreadable or not valid
-/// UTF-8. A file that cannot be read is a NULL cell, never a failed row: the
-/// filesystem is allowed to be messy and a query over it should still return.
-/// `size` is what the row's stat reported, so the buffer is sized without
-/// stat'ing again; a file that has grown since is still read whole.
-fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    read_text_with(path, size, |path| File::open(path))
+/// Read `path` as text, yielding `None` when it is unreadable, not valid
+/// UTF-8, or longer than `max_length` bytes. A file that cannot be read is a
+/// NULL cell, never a failed row: the filesystem is allowed to be messy and a
+/// query over it should still return. `size` is what the row's stat reported,
+/// so the buffer is sized without stat'ing again; a file that has grown since
+/// is still read whole, up to `max_length`.
+fn read_text(path: &Path, size: Option<i64>, max_length: usize) -> Option<String> {
+    read_text_with(path, size, max_length, open_regular)
+}
+
+/// Open `path` only if what is there now is a regular file. The scan saw a
+/// regular file, but the path can have been replaced since: a FIFO would block
+/// the open and a device like `/dev/zero` never ends. The check is on the open
+/// handle, so nothing can be swapped in between it and the read.
+fn open_regular(path: &Path) -> io::Result<File> {
+    let file = open_nonblocking(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
+}
+
+fn open_nonblocking(path: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    return Ok(File::from(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::NONBLOCK.union(rustix::fs::OFlags::CLOEXEC),
+        rustix::fs::Mode::empty(),
+    )?));
+    #[cfg(not(unix))]
+    File::open(path)
 }
 
 fn read_text_with<R: Read>(
     path: &Path,
     size: Option<i64>,
+    max_length: usize,
     open: impl FnOnce(&Path) -> io::Result<R>,
 ) -> Option<String> {
-    let mut file = open(path).ok()?;
-    let bytes = read_all(&mut file, presize(size)).ok()?;
+    if size.is_some_and(|size| usize::try_from(size).is_ok_and(|size| size > max_length)) {
+        return None;
+    }
+    let file = open(path).ok()?;
+    let cap = max_length.saturating_add(1);
+    let bytes = read_all(
+        &mut file.take(u64::try_from(cap).unwrap_or(u64::MAX)),
+        presize(size).min(cap),
+    )
+    .ok()?;
+    if bytes.len() > max_length {
+        return None;
+    }
     String::from_utf8(bytes).ok()
 }
 
@@ -184,7 +221,10 @@ struct ScanSpec {
     gitignore: bool,
     /// Whether a `.gitignore` that ignores `root` empties the scan.
     check_root: bool,
-    reader: fn(&Path, Option<i64>) -> Option<String>,
+    reader: fn(&Path, Option<i64>, usize) -> Option<String>,
+    /// The connection's longest accepted string: longer content reads as
+    /// NULL, since handing it to SQLite would fail the whole statement.
+    max_length: usize,
     /// The row set of the statement in progress, which the first stat a
     /// statement asks for stats whole: one stat at a time as SQLite steps
     /// would be several times slower than sharing them out at once.
@@ -201,8 +241,9 @@ struct FileRow {
     rel: Option<Box<Path>>,
     /// The path as reported, under the table's prefix when it has one, then
     /// a NUL: SQLite reads a NUL-terminated cell in place, and `basename`
-    /// and `ext` are suffixes that end on the same NUL.
-    terminated: Box<str>,
+    /// and `ext` are suffixes that end on the same NUL. The bytes are the
+    /// name's own, so a name that is not valid Unicode stays distinct.
+    terminated: Box<[u8]>,
     spans: PathSpans,
     /// Stat'ed at most once per statement, and only when the statement reads
     /// a stat column or the content.
@@ -224,10 +265,10 @@ impl FileRow {
         };
         let spans = PathSpans::of(&path);
         let mut terminated = path;
-        terminated.push('\0');
+        terminated.push(0);
         Self {
             rel,
-            terminated: terminated.into_boxed_str(),
+            terminated: terminated.into_boxed_slice(),
             spans,
             facts: OnceLock::new(),
             content: OnceLock::new(),
@@ -238,16 +279,16 @@ impl FileRow {
     fn rel(&self) -> &Path {
         self.rel
             .as_deref()
-            .unwrap_or_else(|| Path::new(self.path()))
+            .unwrap_or_else(|| Path::new(os_str(self.path())))
     }
 
-    fn path(&self) -> &str {
+    fn path(&self) -> &[u8] {
         &self.terminated[..self.terminated.len() - 1]
     }
 
     /// Column `i` with its terminating NUL, for the columns that end the
     /// path; `None` for any other column, or one the path has no answer for.
-    fn terminated_cell(&self, i: c_int) -> Option<&str> {
+    fn terminated_cell(&self, i: c_int) -> Option<&[u8]> {
         match usize::try_from(i).ok()? {
             PATH_COLUMN => Some(&self.terminated),
             BASENAME_COLUMN => self
@@ -259,17 +300,17 @@ impl FileRow {
         }
     }
 
-    fn basename(&self) -> Option<&str> {
+    fn basename(&self) -> Option<&[u8]> {
         self.spans.name_at.map(|at| &self.path()[span_end(at)..])
     }
 
-    fn dir(&self) -> Option<&str> {
+    fn dir(&self) -> Option<&[u8]> {
         self.spans
             .dir_len
             .map(|len| &self.terminated[..span_end(len)])
     }
 
-    fn ext(&self) -> Option<&str> {
+    fn ext(&self) -> Option<&[u8]> {
         self.spans.ext_at.map(|at| &self.path()[span_end(at)..])
     }
 }
@@ -293,15 +334,15 @@ fn span_end(span: NonZeroU32) -> usize {
 }
 
 impl PathSpans {
-    fn of(path: &str) -> Self {
-        let p = Path::new(path);
+    fn of(path: &[u8]) -> Self {
+        let p = Path::new(os_str(path));
         let span = |at: usize| {
             u32::try_from(at)
                 .ok()?
                 .checked_add(1)
                 .and_then(NonZeroU32::new)
         };
-        let suffix_at = |s: &std::ffi::OsStr| span(path.len() - s.len());
+        let suffix_at = |s: &OsStr| span(path.len() - s.len());
         Self {
             name_at: p.file_name().and_then(suffix_at),
             dir_len: p.parent().and_then(|d| span(d.as_os_str().len())),
@@ -311,7 +352,7 @@ impl PathSpans {
 }
 
 /// The stat-derived columns, each `None` when the file could not be stat'ed
-/// or the platform cannot supply the fact (or it predates the epoch).
+/// or the platform cannot supply the fact.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct StatFacts {
     size: Option<i64>,
@@ -329,9 +370,22 @@ impl StatFacts {
     }
 }
 
+/// Whole Unix seconds, floored like `st_mtime`, so a pre-epoch time is
+/// negative.
 fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
-    let since = time?.duration_since(UNIX_EPOCH).ok()?;
-    i64::try_from(since.as_secs()).ok()
+    match time?.duration_since(UNIX_EPOCH) {
+        Ok(since) => i64::try_from(since.as_secs()).ok(),
+        Err(before) => {
+            let before = before.duration();
+            let whole = i64::try_from(before.as_secs()).ok()?;
+            let floored = whole.checked_add(i64::from(before.subsec_nanos() > 0))?;
+            Some(-floored)
+        }
+    }
+}
+
+fn text(bytes: Option<&[u8]>) -> ValueRef<'_> {
+    bytes.map_or(ValueRef::Null, ValueRef::Text)
 }
 
 fn integer(n: Option<i64>) -> ValueRef<'static> {
@@ -346,10 +400,10 @@ fn cell<'r>(
     facts: &dyn Fn(&FileRow) -> StatFacts,
 ) -> Option<ValueRef<'r>> {
     Some(match usize::try_from(i).unwrap_or(usize::MAX) {
-        PATH_COLUMN => ValueRef::from(row.path()),
-        BASENAME_COLUMN => ValueRef::from(row.basename()),
-        DIR_COLUMN => ValueRef::from(row.dir()),
-        EXT_COLUMN => ValueRef::from(row.ext()),
+        PATH_COLUMN => ValueRef::Text(row.path()),
+        BASENAME_COLUMN => text(row.basename()),
+        DIR_COLUMN => text(row.dir()),
+        EXT_COLUMN => text(row.ext()),
         SIZE_COLUMN => integer(facts(row).size),
         MTIME_COLUMN => integer(facts(row).mtime),
         CTIME_COLUMN => integer(facts(row).ctime),
@@ -362,7 +416,7 @@ fn cell<'r>(
 /// spec. `args[0..3]` are the module, database and table names; the module's
 /// own arguments follow — root, glob, path prefix, the gitignore switch, then
 /// any ignore patterns.
-fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
+fn parse_module_args(args: &[&[u8]], max_length: usize) -> Result<ScanSpec> {
     let user_args = vtab_scaffold::user_args(args);
 
     let [root, pattern, path_prefix, gitignore, ignore @ ..] = user_args.as_slice() else {
@@ -382,6 +436,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
         check_root: vtab_scaffold::checks_root(gitignore),
         reader: read_text,
+        max_length,
         current: Mutex::new(Weak::new()),
     })
 }
@@ -411,31 +466,56 @@ impl ScanSpec {
     }
 
     fn read(&self, row: &FileRow) -> Option<String> {
-        (self.reader)(&self.root.join(row.rel()), self.facts(row).size)
+        (self.reader)(
+            &self.root.join(row.rel()),
+            self.facts(row).size,
+            self.max_length,
+        )
     }
 }
 
-/// The string a matched file is reported under: the relative path as scanned,
-/// under the table's path prefix when it has one.
-fn reported_path(path_prefix: &Path, rel_path: &Path) -> String {
-    let rel_path = to_slash(rel_path);
-    let prefix = path_prefix.to_string_lossy();
-    if prefix.is_empty() {
-        return rel_path;
+/// The bytes a matched file is reported under: the relative path as
+/// scanned, `/`-separated, under the table's path prefix when it has one.
+fn reported_path(path_prefix: &Path, rel_path: &Path) -> Vec<u8> {
+    let prefix = path_prefix.as_os_str().as_encoded_bytes();
+    let rel = rel_path.as_os_str().as_encoded_bytes();
+    let mut path = Vec::with_capacity(prefix.len() + 1 + rel.len() + 1);
+    path.extend_from_slice(prefix);
+    if prefix
+        .last()
+        .is_some_and(|&b| !std::path::is_separator(char::from(b)))
+    {
+        path.push(b'/');
     }
-    if prefix.ends_with(['/', std::path::MAIN_SEPARATOR]) {
-        return format!("{prefix}{rel_path}");
-    }
-    format!("{prefix}/{rel_path}")
+    path.extend(
+        rel.iter()
+            .map(|&b| if b == NATIVE_SEPARATOR { b'/' } else { b }),
+    );
+    path
 }
+
+const NATIVE_SEPARATOR: u8 = std::path::MAIN_SEPARATOR_STR.as_bytes()[0];
 
 /// The reported path taken from `rel` itself, when it is already what a
 /// table with no prefix reports: handing `rel` back otherwise.
-fn reported_in_place(path_prefix: &Path, rel: PathBuf) -> Result<String, PathBuf> {
+fn reported_in_place(path_prefix: &Path, rel: PathBuf) -> Result<Vec<u8>, PathBuf> {
     if !path_prefix.as_os_str().is_empty() || std::path::MAIN_SEPARATOR != '/' {
         return Err(rel);
     }
-    rel.into_os_string().into_string().map_err(PathBuf::from)
+    Ok(rel.into_os_string().into_encoded_bytes())
+}
+
+/// The path `bytes` spell, as [`reported_path`] or [`reported_in_place`]
+/// made them.
+#[expect(
+    unsafe_code,
+    reason = "std offers no checked conversion from encoded bytes to an OsStr"
+)]
+fn os_str(bytes: &[u8]) -> &OsStr {
+    // SAFETY: the bytes are an OsStr's encoded bytes, joined to and with
+    // ASCII separators substituted, and the NUL terminator excluded: a
+    // mixture of encoded bytes and UTF-8, which the conversion accepts.
+    unsafe { OsStr::from_encoded_bytes_unchecked(bytes) }
 }
 
 impl TableSource for ScanSpec {
@@ -445,8 +525,8 @@ impl TableSource for ScanSpec {
 
     const LOOKUP_COLUMNS: &'static [usize] = &LOOKUP_COLUMNS;
 
-    fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
-        Ok((declared_schema(), parse_module_args(args)?))
+    fn connect(args: &[&[u8]], max_length: usize) -> Result<(String, Self)> {
+        Ok((declared_schema(), parse_module_args(args, max_length)?))
     }
 
     fn rows(&self, rows: &Arc<RowStream<FileRow>>) {
@@ -502,7 +582,7 @@ impl TableSource for ScanSpec {
         read_contents(rows, &|row| self.read(row));
     }
 
-    fn lookup_key<'r>(&self, row: &'r FileRow, column: usize) -> Option<&'r str> {
+    fn lookup_key<'r>(&self, row: &'r FileRow, column: usize) -> Option<&'r [u8]> {
         match column {
             PATH_COLUMN => Some(row.path()),
             BASENAME_COLUMN => row.basename(),
@@ -518,7 +598,7 @@ impl TableSource for ScanSpec {
     unsafe_code,
     reason = "rusqlite exposes neither the raw context nor SQLITE_STATIC"
 )]
-fn set_terminated_text(ctx: &mut Context, text: &str) {
+fn set_terminated_text(ctx: &mut Context, text: &[u8]) {
     const _: () = assert!(size_of::<Context>() == size_of::<*mut ffi::sqlite3_context>());
     // SAFETY: `Context` is a newtype over the raw context pointer, as the
     // size assert above checks. SQLITE_STATIC is sound because the rows stay
@@ -539,6 +619,10 @@ pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utf8(bytes: &[u8]) -> &str {
+        std::str::from_utf8(bytes).unwrap()
+    }
 
     // Real vtab behavior over a real directory is covered by `tests/vtab.rs`
     // (unit-lint isolation); only the pure helpers are tested here.
@@ -622,7 +706,7 @@ mod tests {
     #[test]
     fn a_held_cell_is_the_value_the_column_emits() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"));
         let cells: Vec<ValueRef<'_>> = [PATH_COLUMN, BASENAME_COLUMN, DIR_COLUMN, EXT_COLUMN]
             .into_iter()
@@ -644,7 +728,7 @@ mod tests {
     #[test]
     fn parse_module_args_extracts_root_and_glob() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
 
         assert_eq!(spec.root, PathBuf::from("/tmp/notes"));
         assert!(spec.glob.is_match(Path::new("a.md")));
@@ -655,7 +739,7 @@ mod tests {
     fn parse_module_args_accepts_unquoted_arguments() {
         let args = args_with(&[b"/tmp/notes", b"**/*", b"", b"gitignore"]);
         assert_eq!(
-            parse_module_args(&args).unwrap().root,
+            parse_module_args(&args, usize::MAX).unwrap().root,
             PathBuf::from("/tmp/notes")
         );
     }
@@ -664,7 +748,7 @@ mod tests {
     fn parse_module_args_extracts_the_path_prefix() {
         let args = args_with(&[b"'/var/log'", b"'*.log'", b"'/var/log'", b"'gitignore'"]);
         assert_eq!(
-            parse_module_args(&args).unwrap().path_prefix,
+            parse_module_args(&args, usize::MAX).unwrap().path_prefix,
             PathBuf::from("/var/log")
         );
     }
@@ -672,16 +756,16 @@ mod tests {
     #[test]
     fn parse_module_args_reads_the_gitignore_switch() {
         let on = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
-        assert!(parse_module_args(&on).unwrap().gitignore);
+        assert!(parse_module_args(&on, usize::MAX).unwrap().gitignore);
 
         let off = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'no-gitignore'"]);
-        assert!(!parse_module_args(&off).unwrap().gitignore);
+        assert!(!parse_module_args(&off, usize::MAX).unwrap().gitignore);
     }
 
     #[test]
     fn parse_module_args_rejects_an_unknown_gitignore_switch() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'sometimes'"]);
-        let err = parse_module_args(&args)
+        let err = parse_module_args(&args, usize::MAX)
             .err()
             .expect("an unknown switch must be rejected");
         assert!(err.to_string().contains("no-gitignore"), "got: {err}");
@@ -696,7 +780,7 @@ mod tests {
             b"'gitignore'",
             b"'node_modules/**'",
         ]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
 
         assert!(spec.ignore.is_ignored(Path::new("node_modules/a.js")));
         assert!(!spec.ignore.is_ignored(Path::new("docs/a.md")));
@@ -705,14 +789,14 @@ mod tests {
     #[test]
     fn parse_module_args_accepts_no_ignore_patterns() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         assert!(!spec.ignore.is_ignored(Path::new("node_modules/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''"]);
-        let err = parse_module_args(&args)
+        let err = parse_module_args(&args, usize::MAX)
             .err()
             .expect("arity must be enforced");
         assert!(
@@ -724,19 +808,19 @@ mod tests {
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
         let args = args_with(&[b"'/tmp'", b"'[z-a]'", b"''", b"'gitignore'"]);
-        assert!(parse_module_args(&args).is_err());
+        assert!(parse_module_args(&args, usize::MAX).is_err());
     }
 
     #[test]
     fn parse_module_args_rejects_an_invalid_ignore_pattern() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'", b"'['"]);
-        assert!(parse_module_args(&args).is_err());
+        assert!(parse_module_args(&args, usize::MAX).is_err());
     }
 
     #[test]
     fn reported_path_is_the_relative_path_without_a_prefix() {
         assert_eq!(
-            reported_path(Path::new(""), Path::new("docs/a.md")),
+            utf8(&reported_path(Path::new(""), Path::new("docs/a.md"))),
             "docs/a.md"
         );
     }
@@ -744,18 +828,46 @@ mod tests {
     #[test]
     fn reported_path_is_absolute_under_a_prefix() {
         assert_eq!(
-            reported_path(Path::new("/var/log"), Path::new("a.log")),
+            utf8(&reported_path(Path::new("/var/log"), Path::new("a.log"))),
             "/var/log/a.log"
         );
     }
 
     #[test]
     fn reported_path_under_the_filesystem_root_has_one_separator() {
-        assert_eq!(reported_path(Path::new("/"), Path::new("a.log")), "/a.log");
+        assert_eq!(
+            utf8(&reported_path(Path::new("/"), Path::new("a.log"))),
+            "/a.log"
+        );
     }
 
     fn row_for(prefix: &str, rel: &str) -> FileRow {
         FileRow::new(Path::new(prefix), PathBuf::from(rel))
+    }
+
+    /// `dir/`, an unpaired surrogate's WTF-8 bytes, then `.md`: not UTF-8
+    /// on Unix, not Unicode on Windows.
+    fn not_unicode() -> PathBuf {
+        PathBuf::from(os_str(b"dir/\xED\xA3\xBF.md"))
+    }
+
+    #[test]
+    fn a_name_that_is_not_unicode_keeps_its_own_bytes_in_every_path_column() {
+        let rel = not_unicode();
+        let bytes = rel.as_os_str().as_encoded_bytes().to_vec();
+        let row = FileRow::new(Path::new(""), rel.clone());
+        assert_eq!(row.path(), bytes);
+        assert_eq!(row.dir(), Some(b"dir".as_slice()));
+        assert_eq!(row.basename(), Some(&bytes[4..]));
+        assert_eq!(row.ext(), Some(b"md".as_slice()));
+        assert_eq!(row.rel(), rel);
+    }
+
+    #[test]
+    fn reported_path_keeps_a_name_that_is_not_unicode() {
+        let rel = not_unicode();
+        let expected = [b"/var/".as_slice(), rel.as_os_str().as_encoded_bytes()].concat();
+        assert_eq!(reported_path(Path::new("/var"), &rel), expected);
     }
 
     #[cfg(unix)]
@@ -773,7 +885,7 @@ mod tests {
     #[test]
     fn the_cells_that_end_the_path_keep_its_terminator() {
         let row = row_for("", "docs/a.md");
-        let cells: Vec<Option<&str>> = (0..=8).map(|i| row.terminated_cell(i)).collect();
+        let cells: Vec<Option<&str>> = (0..=8).map(|i| row.terminated_cell(i).map(utf8)).collect();
         assert_eq!(
             cells,
             vec![
@@ -800,8 +912,9 @@ mod tests {
         StatFacts::default()
     }
 
-    fn injected_reader(path: &Path, size: Option<i64>) -> Option<String> {
-        (path == Path::new("/root/docs/a.md") && size == Some(7)).then(|| "contents".to_owned())
+    fn injected_reader(path: &Path, size: Option<i64>, max_length: usize) -> Option<String> {
+        (path == Path::new("/root/docs/a.md") && size == Some(7) && max_length == 9)
+            .then(|| "contents".to_owned())
     }
 
     fn sized_row(rel: &str, size: i64) -> FileRow {
@@ -812,14 +925,14 @@ mod tests {
 
     fn spec_with_reader() -> ScanSpec {
         let args = args_with(&[b"'/root'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let mut spec = parse_module_args(&args).unwrap();
+        let mut spec = parse_module_args(&args, 9).unwrap();
         spec.reader = injected_reader;
         spec
     }
 
     #[test]
     fn read_text_uses_the_injected_reader_and_decodes_utf8() {
-        let text = read_text_with(Path::new("/root/docs/a.md"), Some(7), |path| {
+        let text = read_text_with(Path::new("/root/docs/a.md"), Some(7), usize::MAX, |path| {
             assert_eq!(path, Path::new("/root/docs/a.md"));
             Ok(std::io::Cursor::new(b"contents".to_vec()))
         });
@@ -828,13 +941,94 @@ mod tests {
     }
 
     #[test]
+    fn read_text_skips_a_file_whose_stat_size_is_over_the_limit() {
+        let text = read_text_with(
+            Path::new("/root/a.md"),
+            Some(11),
+            10,
+            |_| -> io::Result<std::io::Cursor<Vec<u8>>> {
+                panic!("a file over the limit is never opened")
+            },
+        );
+
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn read_text_yields_none_once_a_file_has_grown_past_the_limit() {
+        let text = read_text_with(Path::new("/root/a.md"), Some(2), 10, |_| {
+            Ok(std::io::Cursor::new(b"x".repeat(11)))
+        });
+
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn read_text_reads_a_file_exactly_at_the_limit() {
+        let text = read_text_with(Path::new("/root/a.md"), Some(10), 10, |_| {
+            Ok(std::io::Cursor::new(b"x".repeat(10)))
+        });
+
+        assert_eq!(text.as_deref(), Some("xxxxxxxxxx"));
+    }
+
+    #[test]
+    fn read_text_stops_reading_one_byte_past_the_limit() {
+        let mut source = std::io::Cursor::new(b"x".repeat(100));
+        let text = read_text_with(Path::new("/root/a.md"), None, 10, |_| Ok(&mut source));
+
+        assert_eq!(text, None);
+        assert_eq!(source.position(), 11);
+    }
+
+    #[test]
     fn read_text_reads_a_real_file() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
 
-        let text = read_text(&path, None).unwrap();
+        let text = read_text(&path, None, usize::MAX).unwrap();
 
         assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
+    fn open_regular_opens_a_regular_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        assert!(open_regular(&path).is_ok());
+    }
+
+    #[test]
+    fn open_regular_refuses_what_is_not_a_regular_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut entries = vec![dir.path().to_path_buf()];
+        if cfg!(unix) {
+            entries.push(PathBuf::from("/dev/null"));
+        }
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("fifo");
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o644),
+                0,
+            )
+            .unwrap();
+            entries.push(fifo);
+        }
+
+        for entry in entries {
+            assert!(open_regular(&entry).is_err(), "{} opened", entry.display());
+        }
+    }
+
+    #[test]
+    fn open_regular_fails_on_a_missing_path() {
+        let err = open_regular(Path::new("/no/such/dirsql/path")).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -867,7 +1061,7 @@ mod tests {
         }
     }
 
-    fn text(s: &str) -> Option<ValueRef<'_>> {
+    fn text_cell(s: &str) -> Option<ValueRef<'_>> {
         Some(ValueRef::Text(s.as_bytes()))
     }
 
@@ -875,10 +1069,10 @@ mod tests {
     fn each_stat_column_reads_its_own_cell() {
         let row = row_for("", "docs/a.md");
         let seven = |_: &FileRow| facts(7);
-        assert_eq!(cell(&row, 0, &seven), text("docs/a.md"));
-        assert_eq!(cell(&row, 1, &seven), text("a.md"));
-        assert_eq!(cell(&row, 2, &seven), text("docs"));
-        assert_eq!(cell(&row, 3, &seven), text("md"));
+        assert_eq!(cell(&row, 0, &seven), text_cell("docs/a.md"));
+        assert_eq!(cell(&row, 1, &seven), text_cell("a.md"));
+        assert_eq!(cell(&row, 2, &seven), text_cell("docs"));
+        assert_eq!(cell(&row, 3, &seven), text_cell("md"));
         assert_eq!(cell(&row, 4, &seven), Some(ValueRef::Integer(7)));
         assert_eq!(cell(&row, 5, &seven), Some(ValueRef::Integer(70)));
         assert_eq!(cell(&row, 6, &seven), Some(ValueRef::Integer(700)));
@@ -922,12 +1116,12 @@ mod tests {
     #[test]
     fn a_scan_spec_keys_a_row_by_the_text_of_the_lookup_column() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let row = row_for("", "docs/a.md");
 
-        assert_eq!(spec.lookup_key(&row, 0), Some("docs/a.md"));
-        assert_eq!(spec.lookup_key(&row, 1), Some("a.md"));
-        assert_eq!(spec.lookup_key(&row, 2), Some("docs"));
+        assert_eq!(spec.lookup_key(&row, 0).map(utf8), Some("docs/a.md"));
+        assert_eq!(spec.lookup_key(&row, 1).map(utf8), Some("a.md"));
+        assert_eq!(spec.lookup_key(&row, 2).map(utf8), Some("docs"));
         assert_eq!(
             spec.lookup_key(&row, 4),
             None,
@@ -938,7 +1132,7 @@ mod tests {
     #[test]
     fn a_row_reports_its_path_under_the_prefix_and_reads_from_the_scanned_one() {
         let row = FileRow::new(Path::new("/root"), PathBuf::from("f001.md"));
-        assert_eq!(row.path(), "/root/f001.md");
+        assert_eq!(utf8(row.path()), "/root/f001.md");
         assert_eq!(row.rel(), Path::new("f001.md"));
     }
 
@@ -956,7 +1150,7 @@ mod tests {
         fs::write(dir.path().join("b.md"), "bbb").unwrap();
         let root = dir.path().to_str().unwrap().as_bytes();
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let rows = scanned(&spec);
         let rows = rows.all();
         assert!(rows.iter().all(|row| row.facts.get().is_none()));
@@ -987,13 +1181,13 @@ mod tests {
         }
         let root = dir.path().to_str().unwrap().as_bytes();
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
-        let rows = scanned(&parse_module_args(&args).unwrap());
+        let rows = scanned(&parse_module_args(&args, usize::MAX).unwrap());
 
         assert_eq!(rows.chunk(0).unwrap().len(), STREAM_CHUNK_ROWS);
         assert_eq!(rows.chunk(1).unwrap().len(), 1);
         assert!(rows.chunk(2).is_none());
         let all = rows.all();
-        let paths: Vec<&str> = all.iter().map(FileRow::path).collect();
+        let paths: Vec<&str> = all.iter().map(|row| utf8(row.path())).collect();
         assert_eq!(paths, names);
     }
 
@@ -1004,7 +1198,7 @@ mod tests {
         let stats = AtomicUsize::new(0);
         let stat = |row: &FileRow| {
             stats.fetch_add(1, Ordering::Relaxed);
-            facts(row.path()[1..row.path().len() - 3].parse().unwrap())
+            facts(utf8(row.path())[1..row.path().len() - 3].parse().unwrap())
         };
 
         stat_rows(&rows.iter().collect::<Vec<_>>(), &stat);
@@ -1135,8 +1329,8 @@ mod tests {
             .unwrap();
         let reads = std::sync::Mutex::new(Vec::new());
         let read = |row: &FileRow| {
-            reads.lock().unwrap().push(row.path().to_string());
-            Some(format!("body of {}", row.path()))
+            reads.lock().unwrap().push(utf8(row.path()).to_string());
+            Some(format!("body of {}", utf8(row.path())))
         };
 
         read_contents(&rows.iter().collect::<Vec<_>>(), &read);
@@ -1179,25 +1373,25 @@ mod tests {
     #[test]
     fn a_nested_path_splits_into_dir_basename_and_ext() {
         let row = row_for("", "nested/sub.txt");
-        assert_eq!(row.path(), "nested/sub.txt");
-        assert_eq!(row.dir(), Some("nested"));
-        assert_eq!(row.basename(), Some("sub.txt"));
-        assert_eq!(row.ext(), Some("txt"));
+        assert_eq!(utf8(row.path()), "nested/sub.txt");
+        assert_eq!(row.dir().map(utf8), Some("nested"));
+        assert_eq!(row.basename().map(utf8), Some("sub.txt"));
+        assert_eq!(row.ext().map(utf8), Some("txt"));
     }
 
     #[test]
     fn a_top_level_file_has_an_empty_dir() {
         let row = row_for("", "a.md");
-        assert_eq!(row.dir(), Some(""));
-        assert_eq!(row.basename(), Some("a.md"));
+        assert_eq!(row.dir().map(utf8), Some(""));
+        assert_eq!(row.basename().map(utf8), Some("a.md"));
     }
 
     #[test]
     fn an_absolute_row_reports_its_prefix_in_path_and_dir() {
         let row = row_for("/var/log", "a.log");
-        assert_eq!(row.path(), "/var/log/a.log");
-        assert_eq!(row.dir(), Some("/var/log"));
-        assert_eq!(row.basename(), Some("a.log"));
+        assert_eq!(utf8(row.path()), "/var/log/a.log");
+        assert_eq!(row.dir().map(utf8), Some("/var/log"));
+        assert_eq!(row.basename().map(utf8), Some("a.log"));
         assert_eq!(
             row.rel(),
             Path::new("a.log"),
@@ -1207,29 +1401,29 @@ mod tests {
 
     #[test]
     fn a_file_at_the_filesystem_root_has_the_root_as_its_dir() {
-        assert_eq!(row_for("/", "a.md").dir(), Some("/"));
+        assert_eq!(row_for("/", "a.md").dir().map(utf8), Some("/"));
     }
 
     #[test]
     fn a_dotfile_and_a_bare_name_have_no_ext() {
-        assert_eq!(row_for("", ".bashrc").ext(), None);
-        assert_eq!(row_for("", "Makefile").ext(), None);
+        assert_eq!(row_for("", ".bashrc").ext().map(utf8), None);
+        assert_eq!(row_for("", "Makefile").ext().map(utf8), None);
     }
 
     #[test]
     fn a_trailing_dot_is_an_empty_ext() {
-        assert_eq!(row_for("", "a.").ext(), Some(""));
+        assert_eq!(row_for("", "a.").ext().map(utf8), Some(""));
     }
 
     #[test]
     fn ext_keeps_its_case() {
-        assert_eq!(row_for("", "Photo.JPG").ext(), Some("JPG"));
+        assert_eq!(row_for("", "Photo.JPG").ext().map(utf8), Some("JPG"));
     }
 
     #[test]
     fn an_empty_path_has_neither_basename_nor_dir() {
         assert_eq!(
-            PathSpans::of(""),
+            PathSpans::of(b""),
             PathSpans {
                 name_at: None,
                 dir_len: None,
@@ -1242,8 +1436,8 @@ mod tests {
     fn an_unstattable_file_has_null_facts_but_is_still_a_row() {
         let row = row_for("", "bare");
         let args = args_with(&[b"'/nonexistent-dirsql-root'", b"'*'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
-        assert_eq!(row.basename(), Some("bare"));
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
+        assert_eq!(row.basename().map(utf8), Some("bare"));
         assert_eq!(spec.facts(&row), StatFacts::default());
     }
 
@@ -1267,10 +1461,31 @@ mod tests {
     }
 
     #[test]
-    fn epoch_secs_is_absent_before_the_epoch_or_without_a_time() {
-        let t = UNIX_EPOCH - std::time::Duration::from_secs(1);
-        assert_eq!(epoch_secs(Some(t)), None);
+    fn epoch_secs_is_absent_without_a_time() {
         assert_eq!(epoch_secs(None), None);
+    }
+
+    #[test]
+    fn epoch_secs_is_negative_before_the_epoch() {
+        let t = UNIX_EPOCH - std::time::Duration::from_secs(86_400);
+        assert_eq!(epoch_secs(Some(t)), Some(-86_400));
+    }
+
+    #[test]
+    fn epoch_secs_floors_a_fractional_pre_epoch_time() {
+        let t = UNIX_EPOCH - std::time::Duration::from_millis(1_500);
+        assert_eq!(epoch_secs(Some(t)), Some(-2));
+    }
+
+    #[test]
+    fn epoch_secs_is_absent_when_it_overflows_i64() {
+        let past = std::time::Duration::from_secs(u64::MAX / 2 + 1);
+        if let Some(t) = UNIX_EPOCH.checked_sub(past) {
+            assert_eq!(epoch_secs(Some(t)), None);
+        }
+        if let Some(t) = UNIX_EPOCH.checked_add(past) {
+            assert_eq!(epoch_secs(Some(t)), None);
+        }
     }
 
     #[test]

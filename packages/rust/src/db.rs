@@ -1,6 +1,8 @@
 use rusqlite::Connection;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
+use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use crate::parsed_vtab;
 use crate::path_table::{self, DEFAULT_IGNORES, PathTable, Resolution};
 use crate::scanner;
 use crate::sql_literal::{quote_identifier, quote_literal};
+use crate::table_refs::{case_alias, table_refs};
 use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
@@ -186,7 +189,11 @@ pub(crate) fn no_home_path_table(name: &str) -> String {
 ///
 /// A parsed table also carries `index_root`, where the parser is spawned. The
 /// stat module takes no such argument: it spawns nothing.
+///
+/// The table is minted as `ident`, which is `name` except for a case variant
+/// of a name the statement already spells another way.
 fn path_table_ddl(
+    ident: &str,
     name: &str,
     table: &PathTable,
     ignore: &[String],
@@ -226,7 +233,7 @@ fn path_table_ddl(
 
     format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({})",
-        quote_identifier(name),
+        quote_identifier(ident),
         module,
         args.join(", "),
     )
@@ -249,6 +256,17 @@ pub fn validate_identifier(s: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_column_key(key: &str, columns: &[String]) -> Result<()> {
+    if columns
+        .iter()
+        .any(|column| column.eq_ignore_ascii_case(key))
+    {
+        Ok(())
+    } else {
+        validate_identifier(key)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -309,7 +327,7 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
     if columns.is_empty() {
         return format!("INSERT INTO \"{table}\" DEFAULT VALUES");
     }
-    let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+    let names: Vec<String> = columns.iter().map(|c| quote_identifier(c)).collect();
     let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
     format!(
         "INSERT INTO \"{table}\" ({}) VALUES ({})",
@@ -342,7 +360,7 @@ fn affinity(declared: &str, strict: bool) -> &'static str {
 fn select_list(prefix: &str, columns: &[String]) -> String {
     columns
         .iter()
-        .map(|c| format!(", {prefix}\"{c}\""))
+        .map(|c| format!(", {prefix}{}", quote_identifier(c)))
         .collect()
 }
 
@@ -407,7 +425,7 @@ pub(crate) fn shape_json_rows(
     for row in rows {
         if strict {
             for (key, _) in &row.0 {
-                validate_identifier(key)?;
+                validate_column_key(key, &columns)?;
             }
             let extra: Vec<&str> = row
                 .0
@@ -840,7 +858,7 @@ impl Db {
     ) -> Result<HashMap<String, Value>> {
         if strict {
             for key in row.keys() {
-                validate_identifier(key)?;
+                validate_column_key(key, columns)?;
             }
             let extra: Vec<&str> = row
                 .keys()
@@ -1257,19 +1275,46 @@ impl Db {
             let sets: Vec<String> = compared
                 .iter()
                 .enumerate()
-                .map(|(n, &i)| format!("\"{}\" = ?{}", columns[i], n + 1))
+                .map(|(n, &i)| format!("{} = ?{}", quote_identifier(&columns[i]), n + 1))
                 .collect();
             let mut update = self.conn.prepare_cached(&format!(
                 "UPDATE \"{table}\" SET {} WHERE rowid = ?{}",
                 sets.join(", "),
                 compared.len() + 1
             ))?;
+            let mut blocked = Vec::new();
             for &(at, index) in &updated {
                 for (n, &i) in compared.iter().enumerate() {
                     update.raw_bind_parameter(n + 1, &rows.cells[index][i])?;
                 }
                 update.raw_bind_parameter(compared.len() + 1, stored[at].0)?;
-                update.raw_execute()?;
+                match update.raw_execute() {
+                    Ok(_) => {}
+                    Err(rusqlite::Error::SqliteFailure(err, _))
+                        if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+                    {
+                        blocked.push((at, index));
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            // SQLite checks UNIQUE per row and cannot defer it, so a value
+            // moving between rows (a swap) collides in every update order.
+            // Re-placing the blocked rows at their rowids checks only the
+            // end state.
+            for &(at, _) in &blocked {
+                delete.execute([stored[at].0])?;
+            }
+            let mut replace = self.conn.prepare_cached(&insert_sql(
+                table,
+                &[&["rowid".to_string()], &columns[..]].concat(),
+            ))?;
+            for &(at, index) in &blocked {
+                replace.raw_bind_parameter(1, stored[at].0)?;
+                for (i, value) in merged(at, index).iter().enumerate() {
+                    replace.raw_bind_parameter(i + 2, value)?;
+                }
+                replace.raw_execute()?;
             }
         }
         let mut insert = self.conn.prepare_cached(&insert_sql(table, columns))?;
@@ -1373,8 +1418,9 @@ impl Db {
         row_index: usize,
     ) -> Result<()> {
         validate_identifier(table)?;
+        let declared_columns = self.get_table_columns(table)?;
         for key in row.keys() {
-            validate_identifier(key)?;
+            validate_column_key(key, &declared_columns)?;
         }
 
         // The user row carries ONLY user columns; ownership is recorded in
@@ -1385,7 +1431,7 @@ impl Db {
         // is what lets the prepared-statement cache serve it.
         let mut keys: Vec<&String> = row.keys().collect();
         keys.sort();
-        let columns: Vec<String> = keys.iter().map(|c| format!("\"{c}\"")).collect();
+        let columns: Vec<String> = keys.iter().map(|c| quote_identifier(c)).collect();
         let sql = if columns.is_empty() {
             format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
@@ -1446,7 +1492,7 @@ impl Db {
         let user_columns = self.get_table_columns(table)?;
         let mut col_list = user_columns
             .iter()
-            .map(|c| format!("t.\"{c}\""))
+            .map(|c| format!("t.{}", quote_identifier(c)))
             .collect::<Vec<_>>()
             .join(", ");
         if col_list.is_empty() {
@@ -1710,9 +1756,20 @@ impl Db {
         }
         let _calls = self.calls.phase();
         let _scope = self.scope.enter();
+        let sql = &*self.disambiguate_case(sql)?;
         let (mut stmt, column_names, reads) = self.prepare_reading(sql)?;
         let mut state = start(&column_names);
-        if self.read_directly(sql, &reads, &mut |cells| on_row(&mut state, cells)) {
+        let mut not_utf8 = Ok(());
+        let read = self.read_directly(sql, &reads, &mut |cells| {
+            if not_utf8.is_ok() {
+                not_utf8 = utf8_row(cells, &column_names);
+                if not_utf8.is_ok() {
+                    on_row(&mut state, cells);
+                }
+            }
+        });
+        not_utf8?;
+        if read {
             return Ok(state);
         }
         bind(&mut stmt, params)?;
@@ -1732,6 +1789,7 @@ impl Db {
     /// Prepare and run one read-only statement, registering the path-tables
     /// it names along the way.
     fn run_statement(&self, sql: &str, params: &Params) -> Result<QueryResult> {
+        let sql = &*self.disambiguate_case(sql)?;
         let (mut stmt, column_names) = self.prepare_statement(sql)?;
         bind(&mut stmt, params)?;
         let mut rows = stmt.raw_query();
@@ -1779,7 +1837,7 @@ impl Db {
             if !attempted.insert(name.clone()) {
                 return Err(error);
             }
-            self.create_path_table(&name, &table)?;
+            self.create_path_table(&name, &name, &table)?;
         };
 
         if !stmt.readonly() {
@@ -1962,10 +2020,76 @@ impl Db {
         self.hint_legacy_files_table && name == LEGACY_DEFAULT_TABLE
     }
 
+    /// `sql` with each path-table spelled in a different letter case from an
+    /// earlier one in it renamed to a table of its own, after dropping any
+    /// table a past statement minted under a case variant of a name `sql`
+    /// spells. SQLite folds identifier case, so otherwise `'./up'` silently
+    /// reads the table minted for `'./Up'`.
+    fn disambiguate_case<'a>(&self, sql: &'a str) -> Result<Cow<'a, str>> {
+        let Some(root) = self.path_table_root.as_deref() else {
+            return Ok(Cow::Borrowed(sql));
+        };
+        let refs = table_refs(sql);
+        if refs.is_empty() {
+            return Ok(Cow::Borrowed(sql));
+        }
+        let mut written: HashMap<String, &str> = HashMap::new();
+        let mut variants = Vec::new();
+        for table_ref in &refs {
+            match written.entry(table_ref.name.to_ascii_lowercase()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(&table_ref.name);
+                }
+                Entry::Occupied(slot) if *slot.get() == table_ref.name => {}
+                Entry::Occupied(_) => variants.push(table_ref),
+            }
+        }
+        for minted in self.minted_path_tables()? {
+            if written
+                .get(&minted.to_ascii_lowercase())
+                .is_some_and(|name| *name != minted)
+            {
+                self.conn
+                    .execute_batch(&format!("DROP TABLE temp.{}", quote_identifier(&minted)))?;
+            }
+        }
+        let home = home_dir();
+        let mut renamed = sql.to_string();
+        let mut any = false;
+        for variant in variants.into_iter().rev() {
+            let Resolution::Table(table) =
+                path_table::resolve(&variant.name, root, home.as_deref(), &|p| p.is_dir())
+            else {
+                continue;
+            };
+            let alias = case_alias(&variant.name);
+            self.create_path_table(&alias, &variant.name, &table)?;
+            renamed.replace_range(variant.span.clone(), &quote_identifier(&alias));
+            any = true;
+        }
+        Ok(if any {
+            Cow::Owned(renamed)
+        } else {
+            Cow::Borrowed(sql)
+        })
+    }
+
+    /// The path-tables minted on this connection so far, all of which live in
+    /// `temp`.
+    fn minted_path_tables(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM temp.sqlite_master WHERE type = 'table'")?;
+        let names = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(names)
+    }
+
     /// Mint the path-table `name` over `table`, out of band: the DDL runs
     /// straight on the connection rather than through [`query`](Self::query),
     /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
-    fn create_path_table(&self, name: &str, table: &PathTable) -> Result<()> {
+    fn create_path_table(&self, ident: &str, name: &str, table: &PathTable) -> Result<()> {
         let index_root = self
             .path_table_root
             .as_deref()
@@ -1976,6 +2100,7 @@ impl Db {
             .chain(self.path_table_ignore.iter().cloned())
             .collect();
         self.conn.execute_batch(&path_table_ddl(
+            ident,
             name,
             table,
             &ignore,
@@ -2079,6 +2204,14 @@ fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
 
 /// `cell`, unless it is text that is not valid UTF-8: rusqlite panics
 /// converting such text to an owned value.
+/// `Ok` unless a cell of `cells` is text that is not valid UTF-8.
+fn utf8_row(cells: &[ValueRef<'_>], columns: &[String]) -> Result<()> {
+    cells
+        .iter()
+        .zip(columns)
+        .try_for_each(|(cell, column)| utf8_checked(*cell, column).map(drop))
+}
+
 fn utf8_checked<'a>(cell: ValueRef<'a>, column: &str) -> Result<ValueRef<'a>> {
     match cell {
         ValueRef::Text(bytes) if std::str::from_utf8(bytes).is_err() => {
@@ -2221,6 +2354,27 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_row_accepts_a_row_of_valid_cells() {
+        let cells = [
+            ValueRef::Text(b"a"),
+            ValueRef::Blob(&[0xff]),
+            ValueRef::Null,
+        ];
+        let columns = ["p".to_string(), "b".to_string(), "n".to_string()];
+        assert!(utf8_row(&cells, &columns).is_ok());
+    }
+
+    #[test]
+    fn utf8_row_names_the_column_whose_text_is_not_utf8() {
+        let cells = [ValueRef::Text(b"a"), ValueRef::Text(&[0xff])];
+        let columns = ["ok".to_string(), "path".to_string()];
+        assert_eq!(
+            utf8_row(&cells, &columns).unwrap_err().to_string(),
+            "column \"path\" holds text that is not valid UTF-8"
+        );
+    }
 
     #[test]
     fn duplicate_result_names_avoid_existing_projection_names() {
@@ -3795,6 +3949,46 @@ mod tests {
     }
 
     #[test]
+    fn quoted_ddl_column_round_trips_through_insert_select_and_update() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (\"a\"\"b\" TEXT PRIMARY KEY, value TEXT)",
+        )
+        .unwrap();
+        let first = db
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"a\"b":"key","value":"old"}])),
+                true,
+            )
+            .unwrap();
+        db.insert_rows("t", &first, "a.json").unwrap();
+
+        let second = db
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"a\"b":"key","value":"new"}])),
+                true,
+            )
+            .unwrap();
+        db.reconcile_batch_rows("t", "a.json", &second).unwrap();
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows[0]["a\"b"], Value::Text("key".into()));
+        assert_eq!(rows[0]["value"], Value::Text("new".into()));
+
+        db.insert_row(
+            "t",
+            &HashMap::from([("a\"b".into(), Value::Text("other".into()))]),
+            "b.json",
+            0,
+        )
+        .unwrap();
+        let rows = db.get_rows_by_file("t", "b.json").unwrap();
+        assert_eq!(rows[0]["a\"b"], Value::Text("other".into()));
+    }
+
+    #[test]
     fn load_extension_missing_file_errors() {
         let db = Db::new().unwrap();
         let err = db
@@ -5037,6 +5231,84 @@ mod tests {
         assert_eq!(note, "kept");
     }
 
+    fn named_db(ddl: &str) -> Db {
+        let db = Db::new().unwrap();
+        db.create_table("t", ddl).unwrap();
+        let rows = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"x"},{"id":2,"name":"y"}]),
+        );
+        db.insert_rows("t", &rows, "").unwrap();
+        db
+    }
+
+    fn named_rows(db: &Db) -> Vec<(i64, i64, String, Option<String>)> {
+        db.conn()
+            .prepare("SELECT rowid, id, name, note FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_swaps_a_unique_value_between_keyed_rows() {
+        let db = named_db("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, note TEXT)");
+        db.conn()
+            .execute("UPDATE t SET note = 'kept' || id", [])
+            .unwrap();
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"y"},{"id":2,"name":"x"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(
+            named_rows(&db),
+            vec![
+                (1, 1, "y".into(), Some("kept1".into())),
+                (2, 2, "x".into(), Some("kept2".into())),
+            ]
+        );
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(changes.updated.len(), 2, "got: {:?}", changes.updated);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_still_rejects_an_end_state_that_repeats_a_unique_value() {
+        let db = named_db("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, note TEXT)");
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"y"},{"id":2,"name":"y"}]),
+        );
+
+        let err = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert!(err.to_string().contains("UNIQUE"), "got: {err}");
+    }
+
+    #[test]
+    fn reconcile_batch_rows_fails_an_update_another_constraint_rejects() {
+        let db = named_db(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT CHECK (name != 'bad'), note TEXT)",
+        );
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"bad"},{"id":2,"name":"y"}]),
+        );
+
+        let err = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert!(err.to_string().contains("CHECK"), "got: {err}");
+        assert_eq!(named_rows(&db)[0].2, "x");
+    }
+
     #[test]
     fn reconcile_batch_rows_has_no_key_when_some_row_leaves_it_null() {
         let changes = keyed_on(
@@ -5322,6 +5594,7 @@ mod tests {
     fn path_table_ddl_creates_in_temp_if_not_exists() {
         let ddl = path_table_ddl(
             "./docs/*.md",
+            "./docs/*.md",
             &docs_path_table(),
             &[],
             true,
@@ -5345,6 +5618,7 @@ mod tests {
         assert!(
             path_table_ddl(
                 "/var/log/*.log",
+                "/var/log/*.log",
                 &table,
                 &[],
                 true,
@@ -5354,6 +5628,7 @@ mod tests {
             .contains("'/var/log', '*.log', '/var/log', 'gitignore-root')"),
             "got: {}",
             path_table_ddl(
+                "/var/log/*.log",
                 "/var/log/*.log",
                 &table,
                 &[],
@@ -5371,7 +5646,15 @@ mod tests {
             glob: "*.js".to_string(),
             path_prefix: "dist".to_string(),
         };
-        let ddl = path_table_ddl("./dist/*.js", &table, &[], true, None, Path::new("/root"));
+        let ddl = path_table_ddl(
+            "./dist/*.js",
+            "./dist/*.js",
+            &table,
+            &[],
+            true,
+            None,
+            Path::new("/root"),
+        );
         assert!(ddl.ends_with("'dist', 'gitignore-root')"), "got: {ddl}");
     }
 
@@ -5382,13 +5665,22 @@ mod tests {
             glob: "*".to_string(),
             path_prefix: "dist".to_string(),
         };
-        let ddl = path_table_ddl("./dist", &table, &[], true, None, Path::new("/root"));
+        let ddl = path_table_ddl(
+            "./dist",
+            "./dist",
+            &table,
+            &[],
+            true,
+            None,
+            Path::new("/root"),
+        );
         assert!(ddl.ends_with("'dist', 'gitignore')"), "got: {ddl}");
     }
 
     #[test]
     fn path_table_ddl_carries_the_no_gitignore_switch() {
         let ddl = path_table_ddl(
+            "./",
             "./",
             &docs_path_table(),
             &[],
@@ -5406,6 +5698,7 @@ mod tests {
     fn path_table_ddl_appends_every_ignore_pattern() {
         let ddl = path_table_ddl(
             "./",
+            "./",
             &docs_path_table(),
             &["node_modules/**".to_string(), "*.tmp".to_string()],
             true,
@@ -5421,6 +5714,7 @@ mod tests {
     #[test]
     fn path_table_ddl_uses_the_parsed_module_when_a_parser_is_set() {
         let ddl = path_table_ddl(
+            "./docs/*.md",
             "./docs/*.md",
             &docs_path_table(),
             &[],
@@ -5444,6 +5738,7 @@ mod tests {
         };
         let ddl = path_table_ddl(
             "/var/log/*.log",
+            "/var/log/*.log",
             &table,
             &["node_modules/**".to_string()],
             true,
@@ -5463,6 +5758,7 @@ mod tests {
     #[test]
     fn path_table_ddl_parser_form_quotes_a_command_with_a_quote() {
         let ddl = path_table_ddl(
+            "./",
             "./",
             &docs_path_table(),
             &[],
@@ -5517,6 +5813,61 @@ mod tests {
         let rows = db.query("SELECT path FROM './' LIMIT 1").unwrap();
 
         assert!(rows.is_empty(), "an empty root yields no rows: {rows:?}");
+    }
+
+    fn rooted() -> Db {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        db
+    }
+
+    #[test]
+    fn disambiguate_case_leaves_sql_alone_without_a_root() {
+        let db = Db::new().unwrap();
+        let sql = "SELECT 1 FROM './Up', './up'";
+        assert!(matches!(db.disambiguate_case(sql).unwrap(), Cow::Borrowed(s) if s == sql));
+    }
+
+    #[test]
+    fn disambiguate_case_leaves_sql_without_case_variants_alone() {
+        let db = rooted();
+        for sql in [
+            "SELECT 1",
+            "SELECT 1 FROM './up', './up'",
+            r#"SELECT 1 FROM "T", "t""#,
+        ] {
+            assert!(
+                matches!(db.disambiguate_case(sql).unwrap(), Cow::Borrowed(s) if s == sql),
+                "{sql}"
+            );
+        }
+        assert!(db.minted_path_tables().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disambiguate_case_renames_a_later_case_variant_to_its_own_table() {
+        let db = rooted();
+
+        let sql = db
+            .disambiguate_case("SELECT 1 FROM './Up', './up', './Up'")
+            .unwrap();
+
+        assert_eq!(
+            sql, "SELECT 1 FROM './Up', \"\u{1}./up\", './Up'",
+            "only the second spelling is renamed"
+        );
+        assert_eq!(db.minted_path_tables().unwrap(), vec!["\u{1}./up"]);
+    }
+
+    #[test]
+    fn disambiguate_case_drops_a_table_minted_under_another_case() {
+        let db = rooted();
+        db.query("SELECT path FROM './Up'").unwrap();
+        db.query("SELECT path FROM './docs'").unwrap();
+
+        db.disambiguate_case("SELECT path FROM './up'").unwrap();
+
+        assert_eq!(db.minted_path_tables().unwrap(), vec!["./docs"]);
     }
 
     #[test]

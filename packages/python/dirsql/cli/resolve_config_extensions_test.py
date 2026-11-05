@@ -108,3 +108,19 @@ def describe_with_resolved_extensions():
             assert rce.with_resolved_extensions(argv) is argv
             scan.assert_called_once_with([])
         resolver.assert_called_once_with(["/x/.dirsql.toml"])
+
+    def it_injects_extension_flags_before_the_end_of_options_marker():
+        specs = [{"path": "R:ext/local.so", "entrypoint": None}]
+        with _patch(specs, ["/cfg/.dirsql.toml"]):
+            out = rce.with_resolved_extensions(
+                ["-c", "/cfg/.dirsql.toml", "--", "SELECT 1", "--"]
+            )
+        assert out == [
+            "-c",
+            "/cfg/.dirsql.toml",
+            "--extension",
+            "R:ext/local.so",
+            "--",
+            "SELECT 1",
+            "--",
+        ]

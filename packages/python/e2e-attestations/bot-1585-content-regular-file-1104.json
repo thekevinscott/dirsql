@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/query_contract_test.py tests/e2e/root_at_construction_test.py -x -q",
+  "ran_at": 1793831766,
+  "exit_code": 0,
+  "commit": "b458f94c4b8cfb99add8a03c039d5921799ae99b",
+  "branch": "bot/1585-content-regular-file-1104"
+}

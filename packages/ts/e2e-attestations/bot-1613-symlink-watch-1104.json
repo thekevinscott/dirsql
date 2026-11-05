@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1793824942,
+  "exit_code": 0,
+  "commit": "c245cbd17965feaec4fabfe1a4a059b94a71b82a",
+  "branch": "bot/1613-symlink-watch-1104"
+}

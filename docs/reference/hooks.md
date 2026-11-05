@@ -54,6 +54,11 @@ yields no rows. Every non-blank line must be a JSON object: a line that is
 an array, a scalar, or log chatter fails the table, and the error names the
 line number. There is no array form.
 
+A string escape naming half of a UTF-16 surrogate pair without its other half
+(a lone `\ud800`, as Python's `json.dumps` writes for surrogateescape-decoded
+text) is not a Unicode character, so the line fails the table too:
+`line 1: lone surrogate \ud800 is not valid Unicode`.
+
 stderr is never data — it is captured only to enrich error messages (the
 last 2 000 characters are attached to failures). Send logs there.
 
@@ -96,7 +101,8 @@ A hook run fails when the command:
   stderr tail are reported; a `timeout(1)` wrapper killing an overrun lands
   here),
 - or prints output where a non-blank line is not a JSON object (an array
-  line is rejected with a message saying to print one object per line).
+  line is rejected with a message saying to print one object per line) or
+  holds a lone surrogate escape.
 
 What a failure *means*: the command ran once for the whole table, so its
 failure is the table's, and a table that cannot be filled fails the build.
@@ -136,8 +142,10 @@ comparing just the columns the command emits:
   the command fills, non-NULL, in every row. A matched row that changed is
   `UPDATE`d in place, so its rowid and every column the command leaves out (a
   generated `INTEGER PRIMARY KEY`, a default) keep their values, and the watch
-  stream carries an `update`. A key that disappears is deleted and a new key is
-  inserted.
+  stream carries an `update`. Only the end state must satisfy a `UNIQUE`
+  constraint: a row that takes a value another row gives up in the same edit
+  (a swap) is, when its `UPDATE` collides, deleted and inserted again at its
+  rowid. A key that disappears is deleted and a new key is inserted.
 - A table without one has no row identity: a row the command still emits
   stays put, and every other row is deleted or inserted.
 

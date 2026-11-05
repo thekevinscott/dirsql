@@ -217,21 +217,28 @@ function httpQuery(port: number, sql: string): Promise<unknown[]> {
 
 interface LauncherResult {
   code: number | null;
+  stdout: string;
   stderr: string;
 }
 
-function runLauncher(args: string[]): Promise<LauncherResult> {
+function runLauncher(args: string[], cwd?: string): Promise<LauncherResult> {
   return new Promise((resolve) => {
     const proc = spawn(process.execPath, [LAUNCHER, ...args], {
       stdio: "pipe",
+      cwd,
       env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}` },
     });
+    let stdout = "";
     let stderr = "";
+    proc.stdout?.setEncoding("utf8");
+    proc.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
     proc.stderr?.setEncoding("utf8");
     proc.stderr?.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    proc.on("close", (code) => resolve({ code, stderr }));
+    proc.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
 
@@ -291,6 +298,21 @@ describe("dirsql CLI --config: extension by package name (#299)", () => {
     );
     const rows = await runServerAndQuery(join(dir, ".dirsql.toml"));
     expect(rows).toEqual([{ a: 42 }]);
+  }, 30_000);
+
+  it("resolves the package name when the SQL follows `--`", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dirsql-ext-dashdash-"));
+    await writeFile(
+      join(dir, ".dirsql.toml"),
+      `[[dirsql.extension]]\npath = "${PKG_NAME}"\nentrypoint = "sqlite3_extension_init"\n`,
+    );
+    const { code, stdout, stderr } = await runLauncher(
+      ["--format", "json", "--", "SELECT dirsql_testext_answer() AS a"],
+      dir,
+    );
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([{ a: 42 }]);
   }, 30_000);
 });
 

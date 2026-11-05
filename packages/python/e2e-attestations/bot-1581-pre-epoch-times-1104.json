@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/use_case_dossier_test.py tests/e2e/stat_speed_test.py -x -q",
+  "ran_at": 1793842681,
+  "exit_code": 0,
+  "commit": "b67bcbffe305b6cd0a743bc8d1fd58b3271a5790",
+  "branch": "bot/1581-pre-epoch-times-1104"
+}
