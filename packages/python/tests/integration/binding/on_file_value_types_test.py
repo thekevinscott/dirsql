@@ -40,7 +40,7 @@ def _db(tmp_dir, value):
 
 
 _UNSUPPORTED = [
-    (decimal.Decimal("123456789012345678901"), "Decimal"),
+    (decimal.Decimal(123456789012345678901), "Decimal"),
     (fractions.Fraction(1, 3), "Fraction"),
     (_IntLike(), "_IntLike"),
     ({"a": 1, "b": None}, "dict"),
