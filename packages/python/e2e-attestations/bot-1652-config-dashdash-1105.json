@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/extension_package_test.py tests/e2e/plugin_discovery_test.py tests/e2e/plugin_extension_discovery_test.py -x -q",
+  "ran_at": 1793920485,
+  "exit_code": 0,
+  "commit": "3690797356174709c84368fbd5e6a52f2ea271c9",
+  "branch": "bot/1652-config-dashdash-1105"
+}
