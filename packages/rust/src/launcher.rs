@@ -156,7 +156,20 @@ mod tests {
     }
 
     #[test]
-    fn does_not_treat_a_double_dash_as_end_of_options() {
-        assert_eq!(scan(&["--", "-c", "a.toml"]), ["a.toml"]);
+    fn stops_scanning_at_the_end_of_options_marker() {
+        assert_eq!(
+            scan(&["-c", "a.toml", "--", "-c", "b.toml", "--config=c.toml"]),
+            ["a.toml"]
+        );
+    }
+
+    #[test]
+    fn defaults_when_the_only_config_flag_follows_the_end_of_options_marker() {
+        assert_eq!(scan(&["query", "--", "-cSELECT 1"]), ["./.dirsql.toml"]);
+    }
+
+    #[test]
+    fn consumes_a_double_dash_as_a_config_value() {
+        assert_eq!(scan(&["-c", "--", "-c", "b.toml"]), ["--", "b.toml"]);
     }
 }
