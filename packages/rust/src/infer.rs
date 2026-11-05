@@ -9,6 +9,9 @@
 //! - **Columns are the union of keys** across every sampled row, in
 //!   **first-seen order** — the order the parser emitted them, not sorted
 //!   order — so `SELECT *` is stable across runs.
+//! - **Keys differing only in ASCII case are one column**, named by the
+//!   first-seen spelling, since SQLite identifiers are case-insensitive and
+//!   could not declare both.
 //! - **Types** come from the JSON values: string → `TEXT`, integer →
 //!   `INTEGER`, float → `REAL`, bool → `INTEGER`, nested object/array → its
 //!   JSON text as `TEXT`.
@@ -227,32 +230,45 @@ fn value_type(value: &serde_json::Value) -> Option<SqlType> {
 /// Infer the column list for `rows`: the union of their keys in first-seen
 /// order, each typed by every value that appeared under it.
 pub fn infer_schema(rows: &[JsonRow]) -> Vec<Column> {
-    let mut order: Vec<String> = Vec::new();
-    let mut observed: HashMap<&str, Observed> = HashMap::new();
+    let mut columns: Vec<(String, Observed)> = Vec::new();
+    // Exact spellings resolve without folding, so the per-cell cost of case
+    // insensitivity is paid once per distinct spelling, not once per row.
+    let mut by_spelling: HashMap<&str, usize> = HashMap::new();
+    let mut by_folded: HashMap<String, usize> = HashMap::new();
 
     for row in rows {
         for (key, value) in &row.0 {
-            let entry = observed.entry(&**key).or_insert_with(|| {
-                order.push(key.to_string());
-                Observed::Untyped
+            let index = *by_spelling.entry(&**key).or_insert_with(|| {
+                *by_folded
+                    .entry(key.to_ascii_lowercase())
+                    .or_insert_with(|| {
+                        columns.push((key.to_string(), Observed::Untyped));
+                        columns.len() - 1
+                    })
             });
-            *entry = entry.observe(value);
+            let observed = &mut columns[index].1;
+            *observed = observed.observe(value);
         }
     }
 
-    order
+    columns
         .into_iter()
-        .map(|name| {
-            let ty = observed[name.as_str()].resolve();
-            Column { name, ty }
+        .map(|(name, observed)| Column {
+            name,
+            ty: observed.resolve(),
         })
         .collect()
 }
 
-/// The value of `column` in `row` — NULL when the row omits the key, which is
+/// The value of `column` in `row`, matching the key ASCII-case-insensitively
+/// as [`infer_schema`] grouped it — NULL when the row omits the key, which is
 /// how a union schema stays rectangular over ragged rows.
 pub fn cell(row: &JsonRow, column: &str) -> Value {
-    row.get(column).map(json_to_value).unwrap_or(Value::Null)
+    row.0
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(column))
+        .map(|(_, value)| json_to_value(value))
+        .unwrap_or(Value::Null)
 }
 
 /// The `CREATE TABLE` statement declaring `columns`, for a vtab's schema.
@@ -404,6 +420,24 @@ mod tests {
     fn a_repeated_key_does_not_repeat_its_column() {
         let columns = infer_schema(&rows(&[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":3}"#]));
         assert_eq!(names(&columns), vec!["a"]);
+    }
+
+    #[test]
+    fn keys_differing_only_in_case_are_one_column_named_by_the_first_spelling() {
+        let columns = infer_schema(&rows(&[r#"{"title":1}"#, r#"{"Title":2,"TITLE":3}"#]));
+        assert_eq!(names(&columns), vec!["title"]);
+    }
+
+    #[test]
+    fn keys_differing_only_in_case_type_one_column_together() {
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"M":"two"}"#]));
+        assert_eq!(ty_of(&columns, "m"), SqlType::Text);
+    }
+
+    #[test]
+    fn keys_differing_beyond_ascii_case_stay_separate_columns() {
+        let columns = infer_schema(&rows(&[r#"{"é":1,"É":2}"#]));
+        assert_eq!(names(&columns), vec!["é", "É"]);
     }
 
     #[test]
@@ -562,6 +596,12 @@ mod tests {
         let row = &rows(&[r#"{"s":"x","i":1}"#])[0];
         assert_eq!(cell(row, "s"), Value::Text("x".into()));
         assert_eq!(cell(row, "i"), Value::Integer(1));
+    }
+
+    #[test]
+    fn cell_reads_a_key_differing_from_the_column_only_in_case() {
+        let row = &rows(&[r#"{"Title":"x"}"#])[0];
+        assert_eq!(cell(row, "title"), Value::Text("x".into()));
     }
 
     #[test]

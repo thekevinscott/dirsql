@@ -79,7 +79,7 @@ pub trait TableSource: Sized + Send + Sync + 'static {
     /// that is not text, which no equality can match. Only reached through a
     /// column in [`Self::LOOKUP_COLUMNS`], so a source that declares none is
     /// never asked.
-    fn lookup_key<'r>(&self, row: &'r Self::Row, column: usize) -> Option<&'r str> {
+    fn lookup_key<'r>(&self, row: &'r Self::Row, column: usize) -> Option<&'r [u8]> {
         let _ = row;
         unreachable!("column {column} is not a lookup column of {}", Self::NAME)
     }
@@ -433,18 +433,22 @@ fn names_column(col_used: u64, column: usize) -> bool {
         .is_some_and(|bit| col_used & bit != 0)
 }
 
-/// The text of a filter argument; `None` when it is not text, in which case
-/// the cursor falls back to every row and SQLite applies the constraint.
-fn text_key(value: ValueRef<'_>) -> Option<&str> {
-    value.as_str().ok()
+/// The text of a filter argument, as bytes since text need not be UTF-8;
+/// `None` when it is not text, in which case the cursor falls back to every
+/// row and SQLite applies the constraint.
+fn text_key(value: ValueRef<'_>) -> Option<&[u8]> {
+    match value {
+        ValueRef::Text(text) => Some(text),
+        _ => None,
+    }
 }
 
 /// Positions of the rows whose `column` carries `key`, in order.
 fn scan_matching<'r, R: 'r>(
     rows: impl Iterator<Item = &'r R>,
     column: usize,
-    key: &str,
-    row_key: impl Fn(&'r R, usize) -> Option<&'r str>,
+    key: &[u8],
+    row_key: impl Fn(&'r R, usize) -> Option<&'r [u8]>,
 ) -> Vec<usize> {
     rows.enumerate()
         .filter(|&(_, row)| row_key(row, column) == Some(key))
@@ -456,16 +460,16 @@ fn scan_matching<'r, R: 'r>(
 /// scanned rows.
 struct LookupIndex {
     column: usize,
-    positions: HashMap<String, Vec<usize>>,
+    positions: HashMap<Vec<u8>, Vec<usize>>,
 }
 
 impl LookupIndex {
     fn build<'r, R: 'r>(
         rows: impl Iterator<Item = &'r R>,
         column: usize,
-        key: impl Fn(&'r R, usize) -> Option<&'r str>,
+        key: impl Fn(&'r R, usize) -> Option<&'r [u8]>,
     ) -> Self {
-        let mut positions: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut positions: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
         for (position, row) in rows.enumerate() {
             if let Some(text) = key(row, column) {
                 positions.entry(text.to_owned()).or_default().push(position);
@@ -474,7 +478,7 @@ impl LookupIndex {
         Self { column, positions }
     }
 
-    fn matching(&self, key: &str) -> Vec<usize> {
+    fn matching(&self, key: &[u8]) -> Vec<usize> {
         self.positions.get(key).cloned().unwrap_or_default()
     }
 }
@@ -663,7 +667,7 @@ impl<S: TableSource> ScaffoldCursor<S> {
         self.settled.get_or_insert_with(|| rows.all())
     }
 
-    fn select_by_lookup(&mut self, column: usize, key: &str) -> Selection<S::Row> {
+    fn select_by_lookup(&mut self, column: usize, key: &[u8]) -> Selection<S::Row> {
         let source = Arc::clone(&self.source);
         self.settled();
         let rows = self.settled.as_ref().expect("settled above");
@@ -1040,7 +1044,7 @@ mod tests {
 
     #[test]
     fn text_key_reads_a_text_argument() {
-        assert_eq!(text_key(ValueRef::Text(b"docs")), Some("docs"));
+        assert_eq!(text_key(ValueRef::Text(b"docs")), Some(b"docs".as_slice()));
     }
 
     #[test]
@@ -1050,15 +1054,15 @@ mod tests {
         assert_eq!(text_key(ValueRef::Blob(b"docs")), None);
     }
 
-    fn by_first_letter<'r>(row: &'r &str, column: usize) -> Option<&'r str> {
-        (column == 1).then(|| &row[..1])
+    fn by_first_letter<'r>(row: &'r &str, column: usize) -> Option<&'r [u8]> {
+        (column == 1).then(|| &row.as_bytes()[..1])
     }
 
     #[test]
     fn scan_matching_finds_every_row_carrying_the_key_in_order() {
         let rows = ["ab", "cd", "ax"];
         assert_eq!(
-            scan_matching(rows.iter(), 1, "a", by_first_letter),
+            scan_matching(rows.iter(), 1, b"a", by_first_letter),
             vec![0, 2]
         );
     }
@@ -1067,7 +1071,7 @@ mod tests {
     fn scan_matching_finds_nothing_for_an_absent_key() {
         let rows = ["ab"];
         assert_eq!(
-            scan_matching(rows.iter(), 1, "z", by_first_letter),
+            scan_matching(rows.iter(), 1, b"z", by_first_letter),
             Vec::<usize>::new()
         );
     }
@@ -1076,7 +1080,7 @@ mod tests {
     fn scan_matching_skips_rows_without_a_key() {
         let rows = ["ab"];
         assert_eq!(
-            scan_matching(rows.iter(), 0, "a", by_first_letter),
+            scan_matching(rows.iter(), 0, b"a", by_first_letter),
             Vec::<usize>::new()
         );
     }
@@ -1087,15 +1091,15 @@ mod tests {
         let index = LookupIndex::build(rows.iter(), 1, by_first_letter);
 
         assert_eq!(index.column, 1);
-        assert_eq!(index.matching("a"), vec![0, 2]);
-        assert_eq!(index.matching("c"), vec![1]);
+        assert_eq!(index.matching(b"a"), vec![0, 2]);
+        assert_eq!(index.matching(b"c"), vec![1]);
     }
 
     #[test]
     fn lookup_index_matches_nothing_for_an_absent_key() {
         let rows = ["ab"];
         let index = LookupIndex::build(rows.iter(), 1, by_first_letter);
-        assert_eq!(index.matching("z"), Vec::<usize>::new());
+        assert_eq!(index.matching(b"z"), Vec::<usize>::new());
     }
 
     #[test]
@@ -1626,9 +1630,9 @@ mod tests {
             PREFETCHED.with(|seen| seen.borrow_mut().extend(rows.iter().map(|row| **row)));
         }
 
-        fn lookup_key<'r>(&self, row: &'r &'static str, column: usize) -> Option<&'r str> {
+        fn lookup_key<'r>(&self, row: &'r &'static str, column: usize) -> Option<&'r [u8]> {
             self.keys.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            (column == 1).then(|| &row[..1])
+            (column == 1).then(|| &row.as_bytes()[..1])
         }
     }
 
@@ -1699,7 +1703,7 @@ mod tests {
     #[test]
     fn a_lookup_selects_only_the_rows_carrying_the_key() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, "a");
+        cursor.selection = cursor.select_by_lookup(1, b"a");
 
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
     }
@@ -1707,7 +1711,7 @@ mod tests {
     #[test]
     fn a_lookup_keeps_the_scan_position_as_the_rowid() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, "a");
+        cursor.selection = cursor.select_by_lookup(1, b"a");
         cursor.next().unwrap();
 
         assert_eq!(cursor.current().map(|(_, row)| *row), Some("ax"));
@@ -1717,7 +1721,7 @@ mod tests {
     #[test]
     fn a_lookup_for_an_absent_key_is_at_eof() {
         let mut cursor = cursor_over(vec!["ab"]);
-        cursor.selection = cursor.select_by_lookup(1, "z");
+        cursor.selection = cursor.select_by_lookup(1, b"z");
         assert!(cursor.eof());
     }
 
@@ -1725,8 +1729,8 @@ mod tests {
     fn a_cursor_scans_its_source_once() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
         cursor.rows();
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(1, "c");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"c");
 
         assert_eq!(
             cursor
@@ -1740,7 +1744,7 @@ mod tests {
     #[test]
     fn a_single_lookup_builds_no_index() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, "a");
+        cursor.selection = cursor.select_by_lookup(1, b"a");
 
         assert!(cursor.index.is_none());
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
@@ -1749,8 +1753,8 @@ mod tests {
     #[test]
     fn a_second_lookup_on_a_column_builds_its_index() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.select_by_lookup(1, "c");
-        cursor.selection = cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(1, b"c");
+        cursor.selection = cursor.select_by_lookup(1, b"a");
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 1);
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
@@ -1759,10 +1763,10 @@ mod tests {
     #[test]
     fn a_cursor_builds_its_index_once_per_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"a");
         let first = cursor.index.as_ref().unwrap() as *const LookupIndex;
-        cursor.select_by_lookup(1, "c");
+        cursor.select_by_lookup(1, b"c");
         let second = cursor.index.as_ref().unwrap() as *const LookupIndex;
 
         assert_eq!(first, second);
@@ -1772,10 +1776,10 @@ mod tests {
     #[test]
     fn a_cursor_rebuilds_its_index_for_a_different_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(0, "a");
-        cursor.selection = cursor.select_by_lookup(0, "a");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(0, b"a");
+        cursor.selection = cursor.select_by_lookup(0, b"a");
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 0);
         assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
@@ -1784,9 +1788,9 @@ mod tests {
     #[test]
     fn a_single_lookup_on_another_column_keeps_the_index() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(1, "a");
-        cursor.selection = cursor.select_by_lookup(0, "a");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"a");
+        cursor.selection = cursor.select_by_lookup(0, b"a");
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 1);
         assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
@@ -1877,9 +1881,9 @@ mod tests {
     fn a_second_lookup_on_the_same_column_reuses_the_index() {
         let mut cursor = cursor_over(vec!["ant", "bat", "bee"]);
 
-        cursor.select_by_lookup(1, "b");
-        cursor.select_by_lookup(1, "a");
-        cursor.select_by_lookup(1, "b");
+        cursor.select_by_lookup(1, b"b");
+        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"b");
 
         let keyed = cursor
             .source
