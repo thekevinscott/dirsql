@@ -121,7 +121,8 @@ is still headed for a file, and the file gets JSON.
 
 Table rendering is deliberately plain: aligned columns, a rule under the
 header, a row count, and `NULL` spelled out so it cannot be confused with an
-empty string. Two things happen to a value on its way into a cell, both
+empty string. An infinite REAL prints as `inf` / `-inf`, where `--format json`
+has only `null` for it. Two things happen to a value on its way into a cell, both
 because a `content` column holds a whole file: **newlines, tabs and other
 control characters are escaped** (`\n`, `\t`, `\u{…}`) so one row cannot span
 several lines, and **anything longer than 60 characters is truncated with

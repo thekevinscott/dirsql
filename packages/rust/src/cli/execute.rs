@@ -17,8 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::AppState;
-use super::serialize::{JsonRows, result_to_json};
-use crate::{DirSQL, DirSqlError};
+use super::serialize::JsonRows;
+use crate::{DirSQL, DirSqlError, QueryResult};
 
 /// Why a query failed, classified independently of transport. The HTTP
 /// adapter maps each arm to a status code (400 / 408 / 500 / 503); the CLI
@@ -56,13 +56,14 @@ struct QueryBody {
 /// execute it against the index — bounded by `timeout` when one is given
 /// (the server's 408 path), unbounded with `None` (the one-shot CLI, where
 /// the process is the query and an external `timeout(1)` expresses any cap
-/// natively) — and serialize the rows. `raw_body` is the exact payload a
+/// natively) — and serialize the rows with `rows`. `raw_body` is the exact payload a
 /// `POST /query` request carries; the CLI adapter synthesizes the same
 /// shape so both surfaces share intake validation.
 pub async fn execute_query(
     state: &AppState,
     raw_body: String,
     timeout: Option<Duration>,
+    rows: fn(&QueryResult) -> Vec<Value>,
 ) -> Result<Value, QueryFailure> {
     let sql = parse_sql_body(&raw_body)?;
 
@@ -78,7 +79,7 @@ pub async fn execute_query(
     .inspect_err(|_| cancelled.store(true, Ordering::Relaxed))?;
 
     match join {
-        Ok(Ok(result)) => Ok(Value::Array(result_to_json(&result))),
+        Ok(Ok(result)) => Ok(Value::Array(rows(&result))),
         Ok(Err(err)) => Err(classify_query_error(err)),
         Err(join_err) => Err(QueryFailure::Internal(join_err.to_string())),
     }

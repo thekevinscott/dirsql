@@ -59,14 +59,14 @@ trait Statements {
     async fn run(&self, sql: &str) -> Result<Value, QueryFailure>;
 }
 
-/// [`Statements`] backed by the real index.
-struct StateStatements<'a>(&'a AppState);
+/// [`Statements`] backed by the real index, serializing for `format`.
+struct StateStatements<'a>(&'a AppState, Format);
 
 impl Statements for StateStatements<'_> {
     async fn run(&self, sql: &str) -> Result<Value, QueryFailure> {
         // Unbounded, exactly as the one-shot CLI is: only the long-lived
         // server enforces `query_timeout`.
-        execute_query(self.0, query_body(sql), None).await
+        execute_query(self.0, query_body(sql), None, self.1.rows()).await
     }
 }
 
@@ -112,7 +112,7 @@ where
         let _ = writeln!(err, "dirsql: {reason}");
         return 1;
     }
-    let statements = StateStatements(state);
+    let statements = StateStatements(state, format);
 
     if interactive {
         repl_loop(&statements, EditorLines::new(), out, err, format, true).await
@@ -892,7 +892,7 @@ mod tests {
         // the REPL prints fiction, so pin that it reports the index's state.
         let state = AppState::Unavailable("failed to load config".to_string());
 
-        let failure = StateStatements(&state)
+        let failure = StateStatements(&state, Format::Json)
             .run("SELECT 1")
             .await
             .expect_err("a degraded index cannot answer a statement");
