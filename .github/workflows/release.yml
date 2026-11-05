@@ -26,6 +26,15 @@ on:
         required: false
         default: ''
 
+# The reusable workflow serializes only its own jobs; pypi-publish and
+# pypi-tag below run outside its group, so without this a back-to-back
+# run re-plans a version before the previous run tags it. The name must
+# differ from the reusable workflow's group or the caller deadlocks on
+# its own callee.
+concurrency:
+  group: dirsql-release
+  cancel-in-progress: false
+
 jobs:
   release:
     uses: thekevinscott/putitoutthere/.github/workflows/release.yml@v0
