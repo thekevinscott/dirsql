@@ -533,6 +533,19 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_zero_is_integer() {
+        let columns = infer_schema(&rows(&[r#"{"z":-0}"#]));
+        assert_eq!(ty_of(&columns, "z"), SqlType::Integer);
+    }
+
+    #[test]
+    fn a_negative_zero_with_a_fraction_or_exponent_is_real() {
+        let columns = infer_schema(&rows(&[r#"{"f":-0.0,"e":-0e0}"#]));
+        assert_eq!(ty_of(&columns, "f"), SqlType::Real);
+        assert_eq!(ty_of(&columns, "e"), SqlType::Real);
+    }
+
+    #[test]
     fn a_float_is_real() {
         let columns = infer_schema(&rows(&[r#"{"f":1.5}"#]));
         assert_eq!(ty_of(&columns, "f"), SqlType::Real);
@@ -670,6 +683,14 @@ mod tests {
         let row = &rows(&[r#"{"s":"x","i":1}"#])[0];
         assert_eq!(cell(row, "s"), Value::Text("x".into()));
         assert_eq!(cell(row, "i"), Value::Integer(1));
+    }
+
+    #[test]
+    fn cell_reads_a_negative_zero_as_integer_zero() {
+        let row = &rows(&[r#"{"z":-0,"s":"-0","f":-0.0}"#])[0];
+        assert_eq!(cell(row, "z"), Value::Integer(0));
+        assert_eq!(cell(row, "s"), Value::Text("-0".into()));
+        assert!(matches!(cell(row, "f"), Value::Real(f) if f == 0.0 && f.is_sign_negative()));
     }
 
     #[test]
