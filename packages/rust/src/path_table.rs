@@ -971,6 +971,14 @@ mod tests {
     }
 
     #[test]
+    fn an_absolute_config_glob_keeps_a_parent_component_for_the_filesystem_to_resolve() {
+        assert_eq!(
+            anchor_of("/a/link/../*.md", None),
+            Some((PathBuf::from("/a/link/.."), "*.md".to_string()))
+        );
+    }
+
+    #[test]
     fn a_wholly_literal_absolute_config_glob_anchors_at_its_parent() {
         assert_eq!(
             anchor_of("/var/log/syslog", None),
