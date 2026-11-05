@@ -5470,6 +5470,14 @@ mod tests {
     }
 
     #[test]
+    fn missing_table_name_keeps_trailing_whitespace() {
+        assert_eq!(
+            missing_table_name("no such table: ./trail "),
+            Some("./trail ")
+        );
+    }
+
+    #[test]
     fn missing_table_name_ignores_other_errors() {
         assert_eq!(missing_table_name("no such column: x"), None);
     }
