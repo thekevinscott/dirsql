@@ -3516,6 +3516,8 @@ mod tests {
         assert!(is_internal_table("_dirsql_files"));
         assert!(is_internal_table("_dirsql_meta"));
         assert!(is_internal_table("_dirsql_anything_future"));
+        assert!(is_internal_table("_DIRSQL_INTERNAL_ROWS"));
+        assert!(is_internal_table("_DirSql_meta"));
     }
 
     #[test]
@@ -3545,6 +3547,46 @@ mod tests {
             .query("PRAGMA table_info(_dirsql_internal_rows)")
             .unwrap_err();
         assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+    }
+
+    #[test]
+    fn query_denies_internal_schema_reads_in_every_spelling() {
+        let db = Db::new().unwrap();
+        for sql in [
+            "PRAGMA table_info('_DIRSQL_INTERNAL_ROWS')",
+            "SELECT name FROM pragma_table_info('_dirsql_internal_rows')",
+            "SELECT name FROM pragma_index_list('_dirsql_internal_rows')",
+            "SELECT name FROM pragma_table_info('_DIRSQL_' || 'internal_rows')",
+            "SELECT name, ncell FROM dbstat",
+        ] {
+            let err = db.query(sql).unwrap_err();
+            assert!(
+                matches!(err, DbError::Unauthorized(_)),
+                "{sql} should be denied, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_each_denies_a_pragma_function_on_an_internal_table() {
+        let db = Db::new().unwrap();
+        let err = db
+            .query_each(
+                "SELECT name FROM pragma_table_info('_dirsql_internal_rows')",
+                |_| (),
+                |_, _| {},
+            )
+            .unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+    }
+
+    #[test]
+    fn query_allows_a_pragma_function_on_a_user_table() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let rows = db.query("SELECT name FROM pragma_table_info('t')").unwrap();
+        assert_eq!(rows.len(), 1, "expected one column row, got {rows:?}");
+        assert_eq!(rows[0]["name"], Value::Text("id".into()));
     }
 
     #[test]
