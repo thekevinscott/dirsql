@@ -1,5 +1,6 @@
+use crate::git_excludes_file::global_excludes_path;
 use ignore::Match;
-use ignore::gitignore::{Gitignore, GitignoreBuilder, Glob, gitconfig_excludes_path};
+use ignore::gitignore::{Gitignore, GitignoreBuilder, Glob};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -52,7 +53,7 @@ impl Frame {
     /// Every `.gitignore` outranks both.
     pub(crate) fn repo_excludes(repo: &Path) -> Vec<Frame> {
         let info_exclude = git_dir(repo).map(|dir| common_dir(&dir).join("info").join("exclude"));
-        [gitconfig_excludes_path(), info_exclude]
+        [global_excludes_path(), info_exclude]
             .into_iter()
             .flatten()
             .filter_map(|file| Frame::from_file(repo, file))

@@ -23,6 +23,7 @@ pub mod foreign_key;
 mod freshness;
 #[doc(hidden)]
 pub mod functions;
+mod git_excludes_file;
 mod gitignore_frame;
 #[doc(hidden)]
 pub mod infer;
