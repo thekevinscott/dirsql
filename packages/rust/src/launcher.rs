@@ -11,7 +11,8 @@
 const DEFAULT_CONFIG_PATH: &str = "./.dirsql.toml";
 
 /// Every config value in `argv`, in order (`--config X`, `--config=X`,
-/// `-c X`, `-c=X`, `-cX`), or [`DEFAULT_CONFIG_PATH`] when argv names none.
+/// `-c X`, `-c=X`, `-cX`) before the first `--`, or [`DEFAULT_CONFIG_PATH`]
+/// when argv names none.
 ///
 /// The scan is deliberately looser than clap: it runs before argv is parsed,
 /// only to find files to read extensions out of, so a bare trailing `-c`
@@ -21,7 +22,9 @@ pub fn config_paths_from_argv(argv: &[String]) -> Vec<String> {
     let mut paths = Vec::new();
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
-        if arg == "--config" || arg == "-c" {
+        if arg == "--" {
+            break;
+        } else if arg == "--config" || arg == "-c" {
             paths.push(args.next().cloned().unwrap_or_default());
         } else if let Some(value) = arg.strip_prefix("--config=") {
             paths.push(value.to_string());
