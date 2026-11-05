@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, c_int};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -92,23 +92,12 @@ fn read_text(path: &Path, size: Option<i64>, max_length: usize) -> Option<String
 /// the open and a device like `/dev/zero` never ends. The check is on the open
 /// handle, so nothing can be swapped in between it and the read.
 fn open_regular(path: &Path) -> io::Result<File> {
-    let file = open_nonblocking(path)?;
+    let file = crate::long_path::open_file(path)?;
     if file.metadata()?.is_file() {
         Ok(file)
     } else {
         Err(io::ErrorKind::InvalidInput.into())
     }
-}
-
-fn open_nonblocking(path: &Path) -> io::Result<File> {
-    #[cfg(unix)]
-    return Ok(File::from(rustix::fs::open(
-        path,
-        rustix::fs::OFlags::NONBLOCK.union(rustix::fs::OFlags::CLOEXEC),
-        rustix::fs::Mode::empty(),
-    )?));
-    #[cfg(not(unix))]
-    File::open(path)
 }
 
 fn read_text_with<R: Read>(
@@ -443,7 +432,7 @@ fn parse_module_args(args: &[&[u8]], max_length: usize) -> Result<ScanSpec> {
 
 impl ScanSpec {
     fn stat(&self, row: &FileRow) -> StatFacts {
-        fs::metadata(self.root.join(row.rel())).map_or_else(
+        crate::long_path::metadata(&self.root.join(row.rel()), true).map_or_else(
             |_| StatFacts::default(),
             |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
         )
@@ -619,6 +608,7 @@ pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn utf8(bytes: &[u8]) -> &str {
         std::str::from_utf8(bytes).unwrap()

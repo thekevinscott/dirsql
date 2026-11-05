@@ -82,6 +82,12 @@ extra_scope = ["packages/rust/src"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
+[[rust.exempt]]
+path = "src/long_path.rs"
+rules = ["mutation"]
+lines = [95]
+reason = "the non-unix open_file is compiled out on the Linux mutation runner; the Windows CI job runs tests/path_max_depth.rs and tests/vtab.rs, which read content through it"
+
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
 # The default for a config-less python caller (internals/distcheck); the
 # packages/python lane holds the identical floor in its own config.
