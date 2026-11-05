@@ -77,13 +77,14 @@ fn column_type(column: &str) -> &'static str {
 /// almost perfectly; past eight the box, not the count, sets the pace.
 const READERS: usize = 8;
 
-/// Read `path` as text, yielding `None` when it is unreadable or not valid
-/// UTF-8. A file that cannot be read is a NULL cell, never a failed row: the
-/// filesystem is allowed to be messy and a query over it should still return.
-/// `size` is what the row's stat reported, so the buffer is sized without
-/// stat'ing again; a file that has grown since is still read whole.
-fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    read_text_with(path, size, open_regular)
+/// Read `path` as text, yielding `None` when it is unreadable, not valid
+/// UTF-8, or longer than `max_length` bytes. A file that cannot be read is a
+/// NULL cell, never a failed row: the filesystem is allowed to be messy and a
+/// query over it should still return. `size` is what the row's stat reported,
+/// so the buffer is sized without stat'ing again; a file that has grown since
+/// is still read whole, up to `max_length`.
+fn read_text(path: &Path, size: Option<i64>, max_length: usize) -> Option<String> {
+    read_text_with(path, size, max_length, open_regular)
 }
 
 /// Open `path` only if what is there now is a regular file. The scan saw a
@@ -113,10 +114,22 @@ fn open_nonblocking(path: &Path) -> io::Result<File> {
 fn read_text_with<R: Read>(
     path: &Path,
     size: Option<i64>,
+    max_length: usize,
     open: impl FnOnce(&Path) -> io::Result<R>,
 ) -> Option<String> {
-    let mut file = open(path).ok()?;
-    let bytes = read_all(&mut file, presize(size)).ok()?;
+    if size.is_some_and(|size| usize::try_from(size).is_ok_and(|size| size > max_length)) {
+        return None;
+    }
+    let file = open(path).ok()?;
+    let cap = max_length.saturating_add(1);
+    let bytes = read_all(
+        &mut file.take(u64::try_from(cap).unwrap_or(u64::MAX)),
+        presize(size).min(cap),
+    )
+    .ok()?;
+    if bytes.len() > max_length {
+        return None;
+    }
     String::from_utf8(bytes).ok()
 }
 
@@ -208,7 +221,10 @@ struct ScanSpec {
     gitignore: bool,
     /// Whether a `.gitignore` that ignores `root` empties the scan.
     check_root: bool,
-    reader: fn(&Path, Option<i64>) -> Option<String>,
+    reader: fn(&Path, Option<i64>, usize) -> Option<String>,
+    /// The connection's longest accepted string: longer content reads as
+    /// NULL, since handing it to SQLite would fail the whole statement.
+    max_length: usize,
     /// The row set of the statement in progress, which the first stat a
     /// statement asks for stats whole: one stat at a time as SQLite steps
     /// would be several times slower than sharing them out at once.
@@ -391,7 +407,7 @@ fn cell<'r>(
 /// spec. `args[0..3]` are the module, database and table names; the module's
 /// own arguments follow — root, glob, path prefix, the gitignore switch, then
 /// any ignore patterns.
-fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
+fn parse_module_args(args: &[&[u8]], max_length: usize) -> Result<ScanSpec> {
     let user_args = vtab_scaffold::user_args(args);
 
     let [root, pattern, path_prefix, gitignore, ignore @ ..] = user_args.as_slice() else {
@@ -411,6 +427,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
         check_root: vtab_scaffold::checks_root(gitignore),
         reader: read_text,
+        max_length,
         current: Mutex::new(Weak::new()),
     })
 }
@@ -440,7 +457,11 @@ impl ScanSpec {
     }
 
     fn read(&self, row: &FileRow) -> Option<String> {
-        (self.reader)(&self.root.join(row.rel()), self.facts(row).size)
+        (self.reader)(
+            &self.root.join(row.rel()),
+            self.facts(row).size,
+            self.max_length,
+        )
     }
 }
 
@@ -495,8 +516,8 @@ impl TableSource for ScanSpec {
 
     const LOOKUP_COLUMNS: &'static [usize] = &LOOKUP_COLUMNS;
 
-    fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
-        Ok((declared_schema(), parse_module_args(args)?))
+    fn connect(args: &[&[u8]], max_length: usize) -> Result<(String, Self)> {
+        Ok((declared_schema(), parse_module_args(args, max_length)?))
     }
 
     fn rows(&self, rows: &Arc<RowStream<FileRow>>) {
@@ -676,7 +697,7 @@ mod tests {
     #[test]
     fn a_held_cell_is_the_value_the_column_emits() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"));
         let cells: Vec<ValueRef<'_>> = [PATH_COLUMN, BASENAME_COLUMN, DIR_COLUMN, EXT_COLUMN]
             .into_iter()
@@ -698,7 +719,7 @@ mod tests {
     #[test]
     fn parse_module_args_extracts_root_and_glob() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
 
         assert_eq!(spec.root, PathBuf::from("/tmp/notes"));
         assert!(spec.glob.is_match(Path::new("a.md")));
@@ -709,7 +730,7 @@ mod tests {
     fn parse_module_args_accepts_unquoted_arguments() {
         let args = args_with(&[b"/tmp/notes", b"**/*", b"", b"gitignore"]);
         assert_eq!(
-            parse_module_args(&args).unwrap().root,
+            parse_module_args(&args, usize::MAX).unwrap().root,
             PathBuf::from("/tmp/notes")
         );
     }
@@ -718,7 +739,7 @@ mod tests {
     fn parse_module_args_extracts_the_path_prefix() {
         let args = args_with(&[b"'/var/log'", b"'*.log'", b"'/var/log'", b"'gitignore'"]);
         assert_eq!(
-            parse_module_args(&args).unwrap().path_prefix,
+            parse_module_args(&args, usize::MAX).unwrap().path_prefix,
             PathBuf::from("/var/log")
         );
     }
@@ -726,16 +747,16 @@ mod tests {
     #[test]
     fn parse_module_args_reads_the_gitignore_switch() {
         let on = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
-        assert!(parse_module_args(&on).unwrap().gitignore);
+        assert!(parse_module_args(&on, usize::MAX).unwrap().gitignore);
 
         let off = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'no-gitignore'"]);
-        assert!(!parse_module_args(&off).unwrap().gitignore);
+        assert!(!parse_module_args(&off, usize::MAX).unwrap().gitignore);
     }
 
     #[test]
     fn parse_module_args_rejects_an_unknown_gitignore_switch() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'sometimes'"]);
-        let err = parse_module_args(&args)
+        let err = parse_module_args(&args, usize::MAX)
             .err()
             .expect("an unknown switch must be rejected");
         assert!(err.to_string().contains("no-gitignore"), "got: {err}");
@@ -750,7 +771,7 @@ mod tests {
             b"'gitignore'",
             b"'node_modules/**'",
         ]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
 
         assert!(spec.ignore.is_ignored(Path::new("node_modules/a.js")));
         assert!(!spec.ignore.is_ignored(Path::new("docs/a.md")));
@@ -759,14 +780,14 @@ mod tests {
     #[test]
     fn parse_module_args_accepts_no_ignore_patterns() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         assert!(!spec.ignore.is_ignored(Path::new("node_modules/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''"]);
-        let err = parse_module_args(&args)
+        let err = parse_module_args(&args, usize::MAX)
             .err()
             .expect("arity must be enforced");
         assert!(
@@ -778,13 +799,13 @@ mod tests {
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
         let args = args_with(&[b"'/tmp'", b"'[z-a]'", b"''", b"'gitignore'"]);
-        assert!(parse_module_args(&args).is_err());
+        assert!(parse_module_args(&args, usize::MAX).is_err());
     }
 
     #[test]
     fn parse_module_args_rejects_an_invalid_ignore_pattern() {
         let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'", b"'['"]);
-        assert!(parse_module_args(&args).is_err());
+        assert!(parse_module_args(&args, usize::MAX).is_err());
     }
 
     #[test]
@@ -882,8 +903,9 @@ mod tests {
         StatFacts::default()
     }
 
-    fn injected_reader(path: &Path, size: Option<i64>) -> Option<String> {
-        (path == Path::new("/root/docs/a.md") && size == Some(7)).then(|| "contents".to_owned())
+    fn injected_reader(path: &Path, size: Option<i64>, max_length: usize) -> Option<String> {
+        (path == Path::new("/root/docs/a.md") && size == Some(7) && max_length == 9)
+            .then(|| "contents".to_owned())
     }
 
     fn sized_row(rel: &str, size: i64) -> FileRow {
@@ -894,14 +916,14 @@ mod tests {
 
     fn spec_with_reader() -> ScanSpec {
         let args = args_with(&[b"'/root'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let mut spec = parse_module_args(&args).unwrap();
+        let mut spec = parse_module_args(&args, 9).unwrap();
         spec.reader = injected_reader;
         spec
     }
 
     #[test]
     fn read_text_uses_the_injected_reader_and_decodes_utf8() {
-        let text = read_text_with(Path::new("/root/docs/a.md"), Some(7), |path| {
+        let text = read_text_with(Path::new("/root/docs/a.md"), Some(7), usize::MAX, |path| {
             assert_eq!(path, Path::new("/root/docs/a.md"));
             Ok(std::io::Cursor::new(b"contents".to_vec()))
         });
@@ -910,10 +932,51 @@ mod tests {
     }
 
     #[test]
+    fn read_text_skips_a_file_whose_stat_size_is_over_the_limit() {
+        let text = read_text_with(
+            Path::new("/root/a.md"),
+            Some(11),
+            10,
+            |_| -> io::Result<std::io::Cursor<Vec<u8>>> {
+                panic!("a file over the limit is never opened")
+            },
+        );
+
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn read_text_yields_none_once_a_file_has_grown_past_the_limit() {
+        let text = read_text_with(Path::new("/root/a.md"), Some(2), 10, |_| {
+            Ok(std::io::Cursor::new(b"x".repeat(11)))
+        });
+
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn read_text_reads_a_file_exactly_at_the_limit() {
+        let text = read_text_with(Path::new("/root/a.md"), Some(10), 10, |_| {
+            Ok(std::io::Cursor::new(b"x".repeat(10)))
+        });
+
+        assert_eq!(text.as_deref(), Some("xxxxxxxxxx"));
+    }
+
+    #[test]
+    fn read_text_stops_reading_one_byte_past_the_limit() {
+        let mut source = std::io::Cursor::new(b"x".repeat(100));
+        let text = read_text_with(Path::new("/root/a.md"), None, 10, |_| Ok(&mut source));
+
+        assert_eq!(text, None);
+        assert_eq!(source.position(), 11);
+    }
+
+    #[test]
     fn read_text_reads_a_real_file() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
 
-        let text = read_text(&path, None).unwrap();
+        let text = read_text(&path, None, usize::MAX).unwrap();
 
         assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
@@ -1044,7 +1107,7 @@ mod tests {
     #[test]
     fn a_scan_spec_keys_a_row_by_the_text_of_the_lookup_column() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let row = row_for("", "docs/a.md");
 
         assert_eq!(spec.lookup_key(&row, 0).map(utf8), Some("docs/a.md"));
@@ -1078,7 +1141,7 @@ mod tests {
         fs::write(dir.path().join("b.md"), "bbb").unwrap();
         let root = dir.path().to_str().unwrap().as_bytes();
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         let rows = scanned(&spec);
         let rows = rows.all();
         assert!(rows.iter().all(|row| row.facts.get().is_none()));
@@ -1109,7 +1172,7 @@ mod tests {
         }
         let root = dir.path().to_str().unwrap().as_bytes();
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
-        let rows = scanned(&parse_module_args(&args).unwrap());
+        let rows = scanned(&parse_module_args(&args, usize::MAX).unwrap());
 
         assert_eq!(rows.chunk(0).unwrap().len(), STREAM_CHUNK_ROWS);
         assert_eq!(rows.chunk(1).unwrap().len(), 1);
@@ -1364,7 +1427,7 @@ mod tests {
     fn an_unstattable_file_has_null_facts_but_is_still_a_row() {
         let row = row_for("", "bare");
         let args = args_with(&[b"'/nonexistent-dirsql-root'", b"'*'", b"''", b"'gitignore'"]);
-        let spec = parse_module_args(&args).unwrap();
+        let spec = parse_module_args(&args, usize::MAX).unwrap();
         assert_eq!(row.basename().map(utf8), Some("bare"));
         assert_eq!(spec.facts(&row), StatFacts::default());
     }
