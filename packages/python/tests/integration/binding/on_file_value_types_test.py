@@ -52,17 +52,15 @@ _UNSUPPORTED = [
 def describe_on_file_value_types():
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("value", "type_name"), _UNSUPPORTED)
-    async def it_refuses_an_unsupported_type_and_stores_nothing(
-        tmp_dir, value, type_name
-    ):
+    async def it_fails_the_build_on_an_unsupported_type(tmp_dir, value, type_name):
         db = _db(tmp_dir, value)
-        await db.ready()
 
-        assert await db.query("SELECT v FROM t") == []
-        (failure,) = await db.scan_failures()
-        assert "TypeError" in failure.message, failure.message
-        assert type_name in failure.message, failure.message
-        assert "'v'" in failure.message, failure.message
+        with pytest.raises(RuntimeError) as raised:
+            await db.ready()
+        message = str(raised.value)
+        assert "TypeError" in message, message
+        assert type_name in message, message
+        assert "'v'" in message, message
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -82,4 +80,3 @@ def describe_on_file_value_types():
         await db.ready()
 
         assert await db.query("SELECT v FROM t") == [{"v": expected}]
-        assert await db.scan_failures() == []
