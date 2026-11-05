@@ -222,6 +222,13 @@ pub enum DirSqlError {
 
     #[error("table `{name}`: {message}")]
     TableCommand { name: String, message: String },
+
+    #[error("table `{table}`, file `{path}`: {message}")]
+    OnFile {
+        table: String,
+        path: String,
+        message: String,
+    },
 }
 
 impl DirSqlError {
@@ -704,7 +711,19 @@ impl DirSQL {
                 self.track_batch_file(table, path, rel, false);
                 pending.mark(table, rel);
             } else {
-                events.extend(self.read_file(table, path, rel));
+                let read = self.handle_upsert(table, path, rel);
+                if let Some(message) = read.iter().find_map(|event| match event {
+                    RowEvent::Error { error, .. } => Some(error.clone()),
+                    _ => None,
+                }) {
+                    self.with_db(|db| Ok(db.conn().execute_batch("ROLLBACK")?))?;
+                    return Err(DirSqlError::OnFile {
+                        table: table.clone(),
+                        path: rel.clone(),
+                        message,
+                    });
+                }
+                events.extend(read);
                 updates.push((
                     key,
                     freshness::after_read(self.inner.fs.fingerprint(path).ok(), start_ns),
@@ -758,19 +777,6 @@ impl DirSQL {
         }
         state.seeded = true;
         Ok(())
-    }
-
-    /// Re-read one file of a per-file table. A file whose hook fails keeps no
-    /// rows, as a fresh build would give it.
-    fn read_file(&self, table: &str, path: &Path, rel: &str) -> Vec<RowEvent> {
-        let mut events = self.handle_upsert(table, path, rel);
-        if events
-            .iter()
-            .any(|event| matches!(event, RowEvent::Error { .. }))
-        {
-            events.extend(self.handle_delete(table, rel));
-        }
-        events
     }
 
     /// The directory the index is rooted at: where path-tables resolve.
@@ -1740,14 +1746,8 @@ impl DirSQL {
         })
     }
 
-    /// The files the initial scan could not index, in scan order — each with
-    /// the path relative to the root and the hook's own error.
-    ///
-    /// A hook that fails, or returns a row the table rejects, costs that file
-    /// and no other: the scan indexes everything else and records the failure
-    /// here. Empty for a clean scan, which is the signal a caller checks —
-    /// non-empty means the index is *incomplete*, not wrong, and the missing
-    /// files are retried on the next scan.
+    /// Always empty: a hook that fails, or returns a row the table rejects,
+    /// fails the build with [`DirSqlError::OnFile`] instead.
     pub fn scan_failures(&self) -> &[OnFileFailure] {
         &self.inner.scan_failures
     }
@@ -1885,7 +1885,6 @@ impl DirSQL {
         }
 
         let snapshot_ns = now_ns();
-        let mut on_file_failures: Vec<OnFileFailure> = Vec::new();
         let mut batch_files: HashMap<String, Vec<String>> = HashMap::new();
 
         // Grouping walks every scanned file, so it runs beside the early
@@ -1937,19 +1936,13 @@ impl DirSQL {
             done += 1;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
             let abs_path = anchors.of(&table_name).join(&rel_path);
-            // A hook failure is this file's problem, not the scan's: record it
-            // and keep going, so one unreadable file cannot hide the state of
-            // every file after it.
-            let raw_rows = match on_file(&abs_path.to_string_lossy()) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    on_file_failures.push(OnFileFailure {
-                        path: rel_path.clone(),
-                        message: e.to_string(),
-                    });
-                    continue;
-                }
+            let failed = |message: String| DirSqlError::OnFile {
+                table: table_name.clone(),
+                path: rel_path.clone(),
+                message,
             };
+            let raw_rows =
+                on_file(&abs_path.to_string_lossy()).map_err(|e| failed(e.to_string()))?;
 
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
@@ -1957,19 +1950,10 @@ impl DirSQL {
                 db.delete_rows_by_file(&table_name, &rel_path)
                     .map_err(map_db_error)?;
             }
-            let normalized = match normalize_rows(&db, &table_name, raw_rows, strict) {
-                Ok(rows) => rows,
-                Err(message) => {
-                    on_file_failures.push(OnFileFailure {
-                        path: rel_path.clone(),
-                        message,
-                    });
-                    continue;
-                }
-            };
+            let normalized = normalize_rows(&db, &table_name, raw_rows, strict).map_err(failed)?;
             for (row_index, row) in normalized.iter().enumerate() {
                 db.insert_row(&table_name, row, &rel_path, row_index)
-                    .map_err(map_db_error)?;
+                    .map_err(|e| failed(e.to_string()))?;
             }
 
             // Update the persistent file index after a successful parse.
@@ -2048,13 +2032,6 @@ impl DirSQL {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
-        // A per-file failure no longer cancels the scan: what could be indexed
-        // is committed, and the failures ride on the built database for the
-        // caller to report (`scan_failures`). A file that failed never reached
-        // `upsert_file`, so it is absent from the cache index and is retried on
-        // the next scan -- the cache is incomplete, never wrong. SQLite, DDL
-        // and extension errors still propagate above, unchanged.
-
         let committed = foreign_key::commit(db.conn());
         drop(_tx);
         committed.map_err(map_db_error)?;
@@ -2074,7 +2051,7 @@ impl DirSQL {
                 declared,
                 batch_files: Mutex::new(batch_files),
                 held: Mutex::new(Vec::new()),
-                scan_failures: on_file_failures,
+                scan_failures: Vec::new(),
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
@@ -7792,23 +7769,21 @@ mod internal_tests {
     }
 
     #[test]
-    fn a_file_whose_hook_fails_at_query_time_keeps_no_rows_and_reports_the_error() {
-        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
-        std::fs::write(root.join("a.txt"), "bad").unwrap();
-        assert_eq!(row_names(&db), Vec::<String>::new());
-        let events = db.apply_file_events(Vec::new());
+    fn a_file_whose_hook_fails_at_query_time_fails_the_query_and_keeps_the_index() {
+        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        std::fs::write(root.join("a.txt"), "uno").unwrap();
+        std::fs::write(root.join("b.txt"), "bad").unwrap();
+        let err = db.query("SELECT name FROM items").unwrap_err();
         assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, RowEvent::Error { .. })),
-            "{events:?}"
+            matches!(&err, DirSqlError::OnFile { table, path, message }
+                if table == "items" && path == "b.txt" && message == "bad content"),
+            "{err:?}"
         );
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, RowEvent::Delete { .. })),
-            "{events:?}"
-        );
+        db.set_fresh_reads(false);
+        assert_eq!(row_names(&db), vec!["one", "two"]);
+        db.set_fresh_reads(true);
+        std::fs::write(root.join("b.txt"), "dos").unwrap();
+        assert_eq!(row_names(&db), vec!["dos", "uno"]);
     }
 
     #[test]

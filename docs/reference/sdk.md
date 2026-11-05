@@ -492,7 +492,14 @@ Maps files to table rows.
   exactly what the callback returns, narrowed to the DDL — `dirsql` injects
   nothing (see [Columns](./columns.md)). A callback that wants the path, stat
   metadata, or file body computes it from the path it receives; `dirsql` never
-  reads file contents itself. Return an empty list to skip a file.
+  reads file contents itself. Return an empty list to skip a file. A callback
+  that raises, or returns a row the table rejects (a `strict` key mismatch,
+  `NOT NULL`, `UNIQUE`, `CHECK`), fails [`ready`](#ready) and every query
+  with an error naming the table, the file and the original error; no file
+  is skipped. A query re-reads a file changed since the last read, so a file
+  read while half-written fails that query. Have writers write to a
+  temporary file in the same directory and rename it into place, so a reader
+  sees only the old content or the new.
 - `strict` — Default off: extra row keys are dropped and missing declared
   columns become `NULL`. When on, any extra or missing key is an error
   (see [`strict`](./config.md#table)).

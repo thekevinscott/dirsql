@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_failure_test.py tests/e2e/fresh_declared_repros_test.py -x -q",
+  "ran_at": 1793828513,
+  "exit_code": 0,
+  "commit": "2ca3215c00a5dd7adb01e00c9448641c9b8cbc29",
+  "branch": "bot/1620-on-file-fail-1104"
+}
