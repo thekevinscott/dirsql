@@ -1,0 +1,1 @@
+**Fixed** `dirsql ... -- "<sql>"` works with an installed plugin or a config naming an extension by package name. The launcher now places its injected `-c` and `--extension` flags before the first `--`; before, they landed after the SQL and the CLI rejected them.
