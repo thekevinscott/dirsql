@@ -939,6 +939,14 @@ mod tests {
     }
 
     #[test]
+    fn repeated_separators_after_a_dot_slash_config_glob_are_dropped() {
+        assert_eq!(
+            anchor_of(".///a/*.json", None),
+            Some((PathBuf::from("/cfg"), "a/*.json".to_string()))
+        );
+    }
+
+    #[test]
     fn an_absolute_config_glob_anchors_at_its_literal_prefix() {
         assert_eq!(
             anchor_of("/var/*/logs/*.log", None),
