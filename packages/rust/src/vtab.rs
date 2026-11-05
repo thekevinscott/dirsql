@@ -1,4 +1,5 @@
 use std::ffi::c_int;
+use std::fs::File;
 use std::io::{self, Read};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -82,7 +83,20 @@ const READERS: usize = 8;
 /// `size` is what the row's stat reported, so the buffer is sized without
 /// stat'ing again; a file that has grown since is still read whole.
 fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    read_text_with(path, size, crate::long_path::open_file)
+    read_text_with(path, size, open_regular)
+}
+
+/// Open `path` only if what is there now is a regular file. The scan saw a
+/// regular file, but the path can have been replaced since: a FIFO would block
+/// the open and a device like `/dev/zero` never ends. The check is on the open
+/// handle, so nothing can be swapped in between it and the read.
+fn open_regular(path: &Path) -> io::Result<File> {
+    let file = crate::long_path::open_file(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
 }
 
 fn read_text_with<R: Read>(
@@ -835,6 +849,46 @@ mod tests {
 
         assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
+    fn open_regular_opens_a_regular_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        assert!(open_regular(&path).is_ok());
+    }
+
+    #[test]
+    fn open_regular_refuses_what_is_not_a_regular_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut entries = vec![dir.path().to_path_buf()];
+        if cfg!(unix) {
+            entries.push(PathBuf::from("/dev/null"));
+        }
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("fifo");
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o644),
+                0,
+            )
+            .unwrap();
+            entries.push(fifo);
+        }
+
+        for entry in entries {
+            assert!(open_regular(&entry).is_err(), "{} opened", entry.display());
+        }
+    }
+
+    #[test]
+    fn open_regular_fails_on_a_missing_path() {
+        let err = open_regular(Path::new("/no/such/dirsql/path")).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

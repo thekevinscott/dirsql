@@ -307,3 +307,28 @@ fn a_rebuild_sweeps_a_cache_holding_an_extension_backed_virtual_table() {
     );
     assert_eq!(rows[0]["n"], Value::Integer(42));
 }
+
+#[test]
+fn ddl_column_with_embedded_quote_accepts_hook_values() {
+    let root = TempDir::new().unwrap();
+    seed(root.path());
+    let table = Table::new(
+        "notes",
+        "CREATE TABLE notes (\"a\"\"b\" TEXT, body TEXT)",
+        "*.md",
+        |path| {
+            vec![HashMap::from([(
+                "body".into(),
+                Value::Text(fs::read_to_string(path).unwrap().trim().into()),
+            )])]
+        },
+    );
+    let db = DirSQL::builder()
+        .root(root.path())
+        .table(table)
+        .build()
+        .unwrap();
+    let rows = db.query("SELECT body FROM notes").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["body"], Value::Text("hello world".into()));
+}

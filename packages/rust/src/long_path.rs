@@ -84,10 +84,10 @@ fn stretches(path: &Path) -> Vec<std::path::PathBuf> {
     cut
 }
 
-/// `path` opened to read, however long it is.
+/// `path` opened to read without blocking on a FIFO, however long it is.
 #[cfg(unix)]
 pub(crate) fn open_file(path: &Path) -> io::Result<File> {
-    open(path, OFlags::RDONLY).map(File::from)
+    open(path, OFlags::RDONLY.union(OFlags::NONBLOCK)).map(File::from)
 }
 
 #[cfg(not(unix))]
