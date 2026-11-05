@@ -538,6 +538,11 @@ A TypeScript `bigint` **within** `i64` range maps to `INTEGER`. Only a real
 `bytes`/`bytearray` (Python) or `Buffer`/`Uint8Array` (TypeScript) maps to
 `BLOB` — a list/array of integers does not.
 
+In Python, any other type (`Decimal`, `Fraction`, a numpy scalar other than
+`numpy.float64`, `dict`, `list`, `memoryview`, ...) raises `TypeError` naming
+the column and the type. It is never coerced to `REAL` or stored as its repr;
+convert it first (`int(x)`, `float(x)`, `str(x)`, `json.dumps(x)`).
+
 ## Progress on construction
 
 Constructing a `DirSQL` walks the tree and ingests every matched file, which
