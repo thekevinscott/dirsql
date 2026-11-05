@@ -8,6 +8,7 @@
 //! stable public API.
 
 mod brace;
+mod collating_symbol;
 /// Reusable command runner backing the command-backed events.
 pub mod command;
 #[doc(hidden)]

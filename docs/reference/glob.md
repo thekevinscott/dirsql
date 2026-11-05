@@ -93,6 +93,9 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./uni/[[:punct:]].md` | `uni/¡.md` |  |
 | `./uni/[[:word:]].md` | `uni/1.md`, `uni/a.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` |  |
 | `./uni/[![:alpha:]].md` | `uni/1.md`, `uni/¡.md` |  |
+| `./uni/[[.a.]].md` | `uni/a.md` |  |
+| `./uni/[[=é=]].md` | `uni/é.md` |  |
+| `./uni/[[.one.]-[.nine.]].md` | `uni/1.md` |  |
 | `./[d/x]ocs/api.md` | none |  |
 | `./docs[/]api.md` | none |  |
 | `./[!/]*/api.md` | none |  |
@@ -189,6 +192,9 @@ stderr; the exit code is unchanged. Path-tables never warn.
 - POSIX classes (`[[:alpha:]]`) match Unicode characters, as bash does in a UTF-8
   locale: `[[:alpha:]]` matches `é` and `中`. `[[:digit:]]`, `[[:xdigit:]]` and
   `[[:ascii:]]` stay ASCII.
+- A collating symbol (`[[.a.]]`, or a POSIX name such as `[[.hyphen.]]`) and an
+  equivalence class (`[[=a=]]`) each match their one character, as in bash's
+  `C.UTF-8` locale. A collating symbol may bound a range.
 - A dot-named file or directory is listed only where a component spells the
   dot at that depth: `./**/.*` finds `docs/.draft.md` but does not enter
   `.config/`.
