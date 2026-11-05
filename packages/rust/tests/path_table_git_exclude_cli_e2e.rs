@@ -95,6 +95,57 @@ fn core_excludes_file_hides_the_files_it_names() {
 }
 
 #[test]
+fn a_tilde_inside_the_core_excludes_file_path_is_literal() {
+    let root = repo();
+    let home = TempDir::new().unwrap();
+    let dir = home.path().join("RUNNER~1");
+    fs::create_dir_all(&dir).unwrap();
+    let excludes = dir.join("global-ignore");
+    fs::write(&excludes, "b.txt\n").unwrap();
+
+    let out = run(
+        root.path(),
+        &git_env(home.path(), Some(&excludes)),
+        &["query", QUERY],
+    );
+
+    assert_eq!(paths(&out), vec!["a.txt"]);
+}
+
+#[test]
+fn a_leading_tilde_in_the_core_excludes_file_path_is_home() {
+    let root = repo();
+    let home = TempDir::new().unwrap();
+    fs::write(home.path().join("global-ignore"), "b.txt\n").unwrap();
+
+    let out = run(
+        root.path(),
+        &git_env(home.path(), Some(Path::new("~/global-ignore"))),
+        &["query", QUERY],
+    );
+
+    assert_eq!(paths(&out), vec!["a.txt"]);
+}
+
+#[test]
+fn a_core_excludes_file_path_with_a_space_is_read_whole() {
+    let root = repo();
+    let home = TempDir::new().unwrap();
+    let dir = home.path().join("John Smith");
+    fs::create_dir_all(&dir).unwrap();
+    let excludes = dir.join("global-ignore");
+    fs::write(&excludes, "b.txt\n").unwrap();
+
+    let out = run(
+        root.path(),
+        &git_env(home.path(), Some(&excludes)),
+        &["query", QUERY],
+    );
+
+    assert_eq!(paths(&out), vec!["a.txt"]);
+}
+
+#[test]
 fn the_default_global_ignore_applies_when_core_excludes_file_is_unset() {
     let root = repo();
     let home = TempDir::new().unwrap();
