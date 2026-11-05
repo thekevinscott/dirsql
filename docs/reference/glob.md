@@ -101,9 +101,13 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./{a.md` | none |  |
 | `./{1..3}.md` | `1.md`, `2.md`, `3.md` |  |
 | `./my file.md` | `my file.md` |  |
+| `./my\ file.md` | `my file.md` |  |
+| `./do\cs/*.md` | `docs/api.md`, `docs/guide.md` |  |
 | `./.*` | `.env`, `.gitignore` |  |
 | `./**/.*` | `.env`, `.gitignore`, `docs/.draft.md` |  |
 | `./.env` | `.env` |  |
+| `./\.env` | `.env` |  |
+| `./docs/\.draft.md` | `docs/.draft.md` |  |
 | `./.config/**` | `.config/app.toml`, `.config/sub/deep.md` |  |
 | `./docs/.*` | `docs/.draft.md` |  |
 | `./link.md` | `link.md` |  |
@@ -127,6 +131,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./d*` | none | files-only |
 | `./*.log` | none | gitignore |
 | `./ignored.log` | `ignored.log` |  |
+| `./ignored\.log` | `ignored.log` |  |
 | `./{ignored,x}.log` | `ignored.log` |  |
 | `./dist/*.js` | none | gitignore |
 | `./dist/**/*.js` | none | gitignore |

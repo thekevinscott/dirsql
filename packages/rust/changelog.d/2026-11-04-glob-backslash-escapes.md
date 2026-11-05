@@ -1,0 +1,1 @@
+**Fixed** A `\` in a glob's literal text now quotes the next character, as bash does: `'./do\cs/*.md'` and `'./my\ dir/*.md'` walk `docs` and `my dir`, `'./\.env'` spells the dot-file, and `'./a\.log'` lists a gitignored `a.log` like `'./a.log'` does. A `\` in a Windows drive-letter or UNC path still separates.
