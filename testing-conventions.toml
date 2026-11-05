@@ -85,7 +85,7 @@ extra_scope = ["packages/rust/src"]
 [[rust.exempt]]
 path = "src/long_path.rs"
 rules = ["mutation"]
-lines = [94]
+lines = [95]
 reason = "the non-unix open_file is compiled out on the Linux mutation runner; the Windows CI job runs tests/path_max_depth.rs and tests/vtab.rs, which read content through it"
 
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
