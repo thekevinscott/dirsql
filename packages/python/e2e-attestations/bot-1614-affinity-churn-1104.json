@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/fresh_declared_repros_test.py -x -q",
+  "ran_at": 1793842020,
+  "exit_code": 0,
+  "commit": "431b9bf8bcaa7af0f3b5274de9b9209a31fa3573",
+  "branch": "bot/1614-affinity-churn-1104"
+}
