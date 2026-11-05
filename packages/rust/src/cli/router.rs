@@ -22,6 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use super::AppState;
 use super::execute::{QueryFailure, execute_query, require_ready};
+use super::serialize::result_to_json;
 use crate::TableInfo;
 
 pub(super) struct AppContext {
@@ -92,7 +93,7 @@ fn table_json(table: &TableInfo) -> serde_json::Value {
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
-    match execute_query(&ctx.state, body, Some(ctx.query_timeout)).await {
+    match execute_query(&ctx.state, body, Some(ctx.query_timeout), result_to_json).await {
         Ok(value) => Json(value).into_response(),
         Err(failure) => failure_response(&failure),
     }
