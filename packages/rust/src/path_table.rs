@@ -222,7 +222,10 @@ fn config_anchor_as<S: Syntax>(
     home: Option<&Path>,
 ) -> Option<(PathBuf, String)> {
     if let Some(rest) = glob.strip_prefix("./") {
-        return Some((config_dir.to_path_buf(), rest.to_string()));
+        return Some((
+            config_dir.to_path_buf(),
+            rest.trim_start_matches('/').to_string(),
+        ));
     }
     let Some(target) = absolute_target::<S>(glob, config_dir, home) else {
         return Some((config_dir.to_path_buf(), glob.to_string()));
