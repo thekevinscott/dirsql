@@ -427,6 +427,11 @@ mod tests {
     }
 
     #[test]
+    fn a_dot_outside_a_collating_symbol_is_ordinary() {
+        assert_eq!(expand_posix_classes("[[.b.]a.]"), "[.ab]");
+    }
+
+    #[test]
     fn a_collating_symbol_naming_nothing_contributes_nothing() {
         assert_eq!(expand_posix_classes("[[.foo.]a]"), "[a]");
         assert_eq!(expand_posix_classes("[[.ab.]]"), "[\0]");
