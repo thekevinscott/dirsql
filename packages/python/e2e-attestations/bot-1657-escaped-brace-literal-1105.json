@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_dotfiles_test.py -x -q",
+  "ran_at": 1793921131,
+  "exit_code": 0,
+  "commit": "19bdd83adb4880f8df65fab2ef33a793e01d2b5a",
+  "branch": "bot/1657-escaped-brace-literal-1105"
+}
