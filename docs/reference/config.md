@@ -379,7 +379,9 @@ foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project
 in place, so its children stay. A table without one has a changed row deleted
 and inserted, so `ON DELETE CASCADE` deletes the children of a parent whose
 file is edited. A row whose key changes, as when the key is taken from a
-renamed file's name, is a delete and an insert either way.
+renamed file's name, is a delete and an insert either way, as is a row that
+takes a `UNIQUE` value another row gives up in the same edit, when its
+`UPDATE` collides.
 
 ### `on-file` row mapping
 

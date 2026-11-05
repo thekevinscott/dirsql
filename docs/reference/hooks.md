@@ -142,8 +142,10 @@ comparing just the columns the command emits:
   the command fills, non-NULL, in every row. A matched row that changed is
   `UPDATE`d in place, so its rowid and every column the command leaves out (a
   generated `INTEGER PRIMARY KEY`, a default) keep their values, and the watch
-  stream carries an `update`. A key that disappears is deleted and a new key is
-  inserted.
+  stream carries an `update`. Only the end state must satisfy a `UNIQUE`
+  constraint: a row that takes a value another row gives up in the same edit
+  (a swap) is, when its `UPDATE` collides, deleted and inserted again at its
+  rowid. A key that disappears is deleted and a new key is inserted.
 - A table without one has no row identity: a row the command still emits
   stays put, and every other row is deleted or inserted.
 

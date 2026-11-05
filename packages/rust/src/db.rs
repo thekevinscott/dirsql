@@ -1190,12 +1190,39 @@ impl Db {
                 sets.join(", "),
                 compared.len() + 1
             ))?;
+            let mut blocked = Vec::new();
             for &(at, index) in &updated {
                 for (n, &i) in compared.iter().enumerate() {
                     update.raw_bind_parameter(n + 1, &rows.cells[index][i])?;
                 }
                 update.raw_bind_parameter(compared.len() + 1, stored[at].0)?;
-                update.raw_execute()?;
+                match update.raw_execute() {
+                    Ok(_) => {}
+                    Err(rusqlite::Error::SqliteFailure(err, _))
+                        if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+                    {
+                        blocked.push((at, index));
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            // SQLite checks UNIQUE per row and cannot defer it, so a value
+            // moving between rows (a swap) collides in every update order.
+            // Re-placing the blocked rows at their rowids checks only the
+            // end state.
+            for &(at, _) in &blocked {
+                delete.execute([stored[at].0])?;
+            }
+            let mut replace = self.conn.prepare_cached(&insert_sql(
+                table,
+                &[&["rowid".to_string()], &columns[..]].concat(),
+            ))?;
+            for &(at, index) in &blocked {
+                replace.raw_bind_parameter(1, stored[at].0)?;
+                for (i, value) in merged(at, index).iter().enumerate() {
+                    replace.raw_bind_parameter(i + 2, value)?;
+                }
+                replace.raw_execute()?;
             }
         }
         let mut insert = self.conn.prepare_cached(&insert_sql(table, columns))?;
@@ -5110,6 +5137,84 @@ mod tests {
             })
             .unwrap();
         assert_eq!(note, "kept");
+    }
+
+    fn named_db(ddl: &str) -> Db {
+        let db = Db::new().unwrap();
+        db.create_table("t", ddl).unwrap();
+        let rows = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"x"},{"id":2,"name":"y"}]),
+        );
+        db.insert_rows("t", &rows, "").unwrap();
+        db
+    }
+
+    fn named_rows(db: &Db) -> Vec<(i64, i64, String, Option<String>)> {
+        db.conn()
+            .prepare("SELECT rowid, id, name, note FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_swaps_a_unique_value_between_keyed_rows() {
+        let db = named_db("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, note TEXT)");
+        db.conn()
+            .execute("UPDATE t SET note = 'kept' || id", [])
+            .unwrap();
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"y"},{"id":2,"name":"x"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(
+            named_rows(&db),
+            vec![
+                (1, 1, "y".into(), Some("kept1".into())),
+                (2, 2, "x".into(), Some("kept2".into())),
+            ]
+        );
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(changes.updated.len(), 2, "got: {:?}", changes.updated);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_still_rejects_an_end_state_that_repeats_a_unique_value() {
+        let db = named_db("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, note TEXT)");
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"y"},{"id":2,"name":"y"}]),
+        );
+
+        let err = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert!(err.to_string().contains("UNIQUE"), "got: {err}");
+    }
+
+    #[test]
+    fn reconcile_batch_rows_fails_an_update_another_constraint_rejects() {
+        let db = named_db(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT CHECK (name != 'bad'), note TEXT)",
+        );
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":1,"name":"bad"},{"id":2,"name":"y"}]),
+        );
+
+        let err = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert!(err.to_string().contains("CHECK"), "got: {err}");
+        assert_eq!(named_rows(&db)[0].2, "x");
     }
 
     #[test]
