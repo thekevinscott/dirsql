@@ -806,6 +806,56 @@ fn a_negated_class_bracket_matches_one_non_ascii_character() {
     );
 }
 
+fn collating_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("co")).unwrap();
+    for name in ["a.md", "b.md", "c.md", "-.md"] {
+        fs::write(root.path().join("co").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_collating_symbol_matches_its_character() {
+    let root = collating_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './co/[[.a.]].md'"),
+        vec!["co/a.md"]
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './co/[[.hyphen.]].md'"),
+        vec!["co/-.md"]
+    );
+}
+
+#[test]
+fn an_equivalence_class_matches_its_character() {
+    let root = collating_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './co/[[=a=]].md'"),
+        vec!["co/a.md"]
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './co/[![=a=][.b.]].md'"),
+        vec!["co/-.md", "co/c.md"]
+    );
+}
+
+#[test]
+fn a_collating_symbol_bounds_a_range() {
+    let root = collating_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './co/[[.a.]-[.b.]].md'"),
+        vec!["co/a.md", "co/b.md"]
+    );
+}
+
 /// Files whose names a brace group could plausibly expand to, including one
 /// whose name holds the braces themselves.
 fn brace_fixture() -> TempDir {

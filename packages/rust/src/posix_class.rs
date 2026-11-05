@@ -1,10 +1,15 @@
-//! POSIX character classes (`[[:digit:]]`) for globset, which has no
-//! `[:name:]` syntax: each bracket expression holding one is rewritten into an
-//! equivalent bracket of plain ranges before the glob is compiled.
+//! POSIX character classes (`[[:digit:]]`), collating symbols (`[[.a.]]`)
+//! and equivalence classes (`[[=a=]]`) for globset, which has none of them:
+//! each bracket expression holding one is rewritten into an equivalent
+//! bracket of plain ranges before the glob is compiled.
 
-/// Rewrite every bracket expression in `pattern` that holds a `[:name:]`
-/// class into plain ranges. Brackets without one, unclosed brackets and
-/// backslash-escaped characters are left exactly as written.
+use std::collections::BTreeSet;
+
+use crate::collating_symbol::collating_symbol;
+
+/// Rewrite every bracket expression in `pattern` that holds a `[:name:]`,
+/// `[.name.]` or `[=c=]` element into plain ranges. Other brackets, unclosed
+/// brackets and backslash-escaped characters are left exactly as written.
 pub(crate) fn expand_posix_classes(pattern: &str) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
@@ -40,8 +45,8 @@ pub(crate) fn expand_posix_classes(pattern: &str) -> String {
 }
 
 /// Parse the bracket expression opening at `start`. `None` when it never
-/// closes; otherwise the index past its `]`, plus its rewrite when it holds a
-/// class.
+/// closes; otherwise the index past its `]`, plus its rewrite when it holds an
+/// element globset lacks.
 fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
     let mut j = start + 1;
     let negated = matches!(chars.get(j), Some('!' | '^'));
@@ -49,8 +54,9 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
         j += 1;
     }
     let body_start = j;
-    let mut ranges: Vec<(char, char)> = Vec::new();
-    let mut has_class = false;
+    // A set, so a cursor that stops advancing loops in bounded memory.
+    let mut ranges: BTreeSet<(char, char)> = BTreeSet::new();
+    let mut rewrite = false;
     // bash matches nothing at all when a range ends in a class, negated or not.
     let mut range_into_class = false;
     loop {
@@ -61,30 +67,50 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
         }
         if let Some((name, next)) = class_at(chars, j) {
             ranges.extend(class_ranges(&name));
-            has_class = true;
+            rewrite = true;
             j = next;
             continue;
         }
-        match (chars.get(j + 1), chars.get(j + 2)) {
+        if let Some((member, next)) = equivalence_at(chars, j) {
+            ranges.insert((member, member));
+            rewrite = true;
+            j = next;
+            continue;
+        }
+        let (start, after) = match symbol_at(chars, j) {
+            Some(symbol) => {
+                rewrite = true;
+                symbol
+            }
+            None => (Some(c), j + 1),
+        };
+        match (chars.get(after), chars.get(after + 1)) {
             (Some('-'), Some(&end)) if end != ']' => {
-                if let Some((_, next)) = class_at(chars, j + 2) {
-                    has_class = true;
+                if let Some((_, next)) = class_at(chars, after + 1) {
+                    rewrite = true;
                     range_into_class = true;
                     j = next;
                     continue;
                 }
-                if c <= end {
-                    ranges.push((c, end));
+                let (end, next) = match symbol_at(chars, after + 1) {
+                    Some(symbol) => {
+                        rewrite = true;
+                        symbol
+                    }
+                    None => (Some(end), after + 2),
+                };
+                if let Some((start, end)) = start.zip(end).filter(|(a, b)| a <= b) {
+                    ranges.insert((start, end));
                 }
-                j += 3;
+                j = next;
             }
             _ => {
-                ranges.push((c, c));
-                j += 1;
+                ranges.extend(start.map(|c| (c, c)));
+                j = after;
             }
         }
     }
-    if !has_class {
+    if !rewrite {
         return Some((j, None));
     }
     let rewritten = if range_into_class {
@@ -109,6 +135,33 @@ fn class_at(chars: &[char], j: usize) -> Option<(String, usize)> {
             _ => k += 1,
         }
     }
+}
+
+/// The equivalence class `[=c=]` starting at `j`, with the index past it.
+/// Only a single character is one, as in bash; anything else leaves the `[`
+/// an ordinary character.
+fn equivalence_at(chars: &[char], j: usize) -> Option<(char, usize)> {
+    match chars.get(j..j + 5)? {
+        ['[', '=', c, '=', ']'] => Some((*c, j + 5)),
+        _ => None,
+    }
+}
+
+/// The collating symbol `[.name.]` starting at `j`, with the index past its
+/// `.]`; the character is `None` for a name that stands for none. With no
+/// `.]` the symbol runs to the end of the pattern, so its bracket never
+/// closes, as in bash.
+fn symbol_at(chars: &[char], j: usize) -> Option<(Option<char>, usize)> {
+    if chars.get(j) != Some(&'[') || chars.get(j + 1) != Some(&'.') {
+        return None;
+    }
+    let name_start = j + 2;
+    let close = (name_start..chars.len().saturating_sub(1))
+        .find(|&k| chars[k] == '.' && chars[k + 1] == ']');
+    Some(match close {
+        Some(k) => (collating_symbol(&chars[name_start..k]), k + 2),
+        None => (None, chars.len()),
+    })
 }
 
 /// Classes whose members are Unicode characters, in glibc's `C.utf8`: each is
@@ -174,7 +227,7 @@ const POSITIONAL: [char; 4] = [']', '-', '!', '^'];
 /// `negated`). A bracket never matches the separator, so `/` is dropped from a
 /// positive set and added to a negated one. NUL, which no path holds, stands
 /// in when nothing else may open the bracket.
-fn render(negated: bool, ranges: Vec<(char, char)>) -> String {
+fn render(negated: bool, ranges: BTreeSet<(char, char)>) -> String {
     let mut set: Vec<(u32, u32)> = ranges
         .into_iter()
         .map(|(a, b)| (a as u32, b as u32))
@@ -362,6 +415,66 @@ mod tests {
     fn an_escaped_bracket_is_untouched() {
         assert_eq!(expand_posix_classes("\\[[:digit:]]"), "\\[[:digit:]]");
         assert_eq!(expand_posix_classes("a\\"), "a\\");
+    }
+
+    #[test]
+    fn a_collating_symbol_becomes_its_character() {
+        assert_eq!(expand_posix_classes("[[.a.]].md"), "[a].md");
+        assert_eq!(expand_posix_classes("[[...]]"), "[.]");
+        assert_eq!(expand_posix_classes("[[.].]]"), "[]]");
+        assert_eq!(expand_posix_classes("[[.hyphen.]]"), "[\0-]");
+        assert_eq!(expand_posix_classes("[![.a.]]"), "[!/a]");
+    }
+
+    #[test]
+    fn a_dot_outside_a_collating_symbol_is_ordinary() {
+        assert_eq!(expand_posix_classes("[[.b.]a.]"), "[.ab]");
+    }
+
+    #[test]
+    fn a_collating_symbol_naming_nothing_contributes_nothing() {
+        assert_eq!(expand_posix_classes("[[.foo.]a]"), "[a]");
+        assert_eq!(expand_posix_classes("[[.ab.]]"), "[\0]");
+        assert_eq!(expand_posix_classes("[[..]]"), "[\0]");
+        assert_eq!(expand_posix_classes("[[.slash.]]"), "[\0]");
+    }
+
+    #[test]
+    fn a_collating_symbol_bounds_a_range() {
+        assert_eq!(expand_posix_classes("[[.a.]-c]"), "[a-c]");
+        assert_eq!(expand_posix_classes("[a-[.c.]]"), "[a-c]");
+        assert_eq!(expand_posix_classes("[[.a.]-[.c.]]"), "[a-c]");
+    }
+
+    #[test]
+    fn a_range_with_a_bad_collating_bound_is_empty() {
+        assert_eq!(expand_posix_classes("[[.c.]-[.a.]]"), "[\0]");
+        assert_eq!(expand_posix_classes("[[.foo.]-c]"), "[\0]");
+        assert_eq!(expand_posix_classes("[a-[.foo.]]"), "[\0]");
+    }
+
+    #[test]
+    fn an_unclosed_collating_symbol_leaves_the_bracket_open() {
+        assert_eq!(expand_posix_classes("[[.a].md"), "[[.a].md");
+        assert_eq!(expand_posix_classes("[a-[.c]"), "[a-[.c]");
+    }
+
+    #[test]
+    fn an_equivalence_class_becomes_its_character() {
+        assert_eq!(expand_posix_classes("[[=a=]].md"), "[a].md");
+        assert_eq!(expand_posix_classes("[[===]]"), "[=]");
+        assert_eq!(expand_posix_classes("[x[=a=]]"), "[ax]");
+    }
+
+    #[test]
+    fn a_dash_after_an_equivalence_class_is_literal() {
+        assert_eq!(expand_posix_classes("[[=a=]-c]"), "[ac-]");
+    }
+
+    #[test]
+    fn a_longer_equivalence_class_is_ordinary_characters() {
+        assert_eq!(expand_posix_classes("[[=ab=]x]"), "[[=ab=]x]");
+        assert_eq!(expand_posix_classes("[[=a]"), "[[=a]");
     }
 
     #[test]

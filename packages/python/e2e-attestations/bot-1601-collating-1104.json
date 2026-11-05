@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_matchers_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1793845377,
+  "exit_code": 0,
+  "commit": "d64089e55f76b23fcf5ef2de7147c71bf2f0249d",
+  "branch": "bot/1601-collating-1104"
+}

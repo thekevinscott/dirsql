@@ -8,6 +8,7 @@
 //! stable public API.
 
 mod brace;
+mod collating_symbol;
 /// Reusable command runner backing the command-backed events.
 pub mod command;
 #[doc(hidden)]
@@ -24,6 +25,7 @@ mod freshness;
 #[doc(hidden)]
 pub mod functions;
 mod gitignore_frame;
+mod glob_unescape;
 #[doc(hidden)]
 pub mod infer;
 #[doc(hidden)]
@@ -52,6 +54,7 @@ mod row_stream;
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
+mod table_refs;
 mod tree_walk;
 #[doc(hidden)]
 pub mod vtab;

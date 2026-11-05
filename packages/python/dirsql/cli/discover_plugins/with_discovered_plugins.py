@@ -12,6 +12,7 @@ The helpers each live in their own module (``discovery_disabled``, ``fragment_pa
 
 from __future__ import annotations
 
+from ..insert_flags import insert_flags
 from .discovered_fragments import discovered_fragments
 from .discovery_disabled import NO_PLUGIN_FLAG, discovery_disabled
 
@@ -23,11 +24,11 @@ def with_discovered_plugins(argv: list[str]) -> list[str]:
     config, so they are left untouched. Raises if a declared plugin is missing its
     module or fragment (the launcher surfaces a clean error).
 
-    Appending is safe because config flags are subcommand-local (#609): the
-    user's own ``-c`` sits after the ``query`` subcommand (or at top level in
-    server mode), so the injected flags land in the same clap context and
-    accumulate with it -- plugins merge after the user's config, preserving
-    user-first order.
+    Appending (before any ``--``) is safe because config flags are
+    subcommand-local (#609): the user's own ``-c`` sits after the ``query``
+    subcommand (or at top level in server mode), so the injected flags land in
+    the same clap context and accumulate with it -- plugins merge after the
+    user's config, preserving user-first order.
     """
     if discovery_disabled(argv):
         return [a for a in argv if a != NO_PLUGIN_FLAG]
@@ -40,4 +41,4 @@ def with_discovered_plugins(argv: list[str]) -> list[str]:
     for fragment in fragments:
         injected.append("-c")
         injected.append(fragment)
-    return [*argv, *injected]
+    return insert_flags(argv, injected)

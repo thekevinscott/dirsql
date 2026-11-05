@@ -130,6 +130,11 @@ On Windows, the absolute forms also include a drive letter
 and the `path` these report uses `/` throughout (`C:/logs/app.log`), matching
 the `/`-separated relative paths.
 
+A file name that is not valid Unicode keeps its exact bytes in `path`,
+`basename`, `dir` and `ext`. Reading such a value as text fails the query
+(`column "path" holds text that is not valid UTF-8`); select its bytes
+instead, with `hex(path)` or `CAST(path AS BLOB)`.
+
 On a system with no home directory, a `~/` path-table reports that it cannot
 resolve rather than guessing.
 

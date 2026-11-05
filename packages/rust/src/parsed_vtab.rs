@@ -141,7 +141,7 @@ impl TableSource for ParsedTable {
 
     const NAME: &'static str = MODULE_NAME;
 
-    fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
+    fn connect(args: &[&[u8]], _max_length: usize) -> Result<(String, Self)> {
         let ModuleArgs {
             root,
             pattern,

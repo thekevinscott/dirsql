@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/fanout_test.py tests/e2e/root_at_construction_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1793831196,
+  "exit_code": 0,
+  "commit": "c32dbeacca01002acdb3425f38b6d47d2a6708c5",
+  "branch": "bot/1584-content-length-limit-1104"
+}
