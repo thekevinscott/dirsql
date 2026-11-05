@@ -498,7 +498,7 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         .collect::<Result<Vec<_>, _>>()?;
     let named = words
         .iter()
-        .filter(|word| !word.contains(['*', '?', '[']))
+        .filter(|word| !has_wildcard(word))
         .map(|word| PathBuf::from(unescape(word)))
         .collect();
     let mut components = Vec::new();
@@ -531,6 +531,16 @@ fn collapse_separators(word: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `word` holds a `*`, `?` or `[` no backslash quotes.
+fn has_wildcard(word: &str) -> bool {
+    let mut escaped = false;
+    word.chars().any(|c| {
+        let wild = !escaped && matches!(c, '*' | '?' | '[');
+        escaped = !escaped && c == '\\';
+        wild
+    })
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
@@ -1987,6 +1997,22 @@ mod tests {
         let states = states_after(&glob, &[("a", Kind::File)]);
         assert!(glob.reaches(&states, Kind::File));
         assert!(!glob.reaches(&states, Kind::LinkedDir));
+    }
+
+    #[test]
+    fn only_an_unquoted_star_question_or_bracket_is_a_wildcard() {
+        assert!(has_wildcard("a*b"));
+        assert!(has_wildcard("a?"));
+        assert!(has_wildcard("[a]"));
+        assert!(has_wildcard(r"a\\*"));
+        assert!(!has_wildcard(r"a\*\?\[b"));
+        assert!(!has_wildcard(r"\{q\}.md"));
+    }
+
+    #[test]
+    fn a_word_naming_a_brace_file_spells_it() {
+        let glob = compile_glob("./{q}.md").unwrap();
+        assert!(glob.names(Path::new("./{q}.md")));
     }
 
     #[test]
