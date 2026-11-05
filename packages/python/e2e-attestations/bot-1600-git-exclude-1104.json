@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py -x -q",
+  "ran_at": 1793882358,
+  "exit_code": 0,
+  "commit": "e9e31538f4de672e6966f9223c17a30110298373",
+  "branch": "bot/1600-git-exclude-1104"
+}
