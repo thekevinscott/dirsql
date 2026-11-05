@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e extension-package",
+  "ran_at": 1793920581,
+  "exit_code": 0,
+  "commit": "f39c77ee8bb7af268d9cddc9268bccf390ef361e",
+  "branch": "bot/1652-config-dashdash-1105"
+}
