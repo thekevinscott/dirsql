@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts",
+  "ran_at": 1793842094,
+  "exit_code": 0,
+  "commit": "52def9c59f214c7a51b6e21f19b02a626a1527a7",
+  "branch": "bot/1614-affinity-churn-1104"
+}
