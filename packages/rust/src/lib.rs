@@ -1624,7 +1624,7 @@ impl DirSQL {
             }
             let old_rows = db.get_rows_by_file(table, rel_path)?;
             db.delete_rows_by_file(table, rel_path)?;
-            let new_rows = new_rows.to_maps();
+            let new_rows = db.as_stored(table, &new_rows)?.to_maps();
             for (i, row) in new_rows.iter().enumerate() {
                 db.insert_row(table, row, rel_path, i)?;
             }
