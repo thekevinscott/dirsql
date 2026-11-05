@@ -38,6 +38,7 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
         matcher,
         &mut |_| {},
         &mut |_, _| {},
+        &ignore_link,
     ))
 }
 
@@ -74,8 +75,9 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
+    on_link: &(dyn Fn(&Path) + Sync),
 ) -> Vec<Found> {
-    scan_below(root, root, matcher, on_file, on_match)
+    scan_below(root, root, matcher, on_file, on_match, on_link)
 }
 
 /// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
@@ -86,7 +88,25 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    paired(scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {}))
+    scan_subtree_reporting(root, dir, matcher, &ignore_link)
+}
+
+/// [`scan_subtree`], telling `on_link` the path of each symlinked directory
+/// the walk enters.
+pub fn scan_subtree_reporting(
+    root: &Path,
+    dir: &Path,
+    matcher: &TableMatcher,
+    on_link: &(dyn Fn(&Path) + Sync),
+) -> Vec<(PathBuf, String)> {
+    paired(scan_below(
+        root,
+        dir,
+        matcher,
+        &mut |_| {},
+        &mut |_, _| {},
+        on_link,
+    ))
 }
 
 /// One [`Found`] per table whose glob matches `rel_path`, in declaration
@@ -119,6 +139,7 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         in_repo: false,
         frames: Vec::new(),
         dirs: true,
+        on_link: &ignore_link,
     };
     let mut dirs = vec![start.to_path_buf()];
     walk(
@@ -139,6 +160,7 @@ fn scan_below(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
+    on_link: &(dyn Fn(&Path) + Sync),
 ) -> Vec<Found> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
@@ -158,6 +180,7 @@ fn scan_below(
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: false,
+        on_link,
     };
     walk(
         root,
@@ -263,6 +286,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &Frame::load)),
         dirs: false,
+        on_link: &ignore_link,
     };
     walk(
         root,
@@ -301,7 +325,6 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 #[derive(Debug, Clone)]
 pub struct PathGlob {
     files: Vec<Pattern>,
-    spelled_dot_names: Vec<Pattern>,
     /// Every word's components back to back, each word closed by an `End`.
     components: Vec<Component>,
     /// Where each word's components begin.
@@ -333,12 +356,6 @@ enum Kind {
 }
 
 impl PathGlob {
-    pub(crate) fn spells_dot_name(&self, name: &OsStr) -> bool {
-        self.spelled_dot_names
-            .iter()
-            .any(|p| p.is_match(Path::new(name)))
-    }
-
     /// Whether `rel` is a path a wildcard-free word spells, or a directory on
     /// the way to one.
     /// `self` that also takes each of `dirs` as a path it spells out.
@@ -356,14 +373,22 @@ impl PathGlob {
     }
 
     /// [`is_match`](Self::is_match), and every dot-named component of the path
-    /// is one the glob spells.
+    /// is one the glob spells at that component's depth.
     pub(crate) fn is_match_unhidden(&self, rel_path: &Path) -> bool {
         self.is_match(rel_path)
-            && rel_path
-                .components()
-                .map(|c| c.as_os_str())
-                .filter(|name| is_dot_named(name))
-                .all(|name| self.spells_dot_name(name))
+            && (!rel_path.components().any(|c| is_dot_named(c.as_os_str()))
+                || self.spells_dot_names_of(rel_path))
+    }
+
+    /// Whether some word's components consume `rel_path` name by name; only a
+    /// component spelled with a leading `.` consumes a dot-named one.
+    fn spells_dot_names_of(&self, rel_path: &Path) -> bool {
+        !rel_path
+            .components()
+            .fold(self.start(), |states, c| {
+                self.step(&states, c.as_os_str(), Kind::Dir)
+            })
+            .is_empty()
     }
 
     /// Whether a file named `name` may match: false when no word could match
@@ -466,14 +491,10 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     let spells_relative = words
         .iter()
         .any(|word| word.split('/').any(|c| c == "." || c == ".."));
-    let mut files = Vec::new();
-    let mut spelled_dot_names = Vec::new();
-    for word in &words {
-        files.push(Pattern::new(word)?);
-        for component in word.split('/').filter(|c| is_dot_named(OsStr::new(c))) {
-            spelled_dot_names.push(Pattern::new(component)?);
-        }
-    }
+    let files = words
+        .iter()
+        .map(|word| Pattern::new(word))
+        .collect::<Result<Vec<_>, _>>()?;
     let named = words
         .iter()
         .filter(|word| !word.contains(['*', '?', '[', '\\']))
@@ -491,7 +512,6 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     }
     Ok(PathGlob {
         files,
-        spelled_dot_names,
         components,
         starts,
         ends,
@@ -806,7 +826,11 @@ struct Walk<'a> {
     frames: Vec<Arc<Frame>>,
     /// Whether each directory entered is also visited, as a leaf.
     dirs: bool,
+    /// Told the path of each symlinked directory the walk enters.
+    on_link: &'a (dyn Fn(&Path) + Sync),
 }
+
+fn ignore_link(_: &Path) {}
 
 /// `rel.join(name)` in one allocation: the walk builds one per entry on every
 /// worker thread, and `join`'s grow-on-push contends the allocator's arenas.
@@ -837,12 +861,13 @@ impl Walk<'_> {
             stat_of(&dir.join(name), follow)
         })?;
         let linked = linked || kind == Kind::LinkedDir;
-        let next = if linked || kind != Kind::File {
+        let dot_named = is_dot_named(name);
+        let next = if linked || kind != Kind::File || dot_named {
             self.next_states(states, name, kind)
         } else {
             Vec::new()
         };
-        if !self.follows(linked, &next, kind) {
+        if !self.follows(linked, &next, kind) || !self.admits_name(dot_named, &next) {
             return None;
         }
         let is_dir = kind != Kind::File;
@@ -854,8 +879,11 @@ impl Walk<'_> {
         } else {
             dir.join(name)
         };
-        if !self.admits(is_dir, name, &path, &child) {
+        if !self.admits(is_dir, &path, &child) {
             return None;
+        }
+        if kind == Kind::LinkedDir {
+            (self.on_link)(&dir.join(name));
         }
         Some(if is_dir {
             Taken::Dir {
@@ -868,22 +896,20 @@ impl Walk<'_> {
         })
     }
 
-    /// Whether the walk takes an entry: the skip rules first, then the dot-name
-    /// rule, then the `.gitignore` files in force, which never hide a path the
-    /// glob spells.
-    fn admits(&self, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
+    /// Whether the walk takes an entry: the skip rules first, then the
+    /// `.gitignore` files in force, which never hide a path the glob spells.
+    fn admits(&self, is_dir: bool, path: &Path, rel: &Path) -> bool {
         should_descend(is_dir, rel, self.ignore)
-            && self.admits_name(name)
             && (self.frames.is_empty()
                 || self.glob.is_some_and(|glob| glob.names(rel))
                 || !is_gitignored(&self.frames, path, is_dir))
     }
 
-    fn admits_name(&self, name: &OsStr) -> bool {
-        match self.glob {
-            Some(glob) => !is_dot_named(name) || glob.spells_dot_name(name),
-            None => true,
-        }
+    /// Whether an entry, `dot_named` or not, passes the dot-name rule given
+    /// the glob `next` states consuming it leads to: with a glob, a dot-named
+    /// entry needs a component spelled at its depth.
+    fn admits_name(&self, dot_named: bool, next: &[usize]) -> bool {
+        self.glob.is_none() || !dot_named || !next.is_empty()
     }
 
     fn next_states(&self, states: &[usize], name: &OsStr, kind: Kind) -> Vec<usize> {
@@ -1086,6 +1112,7 @@ mod tests {
             &matcher,
             &mut |count| counts.push(count),
             &mut |_, _| {},
+            &ignore_link,
         );
 
         assert_eq!(
@@ -1246,6 +1273,21 @@ mod tests {
                 linked: false,
             })
         );
+    }
+
+    #[test]
+    fn take_reports_no_link_for_a_real_directory_or_a_file() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let reported = std::sync::Mutex::new(Vec::new());
+        let on_link = |path: &Path| reported.lock().unwrap().push(path.to_path_buf());
+        let walk = Walk {
+            on_link: &on_link,
+            ..walk_with(&ignore, Some(&glob), Vec::new())
+        };
+        assert!(take(&walk, "a", Seen::Dir, &[0], false).is_some());
+        assert!(take(&walk, "x", Seen::File, &[1], false).is_some());
+        assert!(reported.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1693,6 +1735,7 @@ mod tests {
             in_repo: !frames.is_empty(),
             frames,
             dirs: false,
+            on_link: &ignore_link,
         }
     }
 
@@ -1701,12 +1744,7 @@ mod tests {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
-        assert!(walk.admits(
-            false,
-            OsStr::new("a.md"),
-            Path::new("/r/a.md"),
-            Path::new("a.md")
-        ));
+        assert!(walk.admits(false, Path::new("/r/a.md"), Path::new("a.md")));
     }
 
     #[test]
@@ -1716,57 +1754,62 @@ mod tests {
         let walk = walk_with(&ignore, Some(&glob), vec![frame("", &["*.log"])]);
         assert!(!walk.admits(
             true,
-            OsStr::new("node_modules"),
             Path::new("/r/apps/node_modules"),
             Path::new("apps/node_modules")
         ));
     }
 
     #[test]
-    fn admits_no_dot_named_entry_the_glob_does_not_spell() {
+    fn takes_no_dot_named_entry_the_glob_does_not_spell() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
-        assert!(!walk.admits(
-            false,
-            OsStr::new(".env"),
-            Path::new("/r/.env"),
-            Path::new(".env")
-        ));
-        assert!(!walk.admits(
-            true,
-            OsStr::new(".hidden"),
-            Path::new("/r/.hidden"),
-            Path::new(".hidden")
-        ));
+        let start = glob.start();
+        assert_eq!(take(&walk, ".env", Seen::File, &start, false), None);
+        assert_eq!(take(&walk, ".hidden", Seen::Dir, &start, false), None);
     }
 
     #[test]
-    fn admits_a_dot_named_entry_the_glob_spells() {
+    fn takes_a_dot_named_entry_the_glob_spells() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("**/.env").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
-        assert!(walk.admits(
-            false,
-            OsStr::new(".env"),
-            Path::new("/r/sub/.env"),
-            Path::new("sub/.env")
-        ));
-        assert!(!walk.admits(
-            true,
-            OsStr::new(".hidden"),
-            Path::new("/r/.hidden"),
-            Path::new(".hidden")
-        ));
+        let start = glob.start();
+        assert_eq!(
+            take(&walk, ".env", Seen::File, &start, false),
+            Some(Taken::File(PathBuf::from(".env")))
+        );
+        assert_eq!(take(&walk, ".hidden", Seen::Dir, &start, false), None);
+    }
+
+    #[test]
+    fn takes_a_dot_named_file_only_at_the_depth_a_dot_component_spells() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob(".*/*").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        let below = glob.step(&glob.start(), OsStr::new(".cfg"), Kind::Dir);
+        assert_eq!(take(&walk, ".secret", Seen::File, &below, false), None);
+        assert_eq!(
+            take(&walk, "app.toml", Seen::File, &below, false),
+            Some(Taken::File(PathBuf::from("app.toml")))
+        );
+    }
+
+    #[test]
+    fn takes_any_dot_named_entry_without_a_glob() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let walk = walk_with(&ignore, None, Vec::new());
+        assert_eq!(
+            take(&walk, ".env", Seen::File, &[], false),
+            Some(Taken::File(PathBuf::from(".env")))
+        );
     }
 
     #[test]
     fn a_table_walk_enters_a_node_modules_directory() {
         let ignore = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
         let walk = walk_with(&ignore, Some(ignore.walk_glob()), Vec::new());
-        let admits = |is_dir, name: &str| {
-            walk.admits(is_dir, OsStr::new(name), Path::new(name), Path::new(name))
-        };
+        let admits = |is_dir, name: &str| walk.admits(is_dir, Path::new(name), Path::new(name));
         assert!(admits(true, "node_modules"));
         assert!(admits(false, "node_modules"));
     }
@@ -1782,24 +1825,33 @@ mod tests {
     }
 
     #[test]
+    fn a_dot_component_spells_dot_names_only_at_its_own_depth() {
+        let glob = compile_glob(".*/*").unwrap();
+        assert!(glob.is_match_unhidden(Path::new(".cfg/app.toml")));
+        assert!(!glob.is_match_unhidden(Path::new(".cfg/.secret")));
+        let deep = compile_glob(".*/**").unwrap();
+        assert!(!deep.is_match_unhidden(Path::new(".cfg/sub/.cache")));
+    }
+
+    #[test]
     fn a_spelled_dot_component_may_itself_be_a_glob() {
         let glob = compile_glob(".env*").unwrap();
-        assert!(glob.spells_dot_name(OsStr::new(".env.local")));
-        assert!(!glob.spells_dot_name(OsStr::new(".git")));
+        assert!(glob.spells_dot_names_of(Path::new(".env.local")));
+        assert!(!glob.spells_dot_names_of(Path::new(".git")));
     }
 
     #[test]
     fn a_dot_component_is_spelled_wherever_it_sits_in_the_glob() {
         let glob = compile_glob("*/.cache/*").unwrap();
-        assert!(glob.spells_dot_name(OsStr::new(".cache")));
-        assert!(!glob.spells_dot_name(OsStr::new(".config")));
+        assert!(glob.spells_dot_names_of(Path::new("a/.cache/b")));
+        assert!(!glob.spells_dot_names_of(Path::new("a/.config/b")));
     }
 
     #[test]
     fn a_glob_without_a_dot_component_spells_no_dot_name() {
         let glob = compile_glob("docs/**/*.md").unwrap();
-        assert!(!glob.spells_dot_name(OsStr::new(".md")));
-        assert!(!glob.spells_dot_name(OsStr::new(".docs")));
+        assert!(!glob.spells_dot_names_of(Path::new("docs/.md")));
+        assert!(!glob.spells_dot_names_of(Path::new(".docs/a.md")));
     }
 
     #[test]
@@ -1815,18 +1867,8 @@ mod tests {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), vec![frame("", &["*.log"])]);
-        assert!(!walk.admits(
-            false,
-            OsStr::new("debug.log"),
-            Path::new("/r/debug.log"),
-            Path::new("debug.log")
-        ));
-        assert!(walk.admits(
-            false,
-            OsStr::new("app.js"),
-            Path::new("/r/app.js"),
-            Path::new("app.js")
-        ));
+        assert!(!walk.admits(false, Path::new("/r/debug.log"), Path::new("debug.log")));
+        assert!(walk.admits(false, Path::new("/r/app.js"), Path::new("app.js")));
     }
 
     fn states_after(glob: &PathGlob, names: &[(&str, Kind)]) -> Vec<usize> {
@@ -1948,8 +1990,8 @@ mod tests {
     #[test]
     fn a_dot_name_inside_a_brace_group_is_spelled() {
         let glob = compile_glob("{.env,x}").unwrap();
-        assert!(glob.spells_dot_name(OsStr::new(".env")));
-        assert!(!glob.spells_dot_name(OsStr::new(".git")));
+        assert!(glob.spells_dot_names_of(Path::new(".env")));
+        assert!(!glob.spells_dot_names_of(Path::new(".git")));
     }
 
     #[test]
@@ -1996,6 +2038,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
@@ -2013,6 +2056,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
         assert!(!walk.follows(false, &[2], Kind::Dir));
@@ -2030,6 +2074,7 @@ mod tests {
             in_repo: false,
             frames: Vec::new(),
             dirs: false,
+            on_link: &ignore_link,
         };
         assert!(walk.follows(false, &[], Kind::Dir));
     }

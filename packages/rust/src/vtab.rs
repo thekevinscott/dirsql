@@ -84,7 +84,31 @@ const READERS: usize = 8;
 /// so the buffer is sized without stat'ing again; a file that has grown since
 /// is still read whole, up to `max_length`.
 fn read_text(path: &Path, size: Option<i64>, max_length: usize) -> Option<String> {
-    read_text_with(path, size, max_length, |path| File::open(path))
+    read_text_with(path, size, max_length, open_regular)
+}
+
+/// Open `path` only if what is there now is a regular file. The scan saw a
+/// regular file, but the path can have been replaced since: a FIFO would block
+/// the open and a device like `/dev/zero` never ends. The check is on the open
+/// handle, so nothing can be swapped in between it and the read.
+fn open_regular(path: &Path) -> io::Result<File> {
+    let file = open_nonblocking(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
+}
+
+fn open_nonblocking(path: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    return Ok(File::from(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::NONBLOCK.union(rustix::fs::OFlags::CLOEXEC),
+        rustix::fs::Mode::empty(),
+    )?));
+    #[cfg(not(unix))]
+    File::open(path)
 }
 
 fn read_text_with<R: Read>(
@@ -898,6 +922,46 @@ mod tests {
 
         assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
+    fn open_regular_opens_a_regular_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        assert!(open_regular(&path).is_ok());
+    }
+
+    #[test]
+    fn open_regular_refuses_what_is_not_a_regular_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut entries = vec![dir.path().to_path_buf()];
+        if cfg!(unix) {
+            entries.push(PathBuf::from("/dev/null"));
+        }
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("fifo");
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o644),
+                0,
+            )
+            .unwrap();
+            entries.push(fifo);
+        }
+
+        for entry in entries {
+            assert!(open_regular(&entry).is_err(), "{} opened", entry.display());
+        }
+    }
+
+    #[test]
+    fn open_regular_fails_on_a_missing_path() {
+        let err = open_regular(Path::new("/no/such/dirsql/path")).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

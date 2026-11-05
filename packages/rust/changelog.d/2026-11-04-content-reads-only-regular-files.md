@@ -1,0 +1,1 @@
+**Fixed** If a path-table file is replaced by a FIFO, a device or a directory after the scan finds it but before `content` is read, its `content` is now NULL, the same as for a deleted file. A FIFO used to hang the query, and a symlink to `/dev/zero` read until memory ran out.

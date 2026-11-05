@@ -150,6 +150,16 @@ fn dot_named_entries_are_hidden_unless_the_glob_spells_them() {
 }
 
 #[test]
+fn a_dot_component_admits_dot_names_only_at_its_own_depth() {
+    let root = tree(&[".cfg/app.toml", ".cfg/.secret", ".cfg/sub/.cache"]);
+    let expected = vec![".cfg/app.toml"];
+    for glob in [".*/*", ".*/**"] {
+        assert_eq!(path_table_paths(root.path(), glob), expected, "{glob}");
+        assert_eq!(config_paths(root.path(), glob), expected, "{glob}");
+    }
+}
+
+#[test]
 fn a_spelled_dot_directory_is_listed() {
     let root = tree(&["a.md", ".hid/z.md"]);
     let expected = vec![".hid/z.md"];

@@ -38,6 +38,9 @@ pub enum DbError {
     )]
     WriteForbidden,
 
+    #[error("query() runs one statement at a time; remove the SQL after the first statement")]
+    MultipleStatements,
+
     #[error("{0}")]
     Unauthorized(String),
 
@@ -248,6 +251,17 @@ pub fn validate_identifier(s: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_column_key(key: &str, columns: &[String]) -> Result<()> {
+    if columns
+        .iter()
+        .any(|column| column.eq_ignore_ascii_case(key))
+    {
+        Ok(())
+    } else {
+        validate_identifier(key)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, DbError>;
 
 const MAPPING_INSERT: &str = "INSERT INTO _dirsql_internal_rows \
@@ -306,7 +320,7 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
     if columns.is_empty() {
         return format!("INSERT INTO \"{table}\" DEFAULT VALUES");
     }
-    let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+    let names: Vec<String> = columns.iter().map(|c| quote_identifier(c)).collect();
     let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
     format!(
         "INSERT INTO \"{table}\" ({}) VALUES ({})",
@@ -320,7 +334,7 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
 fn select_list(prefix: &str, columns: &[String]) -> String {
     columns
         .iter()
-        .map(|c| format!(", {prefix}\"{c}\""))
+        .map(|c| format!(", {prefix}{}", quote_identifier(c)))
         .collect()
 }
 
@@ -385,7 +399,7 @@ pub(crate) fn shape_json_rows(
     for row in rows {
         if strict {
             for (key, _) in &row.0 {
-                validate_identifier(key)?;
+                validate_column_key(key, &columns)?;
             }
             let extra: Vec<&str> = row
                 .0
@@ -813,7 +827,7 @@ impl Db {
     ) -> Result<HashMap<String, Value>> {
         if strict {
             for key in row.keys() {
-                validate_identifier(key)?;
+                validate_column_key(key, columns)?;
             }
             let extra: Vec<&str> = row
                 .keys()
@@ -1162,7 +1176,7 @@ impl Db {
             let sets: Vec<String> = compared
                 .iter()
                 .enumerate()
-                .map(|(n, &i)| format!("\"{}\" = ?{}", columns[i], n + 1))
+                .map(|(n, &i)| format!("{} = ?{}", quote_identifier(&columns[i]), n + 1))
                 .collect();
             let mut update = self.conn.prepare_cached(&format!(
                 "UPDATE \"{table}\" SET {} WHERE rowid = ?{}",
@@ -1278,8 +1292,9 @@ impl Db {
         row_index: usize,
     ) -> Result<()> {
         validate_identifier(table)?;
+        let declared_columns = self.get_table_columns(table)?;
         for key in row.keys() {
-            validate_identifier(key)?;
+            validate_column_key(key, &declared_columns)?;
         }
 
         // The user row carries ONLY user columns; ownership is recorded in
@@ -1290,7 +1305,7 @@ impl Db {
         // is what lets the prepared-statement cache serve it.
         let mut keys: Vec<&String> = row.keys().collect();
         keys.sort();
-        let columns: Vec<String> = keys.iter().map(|c| format!("\"{c}\"")).collect();
+        let columns: Vec<String> = keys.iter().map(|c| quote_identifier(c)).collect();
         let sql = if columns.is_empty() {
             format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
@@ -1351,7 +1366,7 @@ impl Db {
         let user_columns = self.get_table_columns(table)?;
         let mut col_list = user_columns
             .iter()
-            .map(|c| format!("t.\"{c}\""))
+            .map(|c| format!("t.{}", quote_identifier(c)))
             .collect::<Vec<_>>()
             .join(", ");
         if col_list.is_empty() {
@@ -1738,6 +1753,7 @@ impl Db {
     /// installed and cleared around every attempt, so a re-prepare after
     /// registering a path-table is gated identically to the first.
     fn prepare_guarded(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, HashSet<String>)> {
+        use rusqlite::fallible_iterator::FallibleIterator;
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         use std::sync::{Arc, Mutex};
 
@@ -1787,14 +1803,21 @@ impl Db {
                 }
                 _ => Authorization::Allow,
             }));
-        let prepared = self.conn.prepare(sql);
+        let mut statements = rusqlite::Batch::new(&self.conn, sql);
+        let prepared = statements.next();
         // Clear the authorizer so it only ever gates this one user query; the
         // shared connection's internal write paths must not see it.
         self.conn
             .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
 
         match prepared {
-            Ok(stmt) => Ok((stmt, std::mem::take(&mut *reads.lock().unwrap()))),
+            Ok(Some(stmt)) => {
+                if !matches!(statements.next(), Ok(None)) {
+                    return Err(DbError::MultipleStatements);
+                }
+                Ok((stmt, std::mem::take(&mut *reads.lock().unwrap())))
+            }
+            Ok(None) => Ok((self.conn.prepare(sql)?, HashSet::new())),
             Err(e)
                 if e.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
@@ -3346,6 +3369,34 @@ mod tests {
     }
 
     #[test]
+    fn prepare_guarded_rejects_a_second_statement() {
+        let db = Db::new().unwrap();
+
+        let err = db.prepare_guarded("SELECT 1; SELECT 2").err().unwrap();
+
+        assert!(matches!(err, DbError::MultipleStatements), "got: {err:?}");
+    }
+
+    #[test]
+    fn prepare_guarded_accepts_trailing_terminators_and_comments() {
+        let db = Db::new().unwrap();
+
+        let (stmt, _) = db.prepare_guarded("SELECT 1;; -- done").unwrap();
+
+        assert_eq!(stmt.column_count(), 1);
+    }
+
+    #[test]
+    fn prepare_guarded_leaves_sql_with_no_statement_to_sqlite() {
+        let db = Db::new().unwrap();
+
+        let (stmt, reads) = db.prepare_guarded("-- nothing").unwrap();
+
+        assert_eq!(stmt.column_count(), 0);
+        assert!(reads.is_empty());
+    }
+
+    #[test]
     fn internal_table_denied_message_mentions_the_namespace() {
         assert!(INTERNAL_TABLE_DENIED_MSG.contains("not authorized"));
         assert!(INTERNAL_TABLE_DENIED_MSG.contains("_dirsql_"));
@@ -3661,6 +3712,46 @@ mod tests {
         let rows = db.get_rows_by_file("t", "f.json").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["order"], Value::Integer(7));
+    }
+
+    #[test]
+    fn quoted_ddl_column_round_trips_through_insert_select_and_update() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (\"a\"\"b\" TEXT PRIMARY KEY, value TEXT)",
+        )
+        .unwrap();
+        let first = db
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"a\"b":"key","value":"old"}])),
+                true,
+            )
+            .unwrap();
+        db.insert_rows("t", &first, "a.json").unwrap();
+
+        let second = db
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"a\"b":"key","value":"new"}])),
+                true,
+            )
+            .unwrap();
+        db.reconcile_batch_rows("t", "a.json", &second).unwrap();
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows[0]["a\"b"], Value::Text("key".into()));
+        assert_eq!(rows[0]["value"], Value::Text("new".into()));
+
+        db.insert_row(
+            "t",
+            &HashMap::from([("a\"b".into(), Value::Text("other".into()))]),
+            "b.json",
+            0,
+        )
+        .unwrap();
+        let rows = db.get_rows_by_file("t", "b.json").unwrap();
+        assert_eq!(rows[0]["a\"b"], Value::Text("other".into()));
     }
 
     #[test]

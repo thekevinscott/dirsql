@@ -390,6 +390,20 @@ fn naming_a_dotfile_lists_it() {
 }
 
 #[test]
+fn a_dot_star_component_hides_dot_names_below_its_depth() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join(".cfg/sub")).unwrap();
+    fs::write(root.path().join(".cfg/app.toml"), "").unwrap();
+    fs::write(root.path().join(".cfg/.secret"), "").unwrap();
+    fs::write(root.path().join(".cfg/sub/.cache"), "").unwrap();
+
+    for glob in ["./.*/*", "./.*/**"] {
+        let out = run(&root, &format!("SELECT path FROM '{glob}'"));
+        assert_eq!(paths(&out), vec![".cfg/app.toml"], "{glob}");
+    }
+}
+
+#[test]
 fn a_posix_character_class_matches_like_bash() {
     let root = TempDir::new().unwrap();
     for name in ["1.md", "5.md", "A.md", "b.md"] {

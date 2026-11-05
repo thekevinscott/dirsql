@@ -497,71 +497,51 @@ fn cache_contains_sidecar_tables() {
     }
 }
 
-/// A hook failure no longer discards the scan. The files that parsed are
-/// committed to the cache, and the file that failed is absent from
-/// `_dirsql_files` -- so the cache is incomplete, never wrong, and the missing
-/// file is retried on the next scan rather than being remembered as done.
-///
-/// This is the persist-side half of dirsql#714: the all-or-nothing transaction
-/// was protecting the assumption that every scanned file has an index entry by
-/// commit time, and that assumption is what a partial commit has to survive.
+/// A hook failure fails the build and commits nothing, so the next build
+/// indexes every file rather than trusting a partial cache.
 #[test]
-fn a_hook_failure_commits_the_files_that_parsed() {
+fn a_hook_failure_fails_the_build_and_commits_nothing() {
     let root = TempDir::new().unwrap();
     write_csv(root.path(), "a.csv", &["alpha"]);
     write_csv(root.path(), "b.csv", &["beta"]);
     write_csv(root.path(), "c.csv", &["gamma"]);
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let counter_cb = Arc::clone(&counter);
-    let db = DirSQL::builder()
-        .root(root.path())
-        .table(Table::try_new(
-            "rows",
-            "CREATE TABLE rows (col TEXT)",
-            "**/*.csv",
-            move |path| {
-                let content = std::fs::read_to_string(path).unwrap();
-                let count = counter_cb.fetch_add(1, Ordering::SeqCst);
-                if count == 2 {
-                    // Fail on the 3rd file (count starts at 0)
-                    return Err("boom".into());
-                }
-                Ok(content
-                    .lines()
-                    .skip(1)
-                    .map(|line| {
-                        HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
-                    })
-                    .collect::<Vec<Row>>())
-            },
-        ))
-        .persist(Some(cache_path(root.path())))
-        .build()
-        .expect("one file's hook failure must not discard the scan");
+    let build = || {
+        let counter_cb = Arc::clone(&counter);
+        DirSQL::builder()
+            .root(root.path())
+            .table(Table::try_new(
+                "rows",
+                "CREATE TABLE rows (col TEXT)",
+                "**/*.csv",
+                move |path| {
+                    let content = std::fs::read_to_string(path).unwrap();
+                    if counter_cb.fetch_add(1, Ordering::SeqCst) == 2 {
+                        return Err("boom".into());
+                    }
+                    Ok(content
+                        .lines()
+                        .skip(1)
+                        .map(|line| {
+                            HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
+                        })
+                        .collect::<Vec<Row>>())
+                },
+            ))
+            .persist(Some(cache_path(root.path())))
+            .build()
+    };
 
-    let failures = db.scan_failures();
-    assert_eq!(failures.len(), 1, "expected one skipped file: {failures:?}");
-    drop(db);
-
-    // Open the cache with a raw connection to verify what was committed.
-    let cache_file = cache_path(root.path());
-    let cache_conn = rusqlite::Connection::open(&cache_file).unwrap();
-
-    let row_count: i64 = cache_conn
-        .query_row("SELECT COUNT(*) FROM rows", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(row_count, 2, "the two files that parsed should persist");
-
-    // The failed file never reached `upsert_file`, so a later scan sees it as
-    // unknown and retries it instead of trusting a stale entry.
-    let file_count: i64 = cache_conn
-        .query_row("SELECT COUNT(*) FROM _dirsql_files", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        file_count, 2,
-        "only the files that parsed belong in the index"
+    let err = build().err().expect("a hook failure must fail the build");
+    assert!(
+        matches!(&err, DirSqlError::OnFile { table, message, .. }
+            if table == "rows" && message == "boom"),
+        "{err:?}"
     );
+
+    let db = build().expect("the rebuild parses every file");
+    assert_eq!(db.query("SELECT col FROM rows").unwrap().len(), 3);
 }
 
 #[test]

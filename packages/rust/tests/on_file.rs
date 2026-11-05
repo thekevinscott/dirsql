@@ -10,9 +10,8 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::sync::{Arc, Mutex};
 
-use dirsql::{DirSQL, DirSqlError, Table, Value};
+use dirsql::{DirSQL, DirSqlError, Value};
 use tempfile::TempDir;
 
 /// An `on-file` command that reads the matched file (a JSON array of row
@@ -415,72 +414,4 @@ on-file = "sh gen.sh"
         matches!(&err, DirSqlError::TableCommand { name, .. } if name == "items"),
         "got: {err}"
     );
-}
-
-/// A scan attempts every matched file. One hook failure is that file's
-/// problem, so it must not stop the files after it from being tried.
-#[test]
-fn build_attempts_every_matched_file_even_after_one_fails() {
-    let dir = TempDir::new().unwrap();
-    for name in ["a.txt", "b.txt"] {
-        fs::write(dir.path().join(name), "x").unwrap();
-    }
-    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
-    let recorder = Arc::clone(&seen);
-
-    let built = DirSQL::new(
-        dir.path(),
-        vec![Table::try_new(
-            "items",
-            "CREATE TABLE items (name TEXT)",
-            "**/*.txt",
-            move |path| {
-                recorder.lock().unwrap().push(path.to_string());
-                Err("boom".into())
-            },
-        )],
-    );
-
-    assert!(
-        built.is_ok(),
-        "per-file failures no longer cancel the scan: {:?}",
-        built.err()
-    );
-    // One guard: `Mutex` is not reentrant, so locking twice in the same
-    // assert expression deadlocks rather than failing.
-    let attempted = seen.lock().unwrap();
-    assert_eq!(
-        attempted.len(),
-        2,
-        "every matched file should be attempted, got: {attempted:?}"
-    );
-}
-
-/// Reporting only the first failure hides the rest until it is fixed and the
-/// scan re-run, one file at a time.
-#[test]
-fn build_reports_every_failing_file_not_only_the_first() {
-    let dir = TempDir::new().unwrap();
-    for name in ["a.txt", "b.txt", "c.txt"] {
-        fs::write(dir.path().join(name), "x").unwrap();
-    }
-
-    let db = DirSQL::new(
-        dir.path(),
-        vec![Table::try_new(
-            "items",
-            "CREATE TABLE items (name TEXT)",
-            "**/*.txt",
-            |path| Err(format!("boom for {path}").into()),
-        )],
-    )
-    .expect("per-file failures no longer cancel the scan");
-
-    let reported = db.scan_failures();
-    for name in ["a.txt", "b.txt", "c.txt"] {
-        assert!(
-            reported.iter().any(|f| f.path.contains(name)),
-            "{name} missing from: {reported:?}"
-        );
-    }
 }

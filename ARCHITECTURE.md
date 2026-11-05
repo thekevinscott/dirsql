@@ -270,8 +270,9 @@ columns. There are two hook kinds:
 - A **per-file callback** (SDK `Table` with an `on_file` function), which
   receives one matched file's absolute path and returns that file's rows,
   tracked per file in `_dirsql_internal_rows` so the watcher can diff and
-  replace them file by file. A failing callback skips that file and is
-  recorded in `scan_failures()`; the scan continues.
+  replace them file by file. A callback that fails, or returns a row the
+  table rejects, fails the build, and a query that re-reads such a file
+  fails; the error names the table, the file and the callback's error.
 
 Neither kind has dirsql read file contents on its behalf. A hook that needs
 the file body, path parts, or stat metadata computes them from the paths and

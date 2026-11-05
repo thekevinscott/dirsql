@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py -q",
+  "ran_at": 1793822793,
+  "exit_code": 0,
+  "commit": "b6210af12c6361516f9de973015fc0bb5a43fedc",
+  "branch": "bot/1595-dot-depth-1104"
+}
