@@ -178,3 +178,11 @@ def describe_plugin_discovery():
             f"a duplicate `notes` table must conflict: {out.stdout!r}"
         )
         assert "notes" in out.stderr
+
+    def it_activates_the_plugin_when_the_sql_follows_double_dash(staged):
+        site_dir, data = staged
+        out = _run(
+            site_dir, ["--format", "json", "--", "SELECT basename FROM notes"], data
+        )
+        assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
+        assert _basenames(out) == ["hello.md"]

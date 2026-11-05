@@ -108,4 +108,26 @@ describe("withResolvedExtensions", () => {
       "R:ext/local.so",
     ]);
   });
+
+  it("injects --extension flags before the end-of-options marker", async () => {
+    vi.mocked(resolveConfigsExtensionSpecs).mockReturnValue([
+      { path: "R:ext/local.so", entrypoint: undefined },
+    ]);
+    const out = await withResolvedExtensions([
+      "-c",
+      "/cfg/.dirsql.toml",
+      "--",
+      "SELECT 1",
+      "--",
+    ]);
+    expect(out).toEqual([
+      "-c",
+      "/cfg/.dirsql.toml",
+      "--extension",
+      "R:ext/local.so",
+      "--",
+      "SELECT 1",
+      "--",
+    ]);
+  });
 });

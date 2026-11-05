@@ -13,6 +13,7 @@
 
 import { getCore } from "../core.js";
 import { resolveConfigsExtensionSpecs } from "../resolve-config-extensions.js";
+import { insertFlags } from "./insert-flags.js";
 
 // Config extensions the binary dispatches to `dirsql interpret`; never
 // pre-resolved here (that path resolves via the handshake).
@@ -41,5 +42,5 @@ export async function withResolvedExtensions(
   for (const { path, entrypoint } of specs) {
     flags.push("--extension", entrypoint ? `${path}::${entrypoint}` : path);
   }
-  return [...argv, ...flags];
+  return insertFlags(argv, flags);
 }

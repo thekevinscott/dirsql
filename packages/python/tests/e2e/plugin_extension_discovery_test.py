@@ -177,3 +177,9 @@ def describe_plugin_extension_discovery():
         )
         assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
         assert json.loads(out.stdout) == [{"a": 42}]
+
+    def it_resolves_the_fragments_extension_when_the_sql_follows_double_dash(staged):
+        site_dir, data = staged
+        out = _run(site_dir, ["--", "SELECT dirsql_testext_answer() AS a"], data)
+        assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
+        assert json.loads(out.stdout) == [{"a": 42}]
