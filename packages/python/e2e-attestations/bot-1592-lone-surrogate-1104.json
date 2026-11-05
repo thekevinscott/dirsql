@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1793839191,
+  "exit_code": 0,
+  "commit": "a1dfeb60f84c2feb94a7bb04689c3a70a843806d",
+  "branch": "bot/1592-lone-surrogate-1104"
+}

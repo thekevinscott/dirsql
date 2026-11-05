@@ -160,8 +160,10 @@ pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>
                 "line {number} is a JSON array; print one JSON object per line instead"
             ));
         }
-        let row = parse_row(line, &mut keys)
-            .map_err(|e| format!("line {number} is not a JSON object: {e}"))?;
+        let row = parse_row(line, &mut keys).map_err(|e| match lone_surrogate(line) {
+            Some(escape) => format!("line {number}: lone surrogate {escape} is not valid Unicode"),
+            None => format!("line {number} is not a JSON object: {e}"),
+        })?;
         rows.push(row);
     }
     Ok(rows)
@@ -174,6 +176,38 @@ fn parse_row(line: &str, keys: &mut Keys) -> serde_json::Result<JsonRow> {
     let row = RowSeed(keys).deserialize(&mut deserializer)?;
     deserializer.end()?;
     Ok(row)
+}
+
+/// The first `\uXXXX` escape in `line` naming a UTF-16 surrogate that is not
+/// half of a high-low pair, spelled as the line spells it. JSON's grammar
+/// admits it, but it names no Unicode scalar value, so no string can hold it.
+fn lone_surrogate(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let unit = |at: usize| -> Option<u16> {
+        let escape = line.get(at..at + 6)?;
+        let digits = escape.strip_prefix("\\u")?;
+        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        u16::from_str_radix(digits, 16).ok()
+    };
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let Some(code) = unit(at) else {
+            at += 2;
+            continue;
+        };
+        match code {
+            0xD800..=0xDBFF if matches!(unit(at + 6), Some(0xDC00..=0xDFFF)) => at += 12,
+            0xD800..=0xDFFF => return Some(&line[at..at + 6]),
+            _ => at += 6,
+        }
+    }
+    None
 }
 
 /// What the rows have said about one key so far.
@@ -375,6 +409,46 @@ mod tests {
         assert_eq!(key(0, 0), key(1, 1));
         assert_eq!(key(0, 1), key(1, 0));
         assert_ne!(key(0, 0), key(0, 1));
+    }
+
+    #[test]
+    fn parse_rows_names_a_lone_surrogate_and_its_line() {
+        let err = parse_rows("{}\n{\"a\":\"\\ud800\"}").unwrap_err();
+        assert_eq!(err, r"line 2: lone surrogate \ud800 is not valid Unicode");
+    }
+
+    #[test]
+    fn lone_surrogate_finds_an_unpaired_leading_or_trailing_half() {
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800"}"#), Some(r"\ud800"));
+        assert_eq!(lone_surrogate(r#"{"a":"\uDBFF\u0041"}"#), Some(r"\uDBFF"));
+        assert_eq!(lone_surrogate(r#"{"a":"x\udc00"}"#), Some(r"\udc00"));
+        assert_eq!(lone_surrogate(r#"{"a":"\uDFFF"}"#), Some(r"\uDFFF"));
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800"#), Some(r"\ud800"));
+    }
+
+    #[test]
+    fn lone_surrogate_passes_pairs_other_escapes_and_escaped_backslashes() {
+        assert_eq!(lone_surrogate(r#"{"a":"\ud83d\ude00"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\uD7FF\uE000\n\""}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\\ud800"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\ud8"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\uzzzz"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\u+d80"}"#), None);
+        assert_eq!(lone_surrogate(r#"{"a":"\ud800x\udc00"}"#), Some(r"\ud800"));
+        assert_eq!(lone_surrogate("\\"), None);
+    }
+
+    #[test]
+    fn lone_surrogate_finds_a_lone_half_after_another_escape() {
+        assert_eq!(lone_surrogate(r#"{"a":"\u0041\ud800"}"#), Some(r"\ud800"));
+    }
+
+    #[test]
+    fn lone_surrogate_finds_a_lone_half_after_a_pair() {
+        assert_eq!(
+            lone_surrogate(r#"{"a":"\ud83d\ude00","b":"\ude00"}"#),
+            Some(r"\ude00")
+        );
     }
 
     #[test]
