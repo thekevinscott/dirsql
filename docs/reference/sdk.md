@@ -325,6 +325,9 @@ db.query_with(
   `RELEASE`, and any `PRAGMA` that sets a value are rejected as not
   authorized, so a statement returns the same rows whatever ran before it.
   Reading pragmas (`PRAGMA table_info(t)`, `PRAGMA cache_size`) still work.
+- **One statement.** A query runs exactly one statement. Any SQL after it
+  (`SELECT 1; SELECT 2`, or a typo after the `;`) is rejected rather than
+  dropped; a trailing `;`, whitespace, or a comment is fine.
 - Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are
   excluded from `SELECT *` results; name them explicitly to see them.
 - **Column order.** Python row dicts are keyed in the order the SELECT list
