@@ -78,3 +78,22 @@ def describe_with_discovered_plugins():
                 "-c",
                 "/a/dirsql.toml",
             ]
+
+    def it_injects_before_the_end_of_options_marker():
+        with (
+            patch.object(module, "discovery_disabled", return_value=False),
+            patch.object(
+                module, "discovered_fragments", return_value=["/a/dirsql.toml"]
+            ),
+        ):
+            assert with_discovered_plugins(
+                ["--format", "json", "--", "SELECT 1", "--"]
+            ) == [
+                "--format",
+                "json",
+                "-c",
+                "/a/dirsql.toml",
+                "--",
+                "SELECT 1",
+                "--",
+            ]

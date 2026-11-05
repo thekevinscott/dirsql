@@ -186,3 +186,36 @@ def describe_cli_extension_by_package_name():
         finally:
             proc.terminate()
             proc.wait(timeout=5)
+
+    def it_resolves_a_package_name_extension_when_the_sql_follows_double_dash(
+        staged, tmp_path
+    ):
+        env_dir = staged
+        root = tmp_path / "data"
+        root.mkdir()
+        (root / ".dirsql.toml").write_text(
+            "[[dirsql.extension]]\n"
+            'path = "dirsql_testext_pkg"\n'
+            'entrypoint = "sqlite3_extension_init"\n'
+        )
+        env = {
+            **os.environ,
+            "PYTHONPATH": env_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        }
+        out = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "--format",
+                "json",
+                "--",
+                "SELECT dirsql_testext_answer() AS a",
+            ],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
+        assert json.loads(out.stdout) == [{"a": 42}]
