@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/declared_table_name_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_value_types_test.py tests/e2e/on_file_failure_test.py tests/e2e/query_contract_test.py tests/e2e/root_at_construction_test.py tests/e2e/relative_root_chdir_test.py tests/e2e/use_case_transcripts_test.py -x -q",
+  "ran_at": 1793920607,
+  "exit_code": 0,
+  "commit": "dd487a9c681904cce0f9047a002f64ecc81af459",
+  "branch": "bot/1629-dotslash-glob-1105"
+}
