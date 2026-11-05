@@ -103,3 +103,35 @@ fn sorted(row: &HashMap<String, Value>) -> Vec<(&String, &Value)> {
     cells.sort_by_key(|(name, _)| *name);
     cells
 }
+
+fn per_file_rewrite_unchanged(ddl: &str) -> Vec<RowEvent> {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("a.row"), "").unwrap();
+    let table = dirsql::Table::new("t", ddl, "*.row", |_| {
+        vec![HashMap::from([
+            ("k".to_string(), Value::Text("a".into())),
+            ("x".to_string(), Value::Integer(1)),
+            ("s".to_string(), Value::Integer(5)),
+            ("i".to_string(), Value::Text("7".into())),
+            ("z".to_string(), Value::Real(-0.0)),
+        ])]
+    });
+    let db = DirSQL::new(&root, vec![table]).unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(root.join("a.row"))])
+}
+
+#[test]
+fn a_per_file_hook_rerun_on_a_keyed_table_with_stored_rows_unchanged_emits_nothing() {
+    let events = per_file_rewrite_unchanged(
+        "CREATE TABLE t (k TEXT PRIMARY KEY, x REAL, s TEXT, i INTEGER, z REAL)",
+    );
+    assert!(events.is_empty(), "got: {events:?}");
+}
+
+#[test]
+fn a_per_file_hook_rerun_on_an_unkeyed_table_with_stored_rows_unchanged_emits_nothing() {
+    let events =
+        per_file_rewrite_unchanged("CREATE TABLE t (k TEXT, x REAL, s TEXT, i INTEGER, z REAL)");
+    assert!(events.is_empty(), "got: {events:?}");
+}
