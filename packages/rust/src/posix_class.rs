@@ -3,6 +3,8 @@
 //! each bracket expression holding one is rewritten into an equivalent
 //! bracket of plain ranges before the glob is compiled.
 
+use std::collections::BTreeSet;
+
 use crate::collating_symbol::collating_symbol;
 
 /// Rewrite every bracket expression in `pattern` that holds a `[:name:]`,
@@ -52,7 +54,8 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
         j += 1;
     }
     let body_start = j;
-    let mut ranges: Vec<(char, char)> = Vec::new();
+    // A set, so a cursor that stops advancing loops in bounded memory.
+    let mut ranges: BTreeSet<(char, char)> = BTreeSet::new();
     let mut rewrite = false;
     // bash matches nothing at all when a range ends in a class, negated or not.
     let mut range_into_class = false;
@@ -69,7 +72,7 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
             continue;
         }
         if let Some((member, next)) = equivalence_at(chars, j) {
-            ranges.push((member, member));
+            ranges.insert((member, member));
             rewrite = true;
             j = next;
             continue;
@@ -97,7 +100,7 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
                     None => (Some(end), after + 2),
                 };
                 if let Some((start, end)) = start.zip(end).filter(|(a, b)| a <= b) {
-                    ranges.push((start, end));
+                    ranges.insert((start, end));
                 }
                 j = next;
             }
@@ -224,7 +227,7 @@ const POSITIONAL: [char; 4] = [']', '-', '!', '^'];
 /// `negated`). A bracket never matches the separator, so `/` is dropped from a
 /// positive set and added to a negated one. NUL, which no path holds, stands
 /// in when nothing else may open the bracket.
-fn render(negated: bool, ranges: Vec<(char, char)>) -> String {
+fn render(negated: bool, ranges: BTreeSet<(char, char)>) -> String {
     let mut set: Vec<(u32, u32)> = ranges
         .into_iter()
         .map(|(a, b)| (a as u32, b as u32))
