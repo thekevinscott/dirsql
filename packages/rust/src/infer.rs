@@ -423,6 +423,11 @@ mod tests {
     }
 
     #[test]
+    fn lone_surrogate_finds_a_lone_half_after_another_escape() {
+        assert_eq!(lone_surrogate(r#"{"a":"\u0041\ud800"}"#), Some(r"\ud800"));
+    }
+
+    #[test]
     fn lone_surrogate_finds_a_lone_half_after_a_pair() {
         assert_eq!(
             lone_surrogate(r#"{"a":"\ud83d\ude00","b":"\ude00"}"#),
