@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e declared-table-name fanout fresh-declared-repros query-contract root-at-construction",
+  "ran_at": 1793920690,
+  "exit_code": 0,
+  "commit": "4667768408aaa2e879e87317146468a43bc3b414",
+  "branch": "bot/1629-dotslash-glob-1105"
+}
