@@ -1,4 +1,5 @@
 use crate::gitignore_frame::Frame;
+use crate::glob_unescape::unescape;
 use crate::listing::{Listed, Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
 use crate::tree_walk::{Step, walk_in_order};
@@ -497,8 +498,8 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         .collect::<Result<Vec<_>, _>>()?;
     let named = words
         .iter()
-        .filter(|word| !word.contains(['*', '?', '[', '\\']))
-        .map(PathBuf::from)
+        .filter(|word| !word.contains(['*', '?', '[']))
+        .map(|word| PathBuf::from(unescape(word)))
         .collect();
     let mut components = Vec::new();
     let mut starts = Vec::new();
@@ -541,7 +542,7 @@ fn compile_components(word: &str) -> Result<Vec<Component>, GlobError> {
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
-            _ if is_dot_named(OsStr::new(c)) => Pattern::new(c).map(Component::DotName),
+            _ if is_dot_named(OsStr::new(&unescape(c))) => Pattern::new(c).map(Component::DotName),
             _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1848,6 +1849,14 @@ mod tests {
     }
 
     #[test]
+    fn an_escaped_leading_dot_spells_a_dot_name() {
+        let glob = compile_glob(r"*/\.draft.md").unwrap();
+        assert!(glob.is_match_unhidden(Path::new("sub/.draft.md")));
+        let quoted_backslash = compile_glob(r"\\.env").unwrap();
+        assert!(!quoted_backslash.spells_dot_names_of(Path::new(".env")));
+    }
+
+    #[test]
     fn a_glob_without_a_dot_component_spells_no_dot_name() {
         let glob = compile_glob("docs/**/*.md").unwrap();
         assert!(!glob.spells_dot_names_of(Path::new("docs/.md")));
@@ -2135,6 +2144,8 @@ mod tests {
         assert_eq!(scan("a.log"), vec![PathBuf::from("a.log")]);
         assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
         assert_eq!(scan("{a,b}.log"), vec![PathBuf::from("a.log")]);
+        assert_eq!(scan(r"a\.log"), vec![PathBuf::from("a.log")]);
+        assert_eq!(scan(r"di\st/out.log"), vec![PathBuf::from("dist/out.log")]);
         assert!(scan("*.log").is_empty());
     }
 

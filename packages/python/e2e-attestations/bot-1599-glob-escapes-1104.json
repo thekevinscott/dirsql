@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_gitignore_test.py -x -q",
+  "ran_at": 1793839895,
+  "exit_code": 0,
+  "commit": "82e2a6e82444cc8346fcefe3bdc1b8e67225a320",
+  "branch": "bot/1599-glob-escapes-1104"
+}

@@ -57,6 +57,7 @@ impl Pattern {
 fn compile(glob: &str) -> Result<Regex, GlobError> {
     let glob = GlobBuilder::new(&expand_posix_classes(glob))
         .literal_separator(true)
+        .backslash_escape(true)
         .build()?;
     Ok(RegexBuilder::new(&unicode_regex(glob.regex()))
         .dot_matches_new_line(true)
@@ -490,6 +491,13 @@ mod tests {
         let matcher = TableMatcher::new(&[("caf?.md", "t"), ("na??ve.txt", "u")], &[]).unwrap();
         assert_eq!(names(&matcher, "caf\u{e9}.md"), vec!["t"]);
         assert!(matcher.match_all(Path::new("na\u{ef}ve.txt")).is_empty());
+    }
+
+    #[test]
+    fn a_backslash_quotes_the_next_character_on_every_platform() {
+        let pattern = Pattern::new(r"a\b.md").unwrap();
+        assert!(pattern.is_match(Path::new("ab.md")));
+        assert!(!pattern.is_match(Path::new(r"a\b.md")));
     }
 
     #[test]
