@@ -50,21 +50,38 @@ pub(crate) fn open(path: &Path, flags: OFlags) -> io::Result<OwnedFd> {
 fn open_in_stretches(path: &Path, flags: OFlags) -> rustix::io::Result<OwnedFd> {
     use rustix::fd::AsFd;
     use rustix::fs::{CWD, Mode, openat};
+    let mut stretches = stretches(path);
+    let last = stretches.pop().unwrap_or_default();
     let mut at: Option<OwnedFd> = None;
-    let mut stretch = std::path::PathBuf::new();
-    for component in path.components() {
-        let name = component.as_os_str();
-        let len = stretch.as_os_str().len();
-        if len > 0 && len + 1 + name.len() > STRETCH {
-            let from = at.as_ref().map_or(CWD, AsFd::as_fd);
-            let through = THROUGH.union(OFlags::CLOEXEC);
-            at = Some(openat(from, &stretch, through, Mode::empty())?);
-            stretch.clear();
-        }
-        stretch.push(name);
+    for stretch in stretches {
+        let from = at.as_ref().map_or(CWD, AsFd::as_fd);
+        at = Some(openat(
+            from,
+            &stretch,
+            THROUGH.union(OFlags::CLOEXEC),
+            Mode::empty(),
+        )?);
     }
     let from = at.as_ref().map_or(CWD, AsFd::as_fd);
-    openat(from, &stretch, flags, Mode::empty())
+    openat(from, &last, flags, Mode::empty())
+}
+
+/// `path` cut between components into runs of at most [`STRETCH`] bytes,
+/// each to be resolved from the directory the one before reached. No single
+/// name outgrows a stretch: names are capped far below it.
+#[cfg(unix)]
+fn stretches(path: &Path) -> Vec<std::path::PathBuf> {
+    let mut cut = vec![std::path::PathBuf::new()];
+    for component in path.components() {
+        let name = component.as_os_str();
+        let stretch = cut.last_mut().expect("cut starts with one stretch");
+        if stretch.as_os_str().len() + 1 + name.len() > STRETCH {
+            cut.push(std::path::PathBuf::from(name));
+        } else {
+            stretch.push(name);
+        }
+    }
+    cut
 }
 
 /// `path` opened to read, however long it is.
@@ -137,6 +154,24 @@ mod tests {
         let mut text = String::new();
         open_file(path).unwrap().read_to_string(&mut text).unwrap();
         text
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stretch_holds_names_up_to_its_limit() {
+        let path = Path::new("a").join("b".repeat(499)).join("c".repeat(498));
+        assert_eq!(stretches(&path), [path]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_name_past_the_limit_starts_the_next_stretch() {
+        let (b, c) = ("b".repeat(499), "c".repeat(499));
+        let path = Path::new("a").join(&b).join(&c).join("d");
+        assert_eq!(
+            stretches(&path),
+            [Path::new("a").join(b), Path::new(&c).join("d")]
+        );
     }
 
     #[test]
