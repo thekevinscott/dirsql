@@ -1,6 +1,8 @@
 use rusqlite::Connection;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use crate::parsed_vtab;
 use crate::path_table::{self, DEFAULT_IGNORES, PathTable, Resolution};
 use crate::scanner;
 use crate::sql_literal::{quote_identifier, quote_literal};
+use crate::table_refs::{case_alias, table_refs};
 use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
@@ -186,7 +189,11 @@ pub(crate) fn no_home_path_table(name: &str) -> String {
 ///
 /// A parsed table also carries `index_root`, where the parser is spawned. The
 /// stat module takes no such argument: it spawns nothing.
+///
+/// The table is minted as `ident`, which is `name` except for a case variant
+/// of a name the statement already spells another way.
 fn path_table_ddl(
+    ident: &str,
     name: &str,
     table: &PathTable,
     ignore: &[String],
@@ -226,7 +233,7 @@ fn path_table_ddl(
 
     format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({})",
-        quote_identifier(name),
+        quote_identifier(ident),
         module,
         args.join(", "),
     )
@@ -1630,6 +1637,7 @@ impl Db {
         }
         let _calls = self.calls.phase();
         let _scope = self.scope.enter();
+        let sql = &*self.disambiguate_case(sql)?;
         let (mut stmt, column_names, reads) = self.prepare_reading(sql)?;
         let mut state = start(&column_names);
         let mut not_utf8 = Ok(());
@@ -1662,6 +1670,7 @@ impl Db {
     /// Prepare and run one read-only statement, registering the path-tables
     /// it names along the way.
     fn run_statement(&self, sql: &str, params: &Params) -> Result<QueryResult> {
+        let sql = &*self.disambiguate_case(sql)?;
         let (mut stmt, column_names) = self.prepare_statement(sql)?;
         bind(&mut stmt, params)?;
         let mut rows = stmt.raw_query();
@@ -1709,7 +1718,7 @@ impl Db {
             if !attempted.insert(name.clone()) {
                 return Err(error);
             }
-            self.create_path_table(&name, &table)?;
+            self.create_path_table(&name, &name, &table)?;
         };
 
         if !stmt.readonly() {
@@ -1892,10 +1901,76 @@ impl Db {
         self.hint_legacy_files_table && name == LEGACY_DEFAULT_TABLE
     }
 
+    /// `sql` with each path-table spelled in a different letter case from an
+    /// earlier one in it renamed to a table of its own, after dropping any
+    /// table a past statement minted under a case variant of a name `sql`
+    /// spells. SQLite folds identifier case, so otherwise `'./up'` silently
+    /// reads the table minted for `'./Up'`.
+    fn disambiguate_case<'a>(&self, sql: &'a str) -> Result<Cow<'a, str>> {
+        let Some(root) = self.path_table_root.as_deref() else {
+            return Ok(Cow::Borrowed(sql));
+        };
+        let refs = table_refs(sql);
+        if refs.is_empty() {
+            return Ok(Cow::Borrowed(sql));
+        }
+        let mut written: HashMap<String, &str> = HashMap::new();
+        let mut variants = Vec::new();
+        for table_ref in &refs {
+            match written.entry(table_ref.name.to_ascii_lowercase()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(&table_ref.name);
+                }
+                Entry::Occupied(slot) if *slot.get() == table_ref.name => {}
+                Entry::Occupied(_) => variants.push(table_ref),
+            }
+        }
+        for minted in self.minted_path_tables()? {
+            if written
+                .get(&minted.to_ascii_lowercase())
+                .is_some_and(|name| *name != minted)
+            {
+                self.conn
+                    .execute_batch(&format!("DROP TABLE temp.{}", quote_identifier(&minted)))?;
+            }
+        }
+        let home = home_dir();
+        let mut renamed = sql.to_string();
+        let mut any = false;
+        for variant in variants.into_iter().rev() {
+            let Resolution::Table(table) =
+                path_table::resolve(&variant.name, root, home.as_deref(), &|p| p.is_dir())
+            else {
+                continue;
+            };
+            let alias = case_alias(&variant.name);
+            self.create_path_table(&alias, &variant.name, &table)?;
+            renamed.replace_range(variant.span.clone(), &quote_identifier(&alias));
+            any = true;
+        }
+        Ok(if any {
+            Cow::Owned(renamed)
+        } else {
+            Cow::Borrowed(sql)
+        })
+    }
+
+    /// The path-tables minted on this connection so far, all of which live in
+    /// `temp`.
+    fn minted_path_tables(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM temp.sqlite_master WHERE type = 'table'")?;
+        let names = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(names)
+    }
+
     /// Mint the path-table `name` over `table`, out of band: the DDL runs
     /// straight on the connection rather than through [`query`](Self::query),
     /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
-    fn create_path_table(&self, name: &str, table: &PathTable) -> Result<()> {
+    fn create_path_table(&self, ident: &str, name: &str, table: &PathTable) -> Result<()> {
         let index_root = self
             .path_table_root
             .as_deref()
@@ -1906,6 +1981,7 @@ impl Db {
             .chain(self.path_table_ignore.iter().cloned())
             .collect();
         self.conn.execute_batch(&path_table_ddl(
+            ident,
             name,
             table,
             &ignore,
@@ -5321,6 +5397,7 @@ mod tests {
     fn path_table_ddl_creates_in_temp_if_not_exists() {
         let ddl = path_table_ddl(
             "./docs/*.md",
+            "./docs/*.md",
             &docs_path_table(),
             &[],
             true,
@@ -5344,6 +5421,7 @@ mod tests {
         assert!(
             path_table_ddl(
                 "/var/log/*.log",
+                "/var/log/*.log",
                 &table,
                 &[],
                 true,
@@ -5353,6 +5431,7 @@ mod tests {
             .contains("'/var/log', '*.log', '/var/log', 'gitignore-root')"),
             "got: {}",
             path_table_ddl(
+                "/var/log/*.log",
                 "/var/log/*.log",
                 &table,
                 &[],
@@ -5370,7 +5449,15 @@ mod tests {
             glob: "*.js".to_string(),
             path_prefix: "dist".to_string(),
         };
-        let ddl = path_table_ddl("./dist/*.js", &table, &[], true, None, Path::new("/root"));
+        let ddl = path_table_ddl(
+            "./dist/*.js",
+            "./dist/*.js",
+            &table,
+            &[],
+            true,
+            None,
+            Path::new("/root"),
+        );
         assert!(ddl.ends_with("'dist', 'gitignore-root')"), "got: {ddl}");
     }
 
@@ -5381,13 +5468,22 @@ mod tests {
             glob: "*".to_string(),
             path_prefix: "dist".to_string(),
         };
-        let ddl = path_table_ddl("./dist", &table, &[], true, None, Path::new("/root"));
+        let ddl = path_table_ddl(
+            "./dist",
+            "./dist",
+            &table,
+            &[],
+            true,
+            None,
+            Path::new("/root"),
+        );
         assert!(ddl.ends_with("'dist', 'gitignore')"), "got: {ddl}");
     }
 
     #[test]
     fn path_table_ddl_carries_the_no_gitignore_switch() {
         let ddl = path_table_ddl(
+            "./",
             "./",
             &docs_path_table(),
             &[],
@@ -5405,6 +5501,7 @@ mod tests {
     fn path_table_ddl_appends_every_ignore_pattern() {
         let ddl = path_table_ddl(
             "./",
+            "./",
             &docs_path_table(),
             &["node_modules/**".to_string(), "*.tmp".to_string()],
             true,
@@ -5420,6 +5517,7 @@ mod tests {
     #[test]
     fn path_table_ddl_uses_the_parsed_module_when_a_parser_is_set() {
         let ddl = path_table_ddl(
+            "./docs/*.md",
             "./docs/*.md",
             &docs_path_table(),
             &[],
@@ -5443,6 +5541,7 @@ mod tests {
         };
         let ddl = path_table_ddl(
             "/var/log/*.log",
+            "/var/log/*.log",
             &table,
             &["node_modules/**".to_string()],
             true,
@@ -5462,6 +5561,7 @@ mod tests {
     #[test]
     fn path_table_ddl_parser_form_quotes_a_command_with_a_quote() {
         let ddl = path_table_ddl(
+            "./",
             "./",
             &docs_path_table(),
             &[],
@@ -5516,6 +5616,61 @@ mod tests {
         let rows = db.query("SELECT path FROM './' LIMIT 1").unwrap();
 
         assert!(rows.is_empty(), "an empty root yields no rows: {rows:?}");
+    }
+
+    fn rooted() -> Db {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        db
+    }
+
+    #[test]
+    fn disambiguate_case_leaves_sql_alone_without_a_root() {
+        let db = Db::new().unwrap();
+        let sql = "SELECT 1 FROM './Up', './up'";
+        assert!(matches!(db.disambiguate_case(sql).unwrap(), Cow::Borrowed(s) if s == sql));
+    }
+
+    #[test]
+    fn disambiguate_case_leaves_sql_without_case_variants_alone() {
+        let db = rooted();
+        for sql in [
+            "SELECT 1",
+            "SELECT 1 FROM './up', './up'",
+            r#"SELECT 1 FROM "T", "t""#,
+        ] {
+            assert!(
+                matches!(db.disambiguate_case(sql).unwrap(), Cow::Borrowed(s) if s == sql),
+                "{sql}"
+            );
+        }
+        assert!(db.minted_path_tables().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disambiguate_case_renames_a_later_case_variant_to_its_own_table() {
+        let db = rooted();
+
+        let sql = db
+            .disambiguate_case("SELECT 1 FROM './Up', './up', './Up'")
+            .unwrap();
+
+        assert_eq!(
+            sql, "SELECT 1 FROM './Up', \"\u{1}./up\", './Up'",
+            "only the second spelling is renamed"
+        );
+        assert_eq!(db.minted_path_tables().unwrap(), vec!["\u{1}./up"]);
+    }
+
+    #[test]
+    fn disambiguate_case_drops_a_table_minted_under_another_case() {
+        let db = rooted();
+        db.query("SELECT path FROM './Up'").unwrap();
+        db.query("SELECT path FROM './docs'").unwrap();
+
+        db.disambiguate_case("SELECT path FROM './up'").unwrap();
+
+        assert_eq!(db.minted_path_tables().unwrap(), vec!["./docs"]);
     }
 
     #[test]

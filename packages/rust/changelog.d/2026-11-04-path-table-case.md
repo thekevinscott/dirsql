@@ -1,0 +1,1 @@
+**Fixed** Path-tables whose names differ only in letter case (`'./Up'` and `'./up'`, `'./*.md'` and `'./*.MD'`) are now distinct tables, within one statement and across the statements of a REPL or server session. SQLite folds identifier case, so the second spelling used to read the first one's rows.
