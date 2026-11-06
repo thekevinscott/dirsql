@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e root-at-construction query-contract",
+  "ran_at": 1793923560,
+  "exit_code": 0,
+  "commit": "f8130057868527c453cb3b34e15cf4040785d311",
+  "branch": "bot/1610-trailing-ws-1105"
+}

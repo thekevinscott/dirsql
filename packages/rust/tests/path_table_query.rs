@@ -428,3 +428,20 @@ fn a_doubled_separator_after_the_dot_resolves_under_the_index_root() {
     assert_eq!(texts(&file, "path"), vec!["docs/a.md"]);
     assert_eq!(texts(&glob, "path"), vec!["docs/a.md", "docs/b.md"]);
 }
+
+// Windows cannot create a name that ends in a space.
+#[cfg(unix)]
+#[test]
+fn a_path_ending_in_a_space_names_that_exact_file_or_directory() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("trail "), "s").unwrap();
+    fs::create_dir(root.path().join("dir ")).unwrap();
+    fs::write(root.path().join("dir /f.txt"), "x").unwrap();
+    let db = DirSQL::new(root.path(), vec![]).unwrap();
+
+    let file = db.query("SELECT path FROM './trail '").unwrap();
+    let dir = db.query("SELECT path FROM './dir '").unwrap();
+
+    assert_eq!(texts(&file, "path"), vec!["trail "]);
+    assert_eq!(texts(&dir, "path"), vec!["dir /f.txt"]);
+}

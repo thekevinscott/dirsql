@@ -115,7 +115,7 @@ const NO_SUCH_TABLE: &str = "no such table: ";
 /// This is the *only* discovery mechanism: dirsql never parses SQL, so joins,
 /// subqueries and CTEs work for free — SQLite names each missing target in turn.
 fn missing_table_name(message: &str) -> Option<&str> {
-    let name = message.strip_prefix(NO_SUCH_TABLE)?.trim();
+    let name = message.strip_prefix(NO_SUCH_TABLE)?;
     (!name.is_empty()).then_some(name)
 }
 
@@ -5466,6 +5466,14 @@ mod tests {
         assert_eq!(
             missing_table_name("no such table: ./docs/*.md"),
             Some("./docs/*.md")
+        );
+    }
+
+    #[test]
+    fn missing_table_name_keeps_trailing_whitespace() {
+        assert_eq!(
+            missing_table_name("no such table: ./trail "),
+            Some("./trail ")
         );
     }
 
