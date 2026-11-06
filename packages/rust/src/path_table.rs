@@ -227,7 +227,12 @@ fn config_anchor_as<S: Syntax>(
     let Some(target) = absolute_target::<S>(glob, config_dir, home) else {
         return Some((config_dir.to_path_buf(), glob.to_string()));
     };
-    let target = normalize(&target?);
+    let target = target?;
+    let target = if S::is_verbatim(&target) {
+        normalize(&target)
+    } else {
+        target
+    };
     let (literal, rest) = split_at_first_glob(&target);
     if !rest.is_empty() {
         return Some((PathBuf::from(S::literal(literal.as_str())), rest));
@@ -966,7 +971,15 @@ mod tests {
     fn a_parent_config_glob_resolves_against_the_config_directory() {
         assert_eq!(
             anchor_of("../shared/*.md", None),
-            Some((PathBuf::from("/shared"), "*.md".to_string()))
+            Some((PathBuf::from("/cfg/../shared"), "*.md".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_absolute_config_glob_keeps_a_parent_component_for_the_filesystem_to_resolve() {
+        assert_eq!(
+            anchor_of("/a/link/../*.md", None),
+            Some((PathBuf::from("/a/link/.."), "*.md".to_string()))
         );
     }
 
@@ -1085,6 +1098,18 @@ mod tests {
             let t = table(r"\\?\C:\var\x\..\log\*.log", &nothing_is_a_dir);
             assert_eq!(t.root, Path::new(r"\\?\C:\var\log"));
             assert_eq!(t.path_prefix, r"\\?\C:\var\log");
+        }
+
+        #[test]
+        fn a_verbatim_config_glob_folds_a_parent_component_the_os_would_take_literally() {
+            assert_eq!(
+                config_anchor_as::<Utf8WindowsEncoding>(
+                    r"\\?\C:\var\x\..\log\*.log",
+                    Path::new(r"C:\cfg"),
+                    None
+                ),
+                Some((PathBuf::from(r"\\?\C:\var\log"), "*.log".to_string()))
+            );
         }
 
         #[test]
