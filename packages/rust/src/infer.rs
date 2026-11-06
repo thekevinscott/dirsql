@@ -173,9 +173,63 @@ pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>
 /// `from_str` does.
 fn parse_row(line: &str, keys: &mut Keys) -> serde_json::Result<JsonRow> {
     let mut deserializer = serde_json::Deserializer::from_str(line);
-    let row = RowSeed(keys).deserialize(&mut deserializer)?;
+    let mut row = RowSeed(keys).deserialize(&mut deserializer)?;
     deserializer.end()?;
+    restore_integral_zeros(line, &mut row)?;
     Ok(row)
+}
+
+/// serde_json parses both `-0` and `-0.0` to the float -0.0, so the value
+/// alone cannot say whether the line spelled an integer.
+fn is_negative_zero(value: &serde_json::Value) -> bool {
+    value
+        .as_number()
+        .and_then(serde_json::Number::as_f64)
+        .is_some_and(|f| f == 0.0 && f.is_sign_negative())
+}
+
+/// Turn each -0.0 the line spelled without a fraction or exponent back into
+/// the integer 0, as SQLite's JSON functions type it. The line is re-read only
+/// when a row holds a negative zero.
+fn restore_integral_zeros(line: &str, row: &mut JsonRow) -> serde_json::Result<()> {
+    let mut spelled: Option<SpelledValues<'_>> = None;
+    for (index, (_, value)) in row.0.iter_mut().enumerate() {
+        if !is_negative_zero(value) {
+            continue;
+        }
+        let spelled = match &spelled {
+            Some(spelled) => spelled,
+            None => spelled.insert(serde_json::from_str(line)?),
+        };
+        if !spelled.0[index].get().contains(['.', 'e', 'E']) {
+            *value = serde_json::Value::from(0);
+        }
+    }
+    Ok(())
+}
+
+/// A row object's values as the line spells them, in line order.
+struct SpelledValues<'a>(Vec<&'a serde_json::value::RawValue>);
+
+impl<'de> serde::Deserialize<'de> for SpelledValues<'de> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(SpelledValues(Vec::new()))
+    }
+}
+
+impl<'de> Visitor<'de> for SpelledValues<'de> {
+    type Value = SpelledValues<'de>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON row object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(mut self, mut map: A) -> Result<Self, A::Error> {
+        while let Some((serde::de::IgnoredAny, raw)) = map.next_entry()? {
+            self.0.push(raw);
+        }
+        Ok(self)
+    }
 }
 
 /// The first `\uXXXX` escape in `line` naming a UTF-16 surrogate that is not
@@ -415,6 +469,24 @@ mod tests {
     fn parse_rows_names_a_lone_surrogate_and_its_line() {
         let err = parse_rows("{}\n{\"a\":\"\\ud800\"}").unwrap_err();
         assert_eq!(err, r"line 2: lone surrogate \ud800 is not valid Unicode");
+    }
+
+    #[test]
+    fn parse_rows_turns_only_a_bare_negative_zero_into_integer_zero() {
+        let row = &rows(&[r#"{"n":-5,"p":5,"z":-0,"f":-0.0,"e":-0E0,"o":{"z":-0}}"#])[0];
+        assert_eq!(row.get("n"), Some(&serde_json::json!(-5)));
+        assert_eq!(row.get("p"), Some(&serde_json::json!(5)));
+        assert_eq!(row.get("z"), Some(&serde_json::json!(0)));
+        assert_eq!(row.get("f"), Some(&serde_json::json!(-0.0)));
+        assert_eq!(row.get("e"), Some(&serde_json::json!(-0.0)));
+        assert!(row.get("z").unwrap().is_i64());
+        assert!(row.get("f").unwrap().is_f64());
+    }
+
+    #[test]
+    fn spelled_values_reads_only_a_row_object() {
+        let err = serde_json::from_str::<SpelledValues>("[]").err().unwrap();
+        assert!(err.to_string().contains("a JSON row object"), "got: {err}");
     }
 
     #[test]
