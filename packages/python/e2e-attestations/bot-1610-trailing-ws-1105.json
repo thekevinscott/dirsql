@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/root_at_construction_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_dossier_test.py tests/e2e/relative_root_chdir_test.py tests/e2e/use_case_notebook_test.py -x -q",
+  "ran_at": 1793923485,
+  "exit_code": 0,
+  "commit": "9874f1b650ada3769a913a3f74cb31972ec42d4e",
+  "branch": "bot/1610-trailing-ws-1105"
+}
