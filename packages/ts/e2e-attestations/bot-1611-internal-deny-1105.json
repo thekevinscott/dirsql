@@ -1,7 +1,7 @@
 {
-  "command": "pnpm run build",
-  "ran_at": 1793923289,
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract query-params",
+  "ran_at": 1793923298,
   "exit_code": 0,
-  "commit": "8b3ba20f5612f205098a92eec3e7c359df6e5a63",
+  "commit": "14aa3b415f6fff45aa53c52016057f583367aa99",
   "branch": "bot/1611-internal-deny-1105"
 }
