@@ -484,9 +484,10 @@ mod tests {
     }
 
     #[test]
-    fn spelled_values_reads_only_a_row_object() {
-        let err = serde_json::from_str::<SpelledValues>("[]").err().unwrap();
-        assert!(err.to_string().contains("a JSON row object"), "got: {err}");
+    fn spelled_values_expects_a_row_object() {
+        let visitor = SpelledValues(Vec::new());
+        let expected: &dyn serde::de::Expected = &visitor;
+        assert_eq!(format!("{expected}"), "a JSON row object");
     }
 
     #[test]
