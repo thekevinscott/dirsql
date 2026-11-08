@@ -1,6 +1,6 @@
 use crate::matcher::TableMatcher;
 use crate::scanner::{reaches_dir, scan_dirs};
-use notify::event::{ModifyKind, RenameMode};
+use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind, RenameMode};
 use notify::{
     Config, ErrorKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher as NotifyWatcher,
@@ -17,6 +17,9 @@ const EMFILE: i32 = 24;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileEvent {
     Created(PathBuf),
+    /// A path renamed into the tree, whose contents were complete before it
+    /// arrived.
+    MovedIn(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
     /// The OS dropped events (an inotify queue overflow); the index may have
@@ -144,7 +147,7 @@ fn forward(
 ) {
     for event in raw_rx {
         for fe in translate_event(&event) {
-            if let FileEvent::Created(path) = &fe
+            if let FileEvent::Created(path) | FileEvent::MovedIn(path) = &fe
                 && is_real_dir(path)
             {
                 let Some(watcher) = watcher.upgrade() else {
@@ -285,12 +288,28 @@ pub(crate) fn describe_watch_error(err: &notify::Error, inotify: bool) -> String
     )
 }
 
-/// Translate a notify Event into zero or more FileEvents.
+/// inotify reports a file's creation when its writer opens it, before the
+/// bytes land, so a file is read once the writer closes it or it is renamed
+/// into place. Elsewhere no close is reported, so a create or write is read.
+pub(crate) const READ_ON_CLOSE: bool = cfg!(target_os = "linux");
+
 fn translate_event(event: &Event) -> Vec<FileEvent> {
+    translate(event, READ_ON_CLOSE, &is_symlink)
+}
+
+/// Translate a notify Event into zero or more FileEvents.
+fn translate(
+    event: &Event,
+    read_on_close: bool,
+    is_symlink: &dyn Fn(&Path) -> bool,
+) -> Vec<FileEvent> {
     let mut results = Vec::new();
 
     for path in &event.paths {
         let fe = match event.kind {
+            EventKind::Create(CreateKind::Folder) => Some(FileEvent::Created(path.clone())),
+            // A symlink is complete when it appears; no close follows it.
+            EventKind::Create(_) if read_on_close && !is_symlink(path) => None,
             EventKind::Create(_) => Some(FileEvent::Created(path.clone())),
             // A rename OUT of the tree (inotify `IN_MOVED_FROM`) leaves no file
             // behind, so it is a removal — otherwise the moved-away file's rows
@@ -302,10 +321,14 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
             // the same two paths; both sides were already translated above.
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => None,
             // A rename INTO the tree puts a path here that did not exist a
-            // moment ago — a creation, and for a directory one the watcher must
-            // walk, since the OS reports nothing for the files already inside.
-            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::Created(path.clone())),
+            // moment ago, and for a directory one the watcher must walk, since
+            // the OS reports nothing for the files already inside.
+            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::MovedIn(path.clone())),
+            EventKind::Modify(_) if read_on_close => None,
             EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
+            EventKind::Access(AccessKind::Close(AccessMode::Write)) if read_on_close => {
+                Some(FileEvent::Modified(path.clone()))
+            }
             EventKind::Remove(_) => Some(FileEvent::Deleted(path.clone())),
             _ => None,
         };
@@ -321,14 +344,58 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     results
 }
 
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 // Test fixtures: build `notify::Event`s and `notify::Error`s without the unit tests naming the
 // `notify::event::*` inner-kind types (the unit-lint isolation rule).
-// `translate_event` matches only the outer variant, so the inner kind is an
-// arbitrary valid value.
 #[cfg(test)]
 fn create_event(paths: Vec<PathBuf>) -> Event {
     Event {
         kind: EventKind::Create(notify::event::CreateKind::File),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn create_folder_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Create(notify::event::CreateKind::Folder),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn metadata_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Metadata(
+            notify::event::MetadataKind::Any,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn close_write_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Access(notify::event::AccessKind::Close(
+            notify::event::AccessMode::Write,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn close_read_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Access(notify::event::AccessKind::Close(
+            notify::event::AccessMode::Read,
+        )),
         paths,
         attrs: Default::default(),
     }
@@ -514,13 +581,13 @@ mod tests {
     #[test]
     fn forward_passes_translated_events_on_in_order() {
         let got = forwarded(vec![
-            modify_event(vec![PathBuf::from("/nowhere/a")]),
+            rename_from_event(vec![PathBuf::from("/nowhere/a")]),
             remove_event(vec![PathBuf::from("/nowhere/b")]),
         ]);
         assert_eq!(
             got,
             vec![
-                FileEvent::Modified(PathBuf::from("/nowhere/a")),
+                FileEvent::Deleted(PathBuf::from("/nowhere/a")),
                 FileEvent::Deleted(PathBuf::from("/nowhere/b")),
             ]
         );
@@ -530,8 +597,8 @@ mod tests {
     fn forward_stops_at_a_new_directory_once_the_watcher_is_gone() {
         let root = tempfile::tempdir().unwrap();
         let got = forwarded(vec![
-            create_event(vec![root.path().to_path_buf()]),
-            modify_event(vec![PathBuf::from("/nowhere/a")]),
+            create_folder_event(vec![root.path().to_path_buf()]),
+            remove_event(vec![PathBuf::from("/nowhere/a")]),
         ]);
         assert!(got.is_empty());
     }
@@ -687,9 +754,92 @@ mod tests {
         );
     }
 
+    fn elsewhere(event: &Event) -> Vec<FileEvent> {
+        translate(event, false, &|_| false)
+    }
+
+    fn on_close(event: &Event) -> Vec<FileEvent> {
+        translate(event, true, &|_| false)
+    }
+
+    fn one(event: fn(PathBuf) -> FileEvent, path: &str) -> Vec<FileEvent> {
+        vec![event(PathBuf::from(path))]
+    }
+
+    #[test]
+    fn translate_event_reads_on_close_only_on_linux() {
+        let closed = close_write_event(vec![PathBuf::from("/tmp/a")]);
+        assert_eq!(
+            translate_event(&closed),
+            translate(&closed, cfg!(target_os = "linux"), &|_| false)
+        );
+    }
+
+    #[test]
+    fn translate_on_close_reads_nothing_on_a_file_create() {
+        assert!(on_close(&create_event(vec![PathBuf::from("/tmp/a")])).is_empty());
+    }
+
+    #[test]
+    fn translate_on_close_reads_a_symlink_on_its_create() {
+        let event = create_event(vec![PathBuf::from("/tmp/link")]);
+        assert_eq!(
+            translate(&event, true, &|path| path == Path::new("/tmp/link")),
+            one(FileEvent::Created, "/tmp/link")
+        );
+    }
+
+    #[test]
+    fn translate_maps_a_directory_create_either_way() {
+        let event = create_folder_event(vec![PathBuf::from("/tmp/d")]);
+        assert_eq!(on_close(&event), one(FileEvent::Created, "/tmp/d"));
+        assert_eq!(elsewhere(&event), one(FileEvent::Created, "/tmp/d"));
+    }
+
+    #[test]
+    fn translate_on_close_reads_nothing_on_a_write_or_metadata_change() {
+        assert!(on_close(&modify_event(vec![PathBuf::from("/tmp/a")])).is_empty());
+        assert!(on_close(&metadata_event(vec![PathBuf::from("/tmp/a")])).is_empty());
+    }
+
+    #[test]
+    fn translate_on_close_reads_a_file_closed_after_writing() {
+        let event = close_write_event(vec![PathBuf::from("/tmp/a")]);
+        assert_eq!(on_close(&event), one(FileEvent::Modified, "/tmp/a"));
+        assert!(elsewhere(&event).is_empty());
+    }
+
+    #[test]
+    fn translate_ignores_a_file_closed_after_reading() {
+        let event = close_read_event(vec![PathBuf::from("/tmp/a")]);
+        assert!(on_close(&event).is_empty());
+    }
+
+    #[test]
+    fn translate_on_close_keeps_renames_and_removals() {
+        let to = rename_to_event(vec![PathBuf::from("/tmp/in")]);
+        let from = rename_from_event(vec![PathBuf::from("/tmp/out")]);
+        let gone = remove_event(vec![PathBuf::from("/tmp/gone")]);
+        assert_eq!(on_close(&to), one(FileEvent::MovedIn, "/tmp/in"));
+        assert_eq!(on_close(&from), one(FileEvent::Deleted, "/tmp/out"));
+        assert_eq!(on_close(&gone), one(FileEvent::Deleted, "/tmp/gone"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn translate_event_reads_a_created_path_only_when_it_is_a_symlink() {
+        let link = PathBuf::from("/proc/self");
+        let missing = PathBuf::from("/nowhere/a");
+        assert_eq!(
+            translate_event(&create_event(vec![link.clone()])),
+            vec![FileEvent::Created(link)]
+        );
+        assert!(translate_event(&create_event(vec![missing])).is_empty());
+    }
+
     #[test]
     fn translate_event_maps_create() {
-        let results = translate_event(&create_event(vec![PathBuf::from("/tmp/test.txt")]));
+        let results = elsewhere(&create_event(vec![PathBuf::from("/tmp/test.txt")]));
         assert_eq!(
             results,
             vec![FileEvent::Created(PathBuf::from("/tmp/test.txt"))]
@@ -698,7 +848,7 @@ mod tests {
 
     #[test]
     fn translate_event_maps_remove() {
-        let results = translate_event(&remove_event(vec![PathBuf::from("/tmp/gone.txt")]));
+        let results = elsewhere(&remove_event(vec![PathBuf::from("/tmp/gone.txt")]));
         assert_eq!(
             results,
             vec![FileEvent::Deleted(PathBuf::from("/tmp/gone.txt"))]
@@ -707,18 +857,18 @@ mod tests {
 
     #[test]
     fn translate_event_turns_a_rescan_flag_into_a_rescan() {
-        assert_eq!(translate_event(&rescan_event()), vec![FileEvent::Rescan]);
+        assert_eq!(elsewhere(&rescan_event()), vec![FileEvent::Rescan]);
     }
 
     #[test]
     fn translate_event_ignores_access_events() {
-        let results = translate_event(&access_event(vec![PathBuf::from("/tmp/read.txt")]));
+        let results = elsewhere(&access_event(vec![PathBuf::from("/tmp/read.txt")]));
         assert!(results.is_empty());
     }
 
     #[test]
     fn translate_event_maps_modify() {
-        let results = translate_event(&modify_event(vec![PathBuf::from("/tmp/changed.txt")]));
+        let results = elsewhere(&modify_event(vec![PathBuf::from("/tmp/changed.txt")]));
         assert_eq!(
             results,
             vec![FileEvent::Modified(PathBuf::from("/tmp/changed.txt"))]
@@ -729,7 +879,7 @@ mod tests {
     fn translate_event_maps_rename_from_to_delete() {
         // inotify emits `Modify(Name(From))` when a file is renamed OUT of the
         // watched tree; it must be treated as a removal so its rows are deleted.
-        let results = translate_event(&rename_from_event(vec![PathBuf::from("/tmp/moved.txt")]));
+        let results = elsewhere(&rename_from_event(vec![PathBuf::from("/tmp/moved.txt")]));
         assert_eq!(
             results,
             vec![FileEvent::Deleted(PathBuf::from("/tmp/moved.txt"))]
@@ -737,24 +887,24 @@ mod tests {
     }
 
     #[test]
-    fn translate_event_maps_rename_to_as_create() {
+    fn translate_event_maps_rename_to_as_moved_in() {
         // inotify emits `Modify(Name(To))` when a path is renamed INTO the
-        // watched tree; it is a creation so a moved-in directory gets walked.
-        let results = translate_event(&rename_to_event(vec![PathBuf::from("/tmp/arrived")]));
+        // watched tree.
+        let results = elsewhere(&rename_to_event(vec![PathBuf::from("/tmp/arrived")]));
         assert_eq!(
             results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/arrived"))]
+            vec![FileEvent::MovedIn(PathBuf::from("/tmp/arrived"))]
         );
     }
 
     #[test]
-    fn translate_event_maps_rename_any_as_create() {
-        // kqueue / FSEvents cannot tell which side of a rename they saw; a
-        // creation of a path that turns out not to exist is a harmless no-op.
-        let results = translate_event(&rename_any_event(vec![PathBuf::from("/tmp/either")]));
+    fn translate_event_maps_rename_any_as_moved_in() {
+        // kqueue / FSEvents cannot tell which side of a rename they saw; an
+        // arrival of a path that turns out not to exist is a harmless no-op.
+        let results = elsewhere(&rename_any_event(vec![PathBuf::from("/tmp/either")]));
         assert_eq!(
             results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/either"))]
+            vec![FileEvent::MovedIn(PathBuf::from("/tmp/either"))]
         );
     }
 
@@ -762,7 +912,7 @@ mod tests {
     fn translate_event_ignores_rename_both() {
         // `Both` restates a `From`/`To` pair inotify already delivered; acting
         // on it would index the destination twice.
-        let results = translate_event(&rename_both_event(vec![
+        let results = elsewhere(&rename_both_event(vec![
             PathBuf::from("/tmp/old"),
             PathBuf::from("/tmp/new"),
         ]));
@@ -771,7 +921,7 @@ mod tests {
 
     #[test]
     fn translate_event_multiple_paths() {
-        let results = translate_event(&create_event(vec![
+        let results = elsewhere(&create_event(vec![
             PathBuf::from("/tmp/a.txt"),
             PathBuf::from("/tmp/b.txt"),
         ]));
@@ -787,7 +937,7 @@ mod tests {
             paths: vec![],
             attrs: Default::default(),
         };
-        let results = translate_event(&event);
+        let results = elsewhere(&event);
         assert!(results.is_empty());
     }
 
@@ -798,7 +948,7 @@ mod tests {
             paths: vec![PathBuf::from("/tmp/other.txt")],
             attrs: Default::default(),
         };
-        let results = translate_event(&event);
+        let results = elsewhere(&event);
         assert!(results.is_empty());
     }
 }
