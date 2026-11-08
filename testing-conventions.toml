@@ -114,6 +114,12 @@ lines = [513, 520]
 reason = "set_terminated_text writes through a raw sqlite3_context, which only a real Connection supplies and unit-lint isolation forbids; tests/vtab.rs (stat_columns_carry_real_values) asserts the full path, basename and ext text"
 
 [[rust.exempt]]
+path = "src/lib.rs"
+rules = ["mutation"]
+lines = [1063]
+reason = "the non-Linux apply_batch, which holds a batch a foreign key rejects, is compiled out on the Linux mutation runner; the Windows CI job runs its unit tests (a_rejected_batch_is_held_until_a_batch_resolves_it and the other held-batch tests) and tests/foreign_keys.rs"
+
+[[rust.exempt]]
 path = "src/freshness.rs"
 rules = ["mutation"]
 lines = [101, 115, 121, 127, 128, 130, 137, 144]
