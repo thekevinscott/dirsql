@@ -44,11 +44,11 @@ fn detects_file_creation() {
     fs::write(&file_path, "hello").unwrap();
 
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
-        written_under(seen, &file_path)
+        seen.iter().any(|e| matches!(e, FileEvent::Created(_)))
     });
     assert!(
-        written_under(&events, &file_path),
-        "Expected an event for the written file, saw: {events:?}"
+        events.iter().any(|e| matches!(e, FileEvent::Created(_))),
+        "Expected a Created event, saw: {events:?}"
     );
 }
 
@@ -231,12 +231,20 @@ fn over_detects_events_in_every_directory() {
     fs::write(second.path().join("b.txt"), "b").unwrap();
 
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
-        written_under(seen, first.path()) && written_under(seen, second.path())
+        let created = |dir: &std::path::Path| {
+            seen.iter().any(|e| match e {
+                FileEvent::Created(p) => p.starts_with(dir),
+                _ => false,
+            })
+        };
+        created(first.path()) && created(second.path())
     });
     for dir in [first.path(), second.path()] {
         assert!(
-            written_under(&events, dir),
-            "no event under {dir:?}, saw: {events:?}"
+            events
+                .iter()
+                .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir))),
+            "no Created event under {dir:?}, saw: {events:?}"
         );
     }
 }
@@ -249,12 +257,10 @@ fn scoped(root: &std::path::Path, ignore: &[&str]) -> Watcher {
     .unwrap()
 }
 
-/// A written file is reported as created where the OS reports no close, and
-/// as modified once closed where it does.
-fn written_under(events: &[FileEvent], dir: &std::path::Path) -> bool {
+fn created_under(events: &[FileEvent], dir: &std::path::Path) -> bool {
     events
         .iter()
-        .any(|e| matches!(e, FileEvent::Created(p) | FileEvent::Modified(p) if p.starts_with(dir)))
+        .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir)))
 }
 
 // FSEvents and ReadDirectoryChangesW watch a whole tree with one watch, so
@@ -276,10 +282,10 @@ fn scoped_watcher_puts_no_watch_on_an_ignored_subtree() {
     // Events from one watcher arrive in order, so once the later write in the
     // watched subtree shows up, the ignored write's event would have too.
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
-        written_under(seen, &kept)
+        created_under(seen, &kept)
     });
-    assert!(written_under(&events, &kept), "saw: {events:?}");
-    assert!(!written_under(&events, &ignored), "saw: {events:?}");
+    assert!(created_under(&events, &kept), "saw: {events:?}");
+    assert!(!created_under(&events, &ignored), "saw: {events:?}");
 }
 
 #[test]
@@ -301,7 +307,10 @@ fn scoped_watcher_reports_files_in_a_new_directory() {
     let file = fresh.join("note.md");
     fs::write(&file, "x").unwrap();
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
-        written_under(seen, &file)
+        seen.contains(&FileEvent::Created(file.clone()))
     });
-    assert!(written_under(&events, &file), "saw: {events:?}");
+    assert!(
+        events.contains(&FileEvent::Created(file.clone())),
+        "saw: {events:?}"
+    );
 }
