@@ -6,7 +6,6 @@ use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use std::borrow::Cow;
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -498,7 +497,7 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         .collect::<Result<Vec<_>, _>>()?;
     let named = words
         .iter()
-        .filter(|word| !word.contains(['*', '?', '[']))
+        .filter(|word| !has_wildcard(word))
         .map(|word| PathBuf::from(unescape(word)))
         .collect();
     let mut components = Vec::new();
@@ -531,6 +530,16 @@ fn collapse_separators(word: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `word` holds a `*`, `?` or `[` no backslash quotes.
+fn has_wildcard(word: &str) -> bool {
+    let mut escaped = false;
+    word.chars().any(|c| {
+        let wild = !escaped && matches!(c, '*' | '?' | '[');
+        escaped = !escaped && c == '\\';
+        wild
+    })
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
@@ -660,6 +669,8 @@ impl<'a> Place<'a> {
         if self.walk.gitignore && listing.holds(OsStr::new(".git")) && holds_git(&self.dir) {
             self.walk.in_repo = true;
             self.walk.frames.clear();
+            let excludes = Frame::repo_excludes(&self.dir).into_iter().map(Arc::new);
+            self.walk.frames.extend(excludes);
         }
         if self.walk.in_repo
             && listing.holds(OsStr::new(".gitignore"))
@@ -980,12 +991,7 @@ struct Stat {
 
 /// The stat of `path`, through a symlink when `follow` is set.
 fn stat_of(path: &Path, follow: bool) -> Option<Stat> {
-    let metadata = if follow {
-        fs::metadata(path)
-    } else {
-        fs::symlink_metadata(path)
-    };
-    let file_type = metadata.ok()?.file_type();
+    let file_type = crate::long_path::metadata(path, follow).ok()?.file_type();
     Some(Stat {
         is_link: file_type.is_symlink(),
         is_dir: file_type.is_dir(),
@@ -1002,16 +1008,23 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
     }
 }
 
-/// The `.gitignore` files above `start`, up to and including the repo root
-/// `top`, outermost first, each read by `load`.
+/// The ignore files in force above `start`, up to and including the repo
+/// root `top`, lowest precedence first: the repo-wide exclude files when `top`
+/// lies strictly above `start`, then each `.gitignore` as `load` reads it.
 fn gitignores_above(
     start: &Path,
     top: &Path,
     load: &dyn Fn(&Path) -> Option<Frame>,
 ) -> Vec<Arc<Frame>> {
-    dirs_above(start, top)
+    let dirs = dirs_above(start, top);
+    let excludes = if dirs.is_empty() {
+        Vec::new()
+    } else {
+        Frame::repo_excludes(top)
+    };
+    excludes
         .into_iter()
-        .filter_map(load)
+        .chain(dirs.into_iter().filter_map(load))
         .map(Arc::new)
         .collect()
 }
@@ -1093,6 +1106,7 @@ fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Condvar, Mutex};
     use std::time::Duration;
@@ -1705,7 +1719,36 @@ mod tests {
             .iter()
             .map(|frame| frame.gitignore().path())
             .collect();
-        assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
+        assert!(roots.ends_with(&[Path::new("/r"), Path::new("/r/a/b")]));
+    }
+
+    #[test]
+    fn gitignores_above_puts_the_repo_excludes_first() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        fs::write(repo.path().join(".git/info/exclude"), "*.txt\n").unwrap();
+        let load = |dir: &Path| Some(Frame::from_lines(dir, &["!a.txt"]));
+        let frames = gitignores_above(&repo.path().join("sub"), repo.path(), &load);
+
+        assert!(is_gitignored(
+            &frames,
+            &repo.path().join("sub/b.txt"),
+            false
+        ));
+        assert!(!is_gitignored(
+            &frames,
+            &repo.path().join("sub/a.txt"),
+            false
+        ));
+    }
+
+    #[test]
+    fn gitignores_above_leaves_the_repo_excludes_to_the_walk_at_the_top() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".git/info")).unwrap();
+        fs::write(repo.path().join(".git/info/exclude"), "*.txt\n").unwrap();
+
+        assert!(gitignores_above(repo.path(), repo.path(), &Frame::load).is_empty());
     }
 
     #[test]
@@ -1987,6 +2030,22 @@ mod tests {
         let states = states_after(&glob, &[("a", Kind::File)]);
         assert!(glob.reaches(&states, Kind::File));
         assert!(!glob.reaches(&states, Kind::LinkedDir));
+    }
+
+    #[test]
+    fn only_an_unquoted_star_question_or_bracket_is_a_wildcard() {
+        assert!(has_wildcard("a*b"));
+        assert!(has_wildcard("a?"));
+        assert!(has_wildcard("[a]"));
+        assert!(has_wildcard(r"a\\*"));
+        assert!(!has_wildcard(r"a\*\?\[b"));
+        assert!(!has_wildcard(r"\{q\}.md"));
+    }
+
+    #[test]
+    fn a_word_naming_a_brace_file_spells_it() {
+        let glob = compile_glob("./{q}.md").unwrap();
+        assert!(glob.names(Path::new("./{q}.md")));
     }
 
     #[test]

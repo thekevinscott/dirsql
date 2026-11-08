@@ -553,6 +553,12 @@ In Python, any other type (`Decimal`, `Fraction`, a numpy scalar other than
 the column and the type. It is never coerced to `REAL` or stored as its repr;
 convert it first (`int(x)`, `float(x)`, `str(x)`, `json.dumps(x)`).
 
+In TypeScript, `undefined` stores `NULL`; any other type (a plain object,
+`Array`, `Date`, `Map`, a function, a symbol, a typed array other than
+`Uint8Array`, ...) fails the build with an error naming the column and the
+type. It is never stored as its `String()` form; convert it first
+(`JSON.stringify(x)`, `d.toISOString()`).
+
 ## Progress on construction
 
 Constructing a `DirSQL` walks the tree and ingests every matched file, which

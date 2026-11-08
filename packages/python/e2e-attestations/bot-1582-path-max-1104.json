@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/stat_speed_test.py tests/e2e/query_contract_test.py tests/e2e/root_at_construction_test.py -x -q",
+  "ran_at": 1793843678,
+  "exit_code": 0,
+  "commit": "121bdf99b88b911d481c749fbbae9abdb8eced92",
+  "branch": "bot/1582-path-max-1104"
+}

@@ -2,6 +2,7 @@
 //
 // value-fidelity.test.ts pins the numeric contract; this pins the rest of the
 // match arms so a rewrite of the marshaling layer cannot quietly move one.
+// Any other value type fails the build, naming the column and the type.
 import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -60,24 +61,6 @@ describe("DirSQL onFile value shapes", () => {
     expect(await store("hi")).toEqual({ v: "hi", ty: "text" });
   });
 
-  it("coerces a plain object to its string form", async () => {
-    expect(await store({ a: 1 })).toEqual({
-      v: "[object Object]",
-      ty: "text",
-    });
-  });
-
-  it("coerces an array to its string form", async () => {
-    expect(await store([1, 2])).toEqual({ v: "1,2", ty: "text" });
-  });
-
-  it("coerces a Date to its string form", async () => {
-    const iso = new Date(0);
-    const row = (await store(iso)) as { v: string; ty: string };
-    expect(row.ty).toBe("text");
-    expect(row.v).toBe(iso.toString());
-  });
-
   it("stores a Uint8Array as a BLOB", async () => {
     const row = (await store(new Uint8Array([1, 2, 3]))) as {
       v: Buffer;
@@ -111,17 +94,37 @@ describe("DirSQL onFile value shapes", () => {
     expect([...row.v]).toEqual([3, 4]);
   });
 
-  it("does not treat a wider typed array as a BLOB", async () => {
-    expect(await store(new Int16Array([1, 2]))).toEqual({
-      v: "1,2",
-      ty: "text",
+  const refuse = async (v: unknown, typeName: string): Promise<void> => {
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          name: "t",
+          ddl: "CREATE TABLE t (v)",
+          glob: "*.json",
+          onFile: () => [{ v }] as Record<string, unknown>[],
+        },
+      ],
     });
-  });
+    await expect(db.ready).rejects.toThrow(
+      `column 'v': unsupported value type ${typeName}`,
+    );
+  };
 
-  it("does not treat a signed byte array as a BLOB", async () => {
-    expect(await store(new Int8Array([1, 2]))).toEqual({
-      v: "1,2",
-      ty: "text",
-    });
-  });
+  it.each([
+    ["Object", { a: 1 }],
+    ["object", Object.create(null)],
+    ["Array", [1, 2]],
+    ["Date", new Date(0)],
+    ["Map", new Map([["a", 1]])],
+    ["Int16Array", new Int16Array([1, 2])],
+    ["Int8Array", new Int8Array([1, 2])],
+    ["function", () => 1],
+    ["symbol", Symbol("s")],
+  ])(
+    "refuses a %s value rather than coercing it to a string",
+    async (typeName, v) => {
+      await refuse(v, typeName);
+    },
+  );
 });

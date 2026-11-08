@@ -52,7 +52,8 @@ The command's stdout is **NDJSON: one JSON object per line**, one row each.
 Blank lines are skipped. A command that exits successfully and prints nothing
 yields no rows. Every non-blank line must be a JSON object: a line that is
 an array, a scalar, or log chatter fails the table, and the error names the
-line number. There is no array form.
+line number. There is no array form. A key repeated within one object keeps
+its last value, as `jq` and `JSON.parse` read it.
 
 A string escape naming half of a UTF-16 surrogate pair without its other half
 (a lone `\ud800`, as Python's `json.dumps` writes for surrogateescape-decoded

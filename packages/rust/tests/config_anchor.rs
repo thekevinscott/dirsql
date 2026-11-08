@@ -90,6 +90,18 @@ fn a_config_ignore_is_relative_to_the_config_anchor() {
     assert_eq!(paths(&db), vec!["keep.txt".to_string()]);
 }
 
+#[test]
+fn a_dot_slash_glob_with_repeated_separators_anchors_at_the_config_directory() {
+    let cfg_dir = tempfile::TempDir::new().unwrap();
+    fs::create_dir_all(cfg_dir.path().join("a")).unwrap();
+    fs::write(cfg_dir.path().join("a/x.json"), "x").unwrap();
+    let cfg = write_config(cfg_dir.path(), ".//a/*.json", "");
+
+    let db = DirSQL::builder().config(&cfg).build().unwrap();
+
+    assert_eq!(paths(&db), vec!["a/x.json".to_string()]);
+}
+
 /// `y/link -> real/sub`, so `y/link/..` is `real` to the filesystem and `y`
 /// to a lexical fold. Each `f.md` says which one was read.
 #[cfg(unix)]

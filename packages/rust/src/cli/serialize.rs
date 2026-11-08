@@ -11,18 +11,28 @@ use crate::{QueryResult, Row};
 /// Serialize a query result, each object keyed in projection order. Row events
 /// carry no projection, so they keep going through [`row_to_json`].
 pub(super) fn result_to_json(result: &QueryResult) -> Vec<Value> {
+    ordered_rows(result, cell_to_json)
+}
+
+/// [`result_to_json`] for a table, which can name the infinite REAL that JSON
+/// has no number for.
+pub(super) fn result_to_table_json(result: &QueryResult) -> Vec<Value> {
+    ordered_rows(result, cell_to_table_json)
+}
+
+fn ordered_rows(result: &QueryResult, cell: fn(&CellValue) -> Value) -> Vec<Value> {
     result
         .rows
         .iter()
-        .map(|row| ordered_row_to_json(&result.columns, row))
+        .map(|row| ordered_row_to_json(&result.columns, row, cell))
         .collect()
 }
 
-fn ordered_row_to_json(columns: &[String], row: &Row) -> Value {
+fn ordered_row_to_json(columns: &[String], row: &Row, cell: fn(&CellValue) -> Value) -> Value {
     let mut map = Map::with_capacity(columns.len());
     for column in columns {
         if let Some(value) = row.get(column) {
-            map.insert(column.clone(), cell_to_json(value));
+            map.insert(column.clone(), cell(value));
         }
     }
     Value::Object(map)
@@ -135,6 +145,16 @@ fn cell_to_json(value: &CellValue) -> Value {
             .unwrap_or(Value::Null),
         CellValue::Text(s) => Value::String(s.clone()),
         CellValue::Blob(bytes) => Value::String(hex::encode(bytes)),
+    }
+}
+
+/// Spelled as Python's `sqlite3` prints them. SQLite stores no NaN, so an
+/// infinity is the only REAL JSON cannot hold.
+fn cell_to_table_json(value: &CellValue) -> Value {
+    match value {
+        CellValue::Real(f) if *f == f64::INFINITY => Value::from("inf"),
+        CellValue::Real(f) if *f == f64::NEG_INFINITY => Value::from("-inf"),
+        other => cell_to_json(other),
     }
 }
 
@@ -443,6 +463,50 @@ mod tests {
         assert_eq!(json.as_str(), Some("deadbeef"));
         let padded = cell_to_json(&CellValue::Blob(vec![0x00, 0x0f, 0xff]));
         assert_eq!(padded.as_str(), Some("000fff"));
+    }
+
+    #[test]
+    fn a_table_names_an_infinite_real() {
+        assert_eq!(
+            cell_to_table_json(&CellValue::Real(f64::INFINITY)),
+            Value::from("inf")
+        );
+        assert_eq!(
+            cell_to_table_json(&CellValue::Real(f64::NEG_INFINITY)),
+            Value::from("-inf")
+        );
+    }
+
+    #[test]
+    fn a_table_takes_every_other_cell_as_json_has_it() {
+        for cell in [
+            CellValue::Null,
+            CellValue::Integer(3),
+            CellValue::Real(1.5),
+            CellValue::Real(f64::MAX),
+            CellValue::Text("inf".into()),
+        ] {
+            assert_eq!(cell_to_table_json(&cell), cell_to_json(&cell), "{cell:?}");
+        }
+    }
+
+    #[test]
+    fn a_table_result_keeps_projection_order_and_names_infinities() {
+        let result = QueryResult {
+            columns: vec!["m".into(), "p".into()],
+            rows: vec![row_of(&[
+                ("p", CellValue::Real(f64::INFINITY)),
+                ("m", CellValue::Real(f64::NEG_INFINITY)),
+            ])],
+        };
+
+        let rows = result_to_table_json(&result);
+
+        assert_eq!(rows[0].to_string(), r#"{"m":"-inf","p":"inf"}"#);
+        assert_eq!(
+            result_to_json(&result)[0].to_string(),
+            r#"{"m":null,"p":null}"#
+        );
     }
 
     #[test]

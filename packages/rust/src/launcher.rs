@@ -11,7 +11,8 @@
 const DEFAULT_CONFIG_PATH: &str = "./.dirsql.toml";
 
 /// Every config value in `argv`, in order (`--config X`, `--config=X`,
-/// `-c X`, `-c=X`, `-cX`), or [`DEFAULT_CONFIG_PATH`] when argv names none.
+/// `-c X`, `-c=X`, `-cX`) before the first `--`, or [`DEFAULT_CONFIG_PATH`]
+/// when argv names none.
 ///
 /// The scan is deliberately looser than clap: it runs before argv is parsed,
 /// only to find files to read extensions out of, so a bare trailing `-c`
@@ -21,7 +22,9 @@ pub fn config_paths_from_argv(argv: &[String]) -> Vec<String> {
     let mut paths = Vec::new();
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
-        if arg == "--config" || arg == "-c" {
+        if arg == "--" {
+            break;
+        } else if arg == "--config" || arg == "-c" {
             paths.push(args.next().cloned().unwrap_or_default());
         } else if let Some(value) = arg.strip_prefix("--config=") {
             paths.push(value.to_string());
@@ -156,7 +159,20 @@ mod tests {
     }
 
     #[test]
-    fn does_not_treat_a_double_dash_as_end_of_options() {
-        assert_eq!(scan(&["--", "-c", "a.toml"]), ["a.toml"]);
+    fn stops_scanning_at_the_end_of_options_marker() {
+        assert_eq!(
+            scan(&["-c", "a.toml", "--", "-c", "b.toml", "--config=c.toml"]),
+            ["a.toml"]
+        );
+    }
+
+    #[test]
+    fn defaults_when_the_only_config_flag_follows_the_end_of_options_marker() {
+        assert_eq!(scan(&["query", "--", "-cSELECT 1"]), ["./.dirsql.toml"]);
+    }
+
+    #[test]
+    fn consumes_a_double_dash_as_a_config_value() {
+        assert_eq!(scan(&["-c", "--", "-c", "b.toml"]), ["--", "b.toml"]);
     }
 }

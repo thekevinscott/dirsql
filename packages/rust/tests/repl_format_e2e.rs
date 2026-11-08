@@ -179,6 +179,29 @@ fn a_null_is_named_rather_than_rendered_as_a_blank() {
     assert!(stdout_of(&out).contains("NULL"), "got {}", stdout_of(&out));
 }
 
+const INFINITIES: &str = "SELECT 9e999 AS inf, -9e999 AS ninf, NULL AS n";
+
+const INFINITIES_TABLE: &str = "inf  ninf  n\n---  ----  ----\ninf  -inf  NULL\n\n1 row\n";
+
+#[test]
+fn an_infinite_real_is_named_rather_than_rendered_as_null() {
+    // `NULL` means SQL NULL; a REAL that overflowed to infinity is a value.
+    let root = fixture();
+
+    let out = query(&root, INFINITIES, &["--format", "table"]);
+
+    assert_eq!(stdout_of(&out), INFINITIES_TABLE, "{out:?}");
+}
+
+#[test]
+fn the_repl_table_names_an_infinite_real_too() {
+    let root = fixture();
+
+    let out = repl(&root, &format!("{INFINITIES}\n"), &["--format", "table"]);
+
+    assert_eq!(stdout_of(&out), INFINITIES_TABLE, "{out:?}");
+}
+
 #[test]
 fn the_json_format_can_be_asked_for_explicitly() {
     let root = fixture();

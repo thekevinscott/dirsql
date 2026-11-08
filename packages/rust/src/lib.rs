@@ -24,6 +24,7 @@ pub mod foreign_key;
 mod freshness;
 #[doc(hidden)]
 pub mod functions;
+mod git_excludes_file;
 mod gitignore_frame;
 mod glob_unescape;
 #[doc(hidden)]
@@ -31,6 +32,7 @@ pub mod infer;
 #[doc(hidden)]
 pub mod launcher;
 mod listing;
+mod long_path;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;

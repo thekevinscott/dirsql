@@ -21,6 +21,7 @@ fn fixture() -> TempDir {
         ".env",
         "sub/.draft.md",
         "a.log",
+        "{q}.log",
     ] {
         fs::write(root.path().join(file), "").unwrap();
     }
@@ -59,4 +60,11 @@ fn an_escaped_spelling_of_a_gitignored_file_names_it() {
     let root = fixture();
     assert_eq!(paths(&root, r"./a\.log"), ["a.log"]);
     assert_eq!(paths(&root, r"./{a\.log,b}"), ["a.log"]);
+}
+
+#[test]
+fn a_literal_brace_spelling_of_a_gitignored_file_names_it() {
+    let root = fixture();
+    assert_eq!(paths(&root, r"./\{q\}.log"), ["{q}.log"]);
+    assert_eq!(paths(&root, "./{q}.log"), ["{q}.log"]);
 }
