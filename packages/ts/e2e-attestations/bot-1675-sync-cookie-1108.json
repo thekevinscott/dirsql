@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794164747,
+  "exit_code": 0,
+  "commit": "b0523e7bf63b45420715dee789be40ddde40a213",
+  "branch": "bot/1675-sync-cookie-1108"
+}
