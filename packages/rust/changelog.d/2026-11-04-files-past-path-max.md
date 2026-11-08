@@ -1,0 +1,1 @@
+**Fixed** A path table no longer silently drops files whose absolute path is longer than the platform's path limit (`PATH_MAX`, 4096 bytes on Linux): `'./**'` lists them, with their `size`, `mtime` and `content`.
