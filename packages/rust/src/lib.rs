@@ -953,7 +953,7 @@ impl DirSQL {
         let mut events = Vec::new();
         if let Some(first) = watcher.recv_timeout(timeout) {
             events.push(first);
-            events.extend(watcher.try_recv_all());
+            events.extend(watcher.try_recv_all().map_err(DirSqlError::watch)?);
         }
         Ok(events)
     }
@@ -1157,7 +1157,7 @@ impl DirSQL {
             let mut events = Vec::new();
             if let Some(first) = watcher.recv_timeout(timeout) {
                 events.push(first);
-                events.extend(watcher.try_recv_all());
+                events.extend(watcher.try_recv_all().map_err(DirSqlError::watch)?);
             }
             events
         };
@@ -1171,7 +1171,7 @@ impl DirSQL {
             .watcher
             .lock()
             .ok()
-            .and_then(|guard| guard.as_ref().map(Watcher::try_recv_all))
+            .and_then(|guard| guard.as_ref().and_then(|w| w.try_recv_all().ok()))
             .unwrap_or_default()
     }
 

@@ -1,17 +1,32 @@
 use crate::matcher::TableMatcher;
 use crate::scanner::{reaches_dir, scan_dirs};
-use notify::event::{ModifyKind, RenameMode};
+use notify::event::{Flag, ModifyKind, RenameMode};
 use notify::{
     Config, ErrorKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher as NotifyWatcher,
 };
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const EMFILE: i32 = 24;
+
+/// The kernel's default `fs.inotify.max_queued_events`. A channel holding
+/// this many undrained events takes no more; the backlog ends in a
+/// [`FileEvent::Rescan`] instead.
+const QUEUE_BOUND: usize = 16384;
+
+/// How long the channel may stay silent while a sync cookie is awaited.
+const COOKIE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Callback errors kept for a stalled barrier's message.
+const FAILURES_KEPT: usize = 16;
+
+static COOKIE_DIRS: AtomicU64 = AtomicU64::new(0);
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +54,8 @@ const PER_DIRECTORY: bool = !cfg!(any(target_os = "macos", target_os = "windows"
 pub struct Watcher {
     _watcher: Arc<Mutex<RecommendedWatcher>>,
     rx: mpsc::Receiver<FileEvent>,
+    failures: Arc<Mutex<Vec<String>>>,
+    cookies: Option<Cookies>,
 }
 
 impl Watcher {
@@ -68,15 +85,16 @@ impl Watcher {
     /// subtree costs none, and a directory created later is walked and
     /// watched before its creation is reported.
     pub fn scoped(scopes: Vec<WatchScope>) -> Result<Self, notify::Error> {
-        let (raw_tx, raw_rx) = mpsc::channel::<Event>();
-        let (tx, rx) = mpsc::channel();
+        let (raw_tx, raw_rx) = mpsc::sync_channel::<Event>(QUEUE_BOUND);
+        let (tx, rx) = mpsc::sync_channel(QUEUE_BOUND);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let failures = Arc::new(Mutex::new(Vec::new()));
 
         let mut watcher = RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    // Ignore send errors (receiver dropped)
-                    let _ = raw_tx.send(event);
-                }
+            {
+                let overflowed = Arc::clone(&overflowed);
+                let failures = Arc::clone(&failures);
+                move |res| relay(res, &raw_tx, &overflowed, &failures)
             },
             Config::default(),
         )?;
@@ -102,34 +120,247 @@ impl Watcher {
                 &mut |dir| tolerate_missing(watcher.watch(dir, RecursiveMode::NonRecursive)),
             )?;
         }
+        // Only inotify promises one in-order queue for the whole instance,
+        // which is what makes a cookie a barrier.
+        let cookies = if cfg!(target_os = "linux") {
+            let cookies = Cookies::create().map_err(notify::Error::io)?;
+            watcher.watch(&cookies.dir, RecursiveMode::NonRecursive)?;
+            Some(cookies)
+        } else {
+            None
+        };
 
         let watcher = Arc::new(Mutex::new(watcher));
         let handle = Arc::downgrade(&watcher);
-        thread::spawn(move || forward(&raw_rx, &tx, &handle, &scopes));
+        thread::spawn(move || forward(&raw_rx, &tx, &handle, &scopes, &overflowed));
 
         Ok(Self {
             _watcher: watcher,
             rx,
+            failures,
+            cookies,
         })
     }
 
     /// Receive the next event, blocking until one is available.
     pub fn recv(&self) -> Option<FileEvent> {
-        self.rx.recv().ok()
+        loop {
+            let event = self.rx.recv().ok()?;
+            if !self.is_cookie(&event) {
+                return Some(event);
+            }
+        }
     }
 
     /// Try to receive an event with a timeout.
     pub fn recv_timeout(&self, timeout: Duration) -> Option<FileEvent> {
-        self.rx.recv_timeout(timeout).ok()
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let event = self.rx.recv_timeout(left).ok()?;
+            if !self.is_cookie(&event) {
+                return Some(event);
+            }
+        }
     }
 
-    /// Drain all currently pending events without blocking.
-    pub fn try_recv_all(&self) -> Vec<FileEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.rx.try_recv() {
-            events.push(event);
+    /// Every event the OS queued before this call. Where the watcher has a
+    /// sync cookie, that includes those not yet copied off the OS queue;
+    /// elsewhere, only those already copied.
+    pub fn try_recv_all(&self) -> Result<Vec<FileEvent>, notify::Error> {
+        self.flush()
+    }
+
+    /// Touch a fresh cookie and read the channel until its creation arrives,
+    /// returning everything read before it. Without cookies, drains what the
+    /// channel holds.
+    pub fn flush(&self) -> Result<Vec<FileEvent>, notify::Error> {
+        let Some(cookies) = &self.cookies else {
+            return Ok(self.rx.try_iter().collect());
+        };
+        read_to_cookie(cookies, &mut || self.rx.recv_timeout(COOKIE_TIMEOUT).ok()).map_err(
+            |missing| match missing {
+                Missing::Touch(e) => notify::Error::io(e),
+                Missing::Cookie(path) => notify::Error::generic(&stalled(
+                    &path,
+                    &self
+                        .failures
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                )),
+            },
+        )
+    }
+
+    fn is_cookie(&self, event: &FileEvent) -> bool {
+        self.cookies.as_ref().is_some_and(|c| c.holds(event))
+    }
+}
+
+/// A directory of the watcher's own under the OS temp dir, watched on the
+/// same instance as the tree, where cookies are touched.
+struct Cookies {
+    dir: PathBuf,
+    next: Cell<u64>,
+}
+
+impl Cookies {
+    fn create() -> std::io::Result<Self> {
+        let base = std::env::temp_dir();
+        loop {
+            let dir = base.join(format!(
+                "dirsql-cookies-{}-{}",
+                std::process::id(),
+                COOKIE_DIRS.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    return Ok(Self {
+                        dir: dir.canonicalize()?,
+                        next: Cell::new(0),
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
         }
-        events
+    }
+}
+
+impl Drop for Cookies {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Where sync cookies are touched and recognised.
+trait CookieJar {
+    fn touch(&self) -> std::io::Result<PathBuf>;
+    fn discard(&self, cookie: &Path);
+    fn holds(&self, event: &FileEvent) -> bool;
+}
+
+impl CookieJar for Cookies {
+    fn touch(&self) -> std::io::Result<PathBuf> {
+        let n = self.next.get();
+        self.next.set(n + 1);
+        let cookie = self.dir.join(n.to_string());
+        std::fs::File::create(&cookie)?;
+        Ok(cookie)
+    }
+
+    fn discard(&self, cookie: &Path) {
+        let _ = std::fs::remove_file(cookie);
+    }
+
+    fn holds(&self, event: &FileEvent) -> bool {
+        match event {
+            FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => {
+                p.starts_with(&self.dir)
+            }
+            FileEvent::Rescan => false,
+        }
+    }
+}
+
+/// Why a barrier ended without its cookie.
+#[derive(Debug)]
+enum Missing {
+    Touch(std::io::Error),
+    Cookie(PathBuf),
+}
+
+/// Touch a cookie, then take events from `next` until the cookie's creation
+/// arrives, keeping every non-cookie event before it. An overflow may have
+/// dropped the cookie, so a [`FileEvent::Rescan`] swaps in a fresh one.
+fn read_to_cookie(
+    jar: &dyn CookieJar,
+    next: &mut dyn FnMut() -> Option<FileEvent>,
+) -> Result<Vec<FileEvent>, Missing> {
+    let mut cookie = jar.touch().map_err(Missing::Touch)?;
+    let mut events = Vec::new();
+    loop {
+        let Some(event) = next() else {
+            return Err(Missing::Cookie(cookie));
+        };
+        if event == FileEvent::Created(cookie.clone()) {
+            jar.discard(&cookie);
+            return Ok(events);
+        }
+        if jar.holds(&event) {
+            continue;
+        }
+        if event == FileEvent::Rescan {
+            jar.discard(&cookie);
+            cookie = jar.touch().map_err(Missing::Touch)?;
+        }
+        events.push(event);
+    }
+}
+
+/// The message for a barrier whose cookie never arrived.
+fn stalled(cookie: &Path, failures: &[String]) -> String {
+    let mut msg = format!(
+        "the file watcher's sync cookie {} did not arrive within {}s",
+        cookie.display(),
+        COOKIE_TIMEOUT.as_secs()
+    );
+    if !failures.is_empty() {
+        msg.push_str("; the watcher reported: ");
+        msg.push_str(&failures.join("; "));
+    }
+    msg
+}
+
+/// notify's callback. Never blocks: notify's thread also answers the
+/// forwarder's watch requests, so blocking it on a full channel the
+/// forwarder drains would deadlock both. An event that does not fit is
+/// dropped and a rescan owed in its place, as the kernel does on overflow.
+fn relay(
+    res: Result<Event, notify::Error>,
+    raw_tx: &mpsc::SyncSender<Event>,
+    overflowed: &AtomicBool,
+    failures: &Mutex<Vec<String>>,
+) {
+    let event = match res {
+        Ok(event) => event,
+        Err(e) => {
+            let mut failures = failures
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if failures.len() < FAILURES_KEPT {
+                failures.push(e.to_string());
+            }
+            return;
+        }
+    };
+    if overflowed.swap(false, Ordering::SeqCst) && raw_tx.try_send(overflow_event()).is_err() {
+        overflowed.store(true, Ordering::SeqCst);
+        return;
+    }
+    if let Err(mpsc::TrySendError::Full(_)) = raw_tx.try_send(event) {
+        overflowed.store(true, Ordering::SeqCst);
+        // Wakes a forwarder that emptied the channel before the flag was
+        // set, so the owed rescan is not left waiting for the next event.
+        let _ = raw_tx.try_send(Event::new(EventKind::Other));
+    }
+}
+
+/// What notify reports for an inotify queue overflow.
+fn overflow_event() -> Event {
+    Event::new(EventKind::Other).set_flag(Flag::Rescan)
+}
+
+/// The next raw event, or the rescan owed for dropped ones once every event
+/// queued ahead of the drop has been taken. `None` once the sender is gone.
+fn next_raw(raw_rx: &mpsc::Receiver<Event>, overflowed: &AtomicBool) -> Option<Event> {
+    match raw_rx.try_recv() {
+        Ok(event) => Some(event),
+        Err(mpsc::TryRecvError::Empty) if overflowed.swap(false, Ordering::SeqCst) => {
+            Some(overflow_event())
+        }
+        Err(mpsc::TryRecvError::Empty) => raw_rx.recv().ok(),
+        Err(mpsc::TryRecvError::Disconnected) => None,
     }
 }
 
@@ -138,11 +369,12 @@ impl Watcher {
 /// reported goes unseen. Ends once the [`Watcher`] or its reader is dropped.
 fn forward(
     raw_rx: &mpsc::Receiver<Event>,
-    tx: &mpsc::Sender<FileEvent>,
+    tx: &mpsc::SyncSender<FileEvent>,
     watcher: &Weak<Mutex<RecommendedWatcher>>,
     scopes: &[WatchScope],
+    overflowed: &AtomicBool,
 ) {
-    for event in raw_rx {
+    while let Some(event) = next_raw(raw_rx, overflowed) {
         for fe in translate_event(&event) {
             if let FileEvent::Created(path) = &fe
                 && is_real_dir(path)
@@ -408,16 +640,6 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
 }
 
 #[cfg(test)]
-fn rescan_event() -> Event {
-    Event {
-        kind: EventKind::Other,
-        paths: Vec::new(),
-        attrs: Default::default(),
-    }
-    .set_flag(notify::event::Flag::Rescan)
-}
-
-#[cfg(test)]
 fn io_error(raw_os_error: i32) -> notify::Error {
     notify::Error::io(std::io::Error::from_raw_os_error(raw_os_error))
 }
@@ -500,13 +722,13 @@ mod tests {
     }
 
     fn forwarded(events: Vec<Event>) -> Vec<FileEvent> {
-        let (raw_tx, raw_rx) = mpsc::channel();
-        let (tx, rx) = mpsc::channel();
+        let (raw_tx, raw_rx) = mpsc::sync_channel(QUEUE_BOUND);
+        let (tx, rx) = mpsc::sync_channel(QUEUE_BOUND);
         for event in events {
             raw_tx.send(event).unwrap();
         }
         drop(raw_tx);
-        forward(&raw_rx, &tx, &Weak::new(), &[]);
+        forward(&raw_rx, &tx, &Weak::new(), &[], &AtomicBool::new(false));
         drop(tx);
         rx.iter().collect()
     }
@@ -534,6 +756,310 @@ mod tests {
             modify_event(vec![PathBuf::from("/nowhere/a")]),
         ]);
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn forward_stops_once_its_reader_is_gone() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(QUEUE_BOUND);
+        let (tx, rx) = mpsc::sync_channel(QUEUE_BOUND);
+        drop(rx);
+        raw_tx
+            .send(modify_event(vec![PathBuf::from("/nowhere/a")]))
+            .unwrap();
+        let overflowed = AtomicBool::new(false);
+        forward(&raw_rx, &tx, &Weak::new(), &[], &overflowed);
+        raw_tx
+            .send(modify_event(vec![PathBuf::from("/nowhere/b")]))
+            .unwrap();
+        assert_eq!(raw_rx.try_iter().count(), 1, "the forwarder took one event");
+    }
+
+    #[test]
+    fn next_raw_takes_queued_events_before_an_owed_rescan() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(QUEUE_BOUND);
+        let overflowed = AtomicBool::new(true);
+        raw_tx
+            .send(modify_event(vec![PathBuf::from("/a")]))
+            .unwrap();
+        assert_eq!(
+            next_raw(&raw_rx, &overflowed).map(|e| e.need_rescan()),
+            Some(false)
+        );
+        assert_eq!(
+            next_raw(&raw_rx, &overflowed).map(|e| e.need_rescan()),
+            Some(true)
+        );
+        assert!(!overflowed.load(Ordering::SeqCst));
+        drop(raw_tx);
+        assert!(next_raw(&raw_rx, &overflowed).is_none());
+    }
+
+    #[test]
+    fn next_raw_waits_for_an_event_when_nothing_is_owed() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(QUEUE_BOUND);
+        raw_tx
+            .send(modify_event(vec![PathBuf::from("/a")]))
+            .unwrap();
+        drop(raw_tx);
+        let overflowed = AtomicBool::new(false);
+        assert!(next_raw(&raw_rx, &overflowed).is_some());
+        assert!(next_raw(&raw_rx, &overflowed).is_none());
+        assert!(!overflowed.load(Ordering::SeqCst));
+    }
+
+    fn relayed(
+        bound: usize,
+        events: Vec<Result<Event, notify::Error>>,
+    ) -> (Vec<Event>, bool, Vec<String>) {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(bound);
+        let overflowed = AtomicBool::new(false);
+        let failures = Mutex::new(Vec::new());
+        for event in events {
+            relay(event, &raw_tx, &overflowed, &failures);
+        }
+        (
+            raw_rx.try_iter().collect(),
+            overflowed.load(Ordering::SeqCst),
+            failures.into_inner().unwrap(),
+        )
+    }
+
+    #[test]
+    fn relay_passes_events_on_in_order() {
+        let (got, overflowed, failures) = relayed(
+            4,
+            vec![
+                Ok(modify_event(vec![PathBuf::from("/a")])),
+                Ok(remove_event(vec![PathBuf::from("/b")])),
+            ],
+        );
+        assert_eq!(
+            got.iter().flat_map(translate_event).collect::<Vec<_>>(),
+            vec![
+                FileEvent::Modified(PathBuf::from("/a")),
+                FileEvent::Deleted(PathBuf::from("/b"))
+            ]
+        );
+        assert!(!overflowed);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn relay_owes_a_rescan_for_an_event_that_does_not_fit() {
+        let (got, overflowed, _) = relayed(
+            1,
+            vec![
+                Ok(modify_event(vec![PathBuf::from("/a")])),
+                Ok(modify_event(vec![PathBuf::from("/b")])),
+                Ok(modify_event(vec![PathBuf::from("/c")])),
+            ],
+        );
+        assert_eq!(
+            got.iter().flat_map(translate_event).collect::<Vec<_>>(),
+            vec![FileEvent::Modified(PathBuf::from("/a"))]
+        );
+        assert!(overflowed);
+    }
+
+    #[test]
+    fn relay_sends_the_owed_rescan_ahead_of_the_next_event() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(2);
+        let overflowed = AtomicBool::new(true);
+        let failures = Mutex::new(Vec::new());
+        relay(
+            Ok(modify_event(vec![PathBuf::from("/a")])),
+            &raw_tx,
+            &overflowed,
+            &failures,
+        );
+        assert_eq!(
+            raw_rx
+                .try_iter()
+                .flat_map(|e| translate_event(&e))
+                .collect::<Vec<_>>(),
+            vec![FileEvent::Rescan, FileEvent::Modified(PathBuf::from("/a"))]
+        );
+        assert!(!overflowed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn relay_wakes_the_forwarder_when_an_event_is_dropped() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(1);
+        let overflowed = AtomicBool::new(false);
+        let failures = Mutex::new(Vec::new());
+        raw_tx
+            .send(modify_event(vec![PathBuf::from("/a")]))
+            .unwrap();
+        relay(
+            Ok(modify_event(vec![PathBuf::from("/b")])),
+            &raw_tx,
+            &overflowed,
+            &failures,
+        );
+        assert!(overflowed.load(Ordering::SeqCst));
+        assert!(raw_rx.try_recv().is_ok());
+        relay(
+            Ok(modify_event(vec![PathBuf::from("/c")])),
+            &raw_tx,
+            &overflowed,
+            &failures,
+        );
+        assert_eq!(
+            raw_rx.try_recv().map(|e| e.need_rescan()),
+            Ok(true),
+            "the owed rescan takes the freed slot"
+        );
+        assert!(
+            overflowed.load(Ordering::SeqCst),
+            "the event behind it is dropped too"
+        );
+    }
+
+    #[test]
+    fn relay_keeps_a_bounded_list_of_callback_errors() {
+        let errors = (0..FAILURES_KEPT + 3)
+            .map(|_| Err(max_files_watch_error()))
+            .collect();
+        let (got, overflowed, failures) = relayed(4, errors);
+        assert!(got.is_empty());
+        assert!(!overflowed);
+        assert_eq!(failures.len(), FAILURES_KEPT);
+        assert_eq!(failures[0], max_files_watch_error().to_string());
+    }
+
+    struct FakeJar {
+        touched: std::cell::RefCell<Vec<PathBuf>>,
+        discarded: std::cell::RefCell<Vec<PathBuf>>,
+        fail: bool,
+    }
+
+    impl FakeJar {
+        fn new() -> Self {
+            Self {
+                touched: Default::default(),
+                discarded: Default::default(),
+                fail: false,
+            }
+        }
+    }
+
+    impl CookieJar for FakeJar {
+        fn touch(&self) -> std::io::Result<PathBuf> {
+            if self.fail {
+                return Err(std::io::Error::from_raw_os_error(13));
+            }
+            let cookie = PathBuf::from(format!("/jar/{}", self.touched.borrow().len()));
+            self.touched.borrow_mut().push(cookie.clone());
+            Ok(cookie)
+        }
+
+        fn discard(&self, cookie: &Path) {
+            self.discarded.borrow_mut().push(cookie.to_path_buf());
+        }
+
+        fn holds(&self, event: &FileEvent) -> bool {
+            matches!(event, FileEvent::Created(p) | FileEvent::Deleted(p) if p.starts_with("/jar"))
+        }
+    }
+
+    fn feed(events: Vec<FileEvent>) -> impl FnMut() -> Option<FileEvent> {
+        let mut events = events.into_iter();
+        move || events.next()
+    }
+
+    #[test]
+    fn read_to_cookie_returns_what_arrived_before_the_cookie() {
+        let jar = FakeJar::new();
+        let got = read_to_cookie(
+            &jar,
+            &mut feed(vec![
+                FileEvent::Created(PathBuf::from("/r/a")),
+                FileEvent::Deleted(PathBuf::from("/jar/old")),
+                FileEvent::Created(PathBuf::from("/jar/0")),
+                FileEvent::Created(PathBuf::from("/r/late")),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(got, vec![FileEvent::Created(PathBuf::from("/r/a"))]);
+        assert_eq!(*jar.discarded.borrow(), vec![PathBuf::from("/jar/0")]);
+    }
+
+    #[test]
+    fn read_to_cookie_waits_for_a_fresh_cookie_after_a_rescan() {
+        let jar = FakeJar::new();
+        let got = read_to_cookie(
+            &jar,
+            &mut feed(vec![
+                FileEvent::Rescan,
+                FileEvent::Created(PathBuf::from("/jar/0")),
+                FileEvent::Created(PathBuf::from("/r/a")),
+                FileEvent::Created(PathBuf::from("/jar/1")),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![FileEvent::Rescan, FileEvent::Created(PathBuf::from("/r/a"))]
+        );
+        assert_eq!(
+            *jar.touched.borrow(),
+            vec![PathBuf::from("/jar/0"), PathBuf::from("/jar/1")]
+        );
+    }
+
+    #[test]
+    fn read_to_cookie_names_the_cookie_that_never_arrived() {
+        let jar = FakeJar::new();
+        let missing = read_to_cookie(
+            &jar,
+            &mut feed(vec![FileEvent::Created(PathBuf::from("/r/a"))]),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&missing, Missing::Cookie(p) if p == Path::new("/jar/0")),
+            "{missing:?}"
+        );
+    }
+
+    #[test]
+    fn read_to_cookie_reports_a_cookie_it_could_not_touch() {
+        let jar = FakeJar {
+            fail: true,
+            ..FakeJar::new()
+        };
+        let missing = read_to_cookie(&jar, &mut feed(Vec::new())).unwrap_err();
+        assert!(matches!(missing, Missing::Touch(_)), "{missing:?}");
+    }
+
+    #[test]
+    fn stalled_names_the_cookie_and_any_callback_errors() {
+        let bare = stalled(Path::new("/jar/3"), &[]);
+        assert_eq!(
+            bare,
+            "the file watcher's sync cookie /jar/3 did not arrive within 10s"
+        );
+        let with = stalled(Path::new("/jar/3"), &["one".into(), "two".into()]);
+        assert_eq!(with, format!("{bare}; the watcher reported: one; two"));
+    }
+
+    #[test]
+    fn cookies_live_in_their_own_directory_until_dropped() {
+        let cookies = Cookies::create().unwrap();
+        let other = Cookies::create().unwrap();
+        assert_ne!(cookies.dir, other.dir);
+        let dir = cookies.dir.clone();
+        assert!(is_real_dir(&dir));
+        let first = cookies.touch().unwrap();
+        let second = cookies.touch().unwrap();
+        assert_ne!(first, second);
+        assert!(cookies.holds(&FileEvent::Created(first.clone())));
+        assert!(cookies.holds(&FileEvent::Modified(first.clone())));
+        assert!(cookies.holds(&FileEvent::Deleted(second.clone())));
+        assert!(!cookies.holds(&FileEvent::Created(PathBuf::from("/r/a"))));
+        assert!(!cookies.holds(&FileEvent::Rescan));
+        cookies.discard(&first);
+        drop(cookies);
+        assert!(!is_real_dir(&dir));
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
@@ -707,7 +1233,7 @@ mod tests {
 
     #[test]
     fn translate_event_turns_a_rescan_flag_into_a_rescan() {
-        assert_eq!(translate_event(&rescan_event()), vec![FileEvent::Rescan]);
+        assert_eq!(translate_event(&overflow_event()), vec![FileEvent::Rescan]);
     }
 
     #[test]

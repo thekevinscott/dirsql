@@ -211,7 +211,7 @@ fn try_recv_all_drains_pending_events() {
 
     thread::sleep(Duration::from_millis(500));
 
-    let events = watcher.try_recv_all();
+    let events = watcher.try_recv_all().unwrap();
     assert!(
         !events.is_empty(),
         "Expected at least one event from batch file creation"
@@ -341,7 +341,7 @@ fn try_recv_all_returns_every_event_queued_before_it_was_called() {
         fs::write(file, "x").unwrap();
     }
 
-    let events = watcher.try_recv_all();
+    let events = watcher.try_recv_all().unwrap();
     let missing: Vec<_> = files
         .iter()
         .filter(|file| !events.contains(&FileEvent::Created((*file).clone())))
