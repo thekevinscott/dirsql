@@ -211,8 +211,11 @@ struct Cookies {
 
 impl Cookies {
     fn create() -> std::io::Result<Self> {
-        let base = std::env::temp_dir();
-        sweep_cookie_dirs(&base, pid_alive);
+        Self::create_in(&std::env::temp_dir())
+    }
+
+    fn create_in(base: &Path) -> std::io::Result<Self> {
+        sweep_cookie_dirs(base, pid_alive);
         loop {
             let dir = base.join(format!(
                 "dirsql-cookies-{}-{}",
@@ -1134,6 +1137,108 @@ mod tests {
         std::fs::create_dir_all(&stale).unwrap();
         let _jar = Cookies::create().unwrap();
         assert!(!stale.exists());
+    }
+
+    #[test]
+    fn cookies_skip_a_name_that_is_already_taken() {
+        let base = tempfile::TempDir::new().unwrap();
+        let next = COOKIE_DIRS.load(Ordering::Relaxed);
+        let taken: Vec<PathBuf> = (next..next + 64)
+            .map(|n| {
+                base.path()
+                    .join(format!("dirsql-cookies-{}-{n}", std::process::id()))
+            })
+            .collect();
+        for dir in &taken {
+            std::fs::create_dir(dir).unwrap();
+        }
+        let jar = Cookies::create_in(base.path()).unwrap();
+        assert!(!taken.iter().any(|t| t.canonicalize().unwrap() == jar.dir));
+    }
+
+    #[test]
+    fn cookies_report_a_base_they_cannot_create_in() {
+        let base = tempfile::TempDir::new().unwrap();
+        let missing = base.path().join("absent");
+        let err = Cookies::create_in(&missing).err().unwrap();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn discarding_a_cookie_removes_its_file() {
+        let jar = Cookies::create().unwrap();
+        let cookie = jar.touch().unwrap();
+        assert!(cookie.exists());
+        jar.discard(&cookie);
+        assert!(!cookie.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn watched() -> (tempfile::TempDir, PathBuf, Watcher) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let watcher = Watcher::new(&root).unwrap();
+        (dir, root, watcher)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cookie_then_write(watcher: &Watcher, file: &Path) {
+        watcher.cookies.as_ref().unwrap().touch().unwrap();
+        std::fs::write(file, "x").unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recv_passes_over_cookies_to_the_tree_event() {
+        let (_dir, root, watcher) = watched();
+        cookie_then_write(&watcher, &root.join("a"));
+        assert_eq!(watcher.recv(), Some(FileEvent::Created(root.join("a"))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recv_timeout_waits_past_cookies_for_a_later_tree_event() {
+        let (_dir, root, watcher) = watched();
+        let elsewhere = tempfile::TempDir::new().unwrap();
+        let staging = elsewhere.path().join("staging");
+        for i in 0..500 {
+            std::fs::create_dir_all(staging.join(format!("d{i}"))).unwrap();
+        }
+        // The forwarder watches each moved directory before it passes on
+        // the write, so the write lands after the channel has run dry.
+        std::fs::rename(&staging, root.join("moved")).unwrap();
+        cookie_then_write(&watcher, &root.join("a"));
+        let wanted = FileEvent::Created(root.join("a"));
+        let seen: Vec<_> = std::iter::from_fn(|| watcher.recv_timeout(Duration::from_secs(10)))
+            .scan(false, |done, e| {
+                (!*done).then(|| {
+                    *done = e == wanted;
+                    e
+                })
+            })
+            .collect();
+        assert_eq!(seen.last(), Some(&wanted), "{seen:?}");
+        assert!(!seen.iter().any(|e| watcher.is_cookie(e)), "{seen:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_recv_all_and_flush_return_what_was_written_before_them() {
+        let (_dir, root, watcher) = watched();
+        std::fs::write(root.join("a"), "x").unwrap();
+        assert!(
+            watcher
+                .try_recv_all()
+                .unwrap()
+                .contains(&FileEvent::Created(root.join("a")))
+        );
+        std::fs::write(root.join("b"), "x").unwrap();
+        assert!(
+            watcher
+                .flush()
+                .unwrap()
+                .contains(&FileEvent::Created(root.join("b")))
+        );
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
