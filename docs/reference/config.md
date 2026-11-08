@@ -363,10 +363,6 @@ values that match nothing:
 foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project_id = 2, which matches no row in `project`
 ```
 
-Past the first ten rows it counts the rest and names every other file holding
-one, or the table, for rows no single file owns (a table-wide `on-file` hook's):
-``(and 3 more, from `projects/gamma/tasks/t9.json`, table `note`)``.
-
 - **Build:** the build fails and nothing is written.
 - **Watch:** the batch is rolled back and reported as one error event, against
   the child's table and file. The database stays as it was before the batch.

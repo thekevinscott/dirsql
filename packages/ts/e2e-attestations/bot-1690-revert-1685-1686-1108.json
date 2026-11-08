@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794174915,
+  "exit_code": 0,
+  "commit": "bafe6e8ff27893abc85eb20cc6cdc78f3b4bd437",
+  "branch": "bot/1690-revert-1685-1686-1108"
+}
