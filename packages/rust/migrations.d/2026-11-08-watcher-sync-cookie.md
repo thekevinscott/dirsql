@@ -17,7 +17,7 @@ _None._
 
 #### Behavior changes without code changes
 
-- On Linux, each `Watcher` owns a `dirsql-cookies-*` directory under the OS temp dir, removed when the watcher drops.
+- On Linux, each `Watcher` owns a `dirsql-cookies-*` directory under the OS temp dir, removed when the watcher drops, or by the next watcher to start if its process was killed.
 - A watcher nobody drains stops buffering after 16384 events per channel; the backlog ends in `FileEvent::Rescan`.
 
 #### Verification

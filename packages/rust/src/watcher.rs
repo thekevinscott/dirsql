@@ -212,6 +212,7 @@ struct Cookies {
 impl Cookies {
     fn create() -> std::io::Result<Self> {
         let base = std::env::temp_dir();
+        sweep_cookie_dirs(&base, pid_alive);
         loop {
             let dir = base.join(format!(
                 "dirsql-cookies-{}-{}",
@@ -236,6 +237,31 @@ impl Drop for Cookies {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Drop never runs for a process that is killed, so each new jar removes the
+/// jars of processes that are gone.
+fn sweep_cookie_dirs(base: &Path, alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let owner = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("dirsql-cookies-"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse().ok());
+        if let Some(pid) = owner
+            && !alive(pid)
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    !cfg!(target_os = "linux") || Path::new("/proc").join(pid.to_string()).exists()
 }
 
 /// Where sync cookies are touched and recognised.
@@ -1065,6 +1091,49 @@ mod tests {
         cookies.discard(&first);
         drop(cookies);
         assert!(!is_real_dir(&dir));
+    }
+
+    #[test]
+    fn sweep_cookie_dirs_removes_only_the_jars_of_gone_processes() {
+        let base = tempfile::TempDir::new().unwrap();
+        for name in [
+            "dirsql-cookies-1-0",
+            "dirsql-cookies-2-0",
+            "dirsql-cookies-x-0",
+            "other-1-0",
+        ] {
+            std::fs::create_dir(base.path().join(name)).unwrap();
+        }
+        sweep_cookie_dirs(base.path(), |pid| pid == 2);
+        let mut left: Vec<_> = std::fs::read_dir(base.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["dirsql-cookies-2-0", "dirsql-cookies-x-0", "other-1-0"]
+        );
+    }
+
+    #[test]
+    fn sweep_cookie_dirs_ignores_a_missing_base() {
+        sweep_cookie_dirs(Path::new("/nonexistent/dirsql-base"), |_| false);
+    }
+
+    #[test]
+    fn pid_alive_knows_this_process() {
+        assert!(pid_alive(std::process::id()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_new_jar_sweeps_the_jar_of_a_gone_process() {
+        assert!(!pid_alive(u32::MAX));
+        let stale = std::env::temp_dir().join(format!("dirsql-cookies-{}-0", u32::MAX));
+        std::fs::create_dir_all(&stale).unwrap();
+        let _jar = Cookies::create().unwrap();
+        assert!(!stale.exists());
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
