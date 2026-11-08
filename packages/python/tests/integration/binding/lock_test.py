@@ -126,50 +126,90 @@ def _experiment_database(root):
 
     def fork(path):
         fork = relative(path).parent
-        return [{"id": fork.as_posix(), "window_id": fork.parent.parent.as_posix(), "position": int(fork.name)}]
+        return [
+            {
+                "id": fork.as_posix(),
+                "window_id": fork.parent.parent.as_posix(),
+                "position": int(fork.name),
+            }
+        ]
 
     def turn(path):
         turn = relative(path).parent
-        return [{"id": turn.as_posix(), "fork_id": turn.parent.parent.as_posix(), "position": int(turn.name)}]
+        return [
+            {
+                "id": turn.as_posix(),
+                "fork_id": turn.parent.parent.as_posix(),
+                "position": int(turn.name),
+            }
+        ]
 
     def advice(path):
         directory = relative(path).parent
         metadata = json.loads(Path(path).read_text())
         tokens = metadata.get("tokens")
-        return [{
-            "id": directory.as_posix(),
-            "text": (Path(path).parent / "advice.txt").read_bytes().decode("utf-8"), "score": metadata.get("score"),
-            "score_text": tokens and "".join(f"{token}<{bits:.1f}>" for token, bits in tokens),
-        }]
+        return [
+            {
+                "id": directory.as_posix(),
+                "text": (Path(path).parent / "advice.txt").read_bytes().decode("utf-8"),
+                "score": metadata.get("score"),
+                "score_text": tokens
+                and "".join(f"{token}<{bits:.1f}>" for token, bits in tokens),
+            }
+        ]
 
     def turn_advice(path):
         metadata = json.loads(Path(path).read_text())
         if metadata["advice"] is None:
             return []
-        return [{"turn_id": relative(path).parent.as_posix(), "advice_id": metadata["advice"]}]
+        return [
+            {
+                "turn_id": relative(path).parent.as_posix(),
+                "advice_id": metadata["advice"],
+            }
+        ]
 
     def generation(path):
         if json.loads(Path(path).read_text()).get("exit_code", -1) == -1:
             return []
         t = relative(path).parent.parent.parent
-        return [{"id": t.as_posix(), "turn_id": t.parent.parent.as_posix(), "position": int(t.name)}]
+        return [
+            {
+                "id": t.as_posix(),
+                "turn_id": t.parent.parent.as_posix(),
+                "position": int(t.name),
+            }
+        ]
 
     def t_attempt(path):
         attempt = relative(path).parent
         t = attempt.parent.parent
         generation = json.loads(Path(path).read_text())
-        return [{
-            "id": attempt.as_posix(), "turn_id": t.parent.parent.as_posix(), "sample": int(t.name),
-            "position": int(attempt.name), "exit_code": generation.get("exit_code"),
-            "timed_out": generation.get("timed_out", False),
-        }]
+        return [
+            {
+                "id": attempt.as_posix(),
+                "turn_id": t.parent.parent.as_posix(),
+                "sample": int(t.name),
+                "position": int(attempt.name),
+                "exit_code": generation.get("exit_code"),
+                "timed_out": generation.get("timed_out", False),
+            }
+        ]
 
     def test_results(path):
         tests = relative(path)
-        return [{
-            "id": f"{tests.as_posix()}#{case['index']}", "t_id": tests.parent.parent.parent.as_posix(), "test": case["index"],
-            "stdout": case["stdout"], "stderr": case["stderr"], "passed": case["passed"], "status": case["status"],
-        } for case in json.loads(Path(path).read_text())["cases"]]
+        return [
+            {
+                "id": f"{tests.as_posix()}#{case['index']}",
+                "t_id": tests.parent.parent.parent.as_posix(),
+                "test": case["index"],
+                "stdout": case["stdout"],
+                "stderr": case["stderr"],
+                "passed": case["passed"],
+                "status": case["status"],
+            }
+            for case in json.loads(Path(path).read_text())["cases"]
+        ]
 
     sources = {
         "windows": ("windows/*/window.json", window),
@@ -182,10 +222,19 @@ def _experiment_database(root):
         "test_results": (f"{TURN}/ts/*/attempts/*/tests.json", test_results),
     }
     statements = [statement for statement in SCHEMA.split(";") if statement.strip()]
-    return _Database(root, [
-        Table(name=name, ddl=statement, glob=sources.get(name, ("", None))[0], on_file=sources.get(name, ("", None))[1])
-        for statement in statements for name in [statement.split()[2]]
-    ])
+    return _Database(
+        root,
+        [
+            Table(
+                name=name,
+                ddl=statement,
+                glob=sources.get(name, ("", None))[0],
+                on_file=sources.get(name, ("", None))[1],
+            )
+            for statement in statements
+            for name in [statement.split()[2]]
+        ],
+    )
 
 
 def _seed(root):
