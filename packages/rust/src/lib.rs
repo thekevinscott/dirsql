@@ -7682,6 +7682,11 @@ mod internal_tests {
         for f in files.iter().chain(unseen) {
             fake.stats.insert(root.join(f), fake_stat());
         }
+        fk_db_over(root, fake, files)
+    }
+
+    /// [`fk_db`] over a prepared `fake`, whose files already exist.
+    fn fk_db_over(root: &Path, fake: FakeFs, files: &[&str]) -> (Arc<FakeFs>, DirSQL) {
         let fake = Arc::new(fake);
         let db = DirSQL::with_ignore_and_fs(
             root,
@@ -7830,6 +7835,183 @@ mod internal_tests {
             ]
         );
         assert_eq!(held(&db), Vec::new());
+    }
+
+    fn child_pids(db: &DirSQL) -> Vec<Value> {
+        db.query("SELECT pid FROM child ORDER BY pid")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["pid"].clone())
+            .collect()
+    }
+
+    /// The table and file each error event names, in order.
+    fn error_sources(events: &[RowEvent]) -> Vec<(Option<String>, PathBuf)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                RowEvent::Error {
+                    table, file_path, ..
+                } => Some((table.clone(), file_path.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_orphan_is_left_out_while_the_rest_of_its_batch_lands() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (_fake, db) = fk_db(root, &["p1", "c1"], &["c2", "p3"]);
+
+        let events = db.apply_file_events(vec![
+            FileEvent::Created(root.join("c2")),
+            FileEvent::Created(root.join("p3")),
+        ]);
+
+        assert_eq!(
+            error_sources(&events),
+            vec![(Some("child".into()), PathBuf::from("c2"))],
+            "got: {events:?}"
+        );
+        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(3)]);
+        assert_eq!(child_pids(&db), vec![Value::Integer(1)]);
+    }
+
+    #[test]
+    fn deleting_a_parent_drops_each_child_file_with_an_error_each() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = fk_db(root, &["p1", "p2", "c1", "cc1", "c2"], &[]);
+        fake.remove(&root.join("p1"));
+
+        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+
+        let mut sources = error_sources(&events);
+        sources.sort();
+        assert_eq!(
+            sources,
+            vec![
+                (Some("child".into()), PathBuf::from("c1")),
+                (Some("child".into()), PathBuf::from("cc1")),
+            ],
+            "got: {events:?}"
+        );
+        let deletes = events
+            .iter()
+            .filter(|event| matches!(event, RowEvent::Delete { .. }))
+            .count();
+        assert_eq!(deletes, 3, "the parent's row and each child's: {events:?}");
+        assert_eq!(parent_ids(&db), vec![Value::Integer(2)]);
+        assert_eq!(child_pids(&db), vec![Value::Integer(2)]);
+    }
+
+    #[test]
+    fn an_orphan_waits_for_its_own_file_not_its_parent() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (_fake, db) = fk_db(root, &["p1"], &["c2", "p2"]);
+        let dropped = db.apply_file_events(vec![FileEvent::Created(root.join("c2"))]);
+        assert_eq!(error_count(&dropped), 1, "got: {dropped:?}");
+
+        let events = db.apply_file_events(vec![FileEvent::Created(root.join("p2"))]);
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        assert_eq!(child_pids(&db), Vec::<Value>::new());
+
+        let events = db.apply_file_events(vec![FileEvent::Modified(root.join("c2"))]);
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        assert_eq!(child_pids(&db), vec![Value::Integer(2)]);
+    }
+
+    #[test]
+    fn a_rescan_readmits_an_orphan_whose_parent_has_since_arrived() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let fake = FakeFs::default().with_subtree(
+            root,
+            vec![
+                (root.join("p1"), "parent".into()),
+                (root.join("p2"), "parent".into()),
+                (root.join("c2"), "child".into()),
+            ],
+        );
+        let (_fake, db) = fk_db_over(root, fake, &["p1"]);
+        db.apply_file_events(vec![FileEvent::Created(root.join("c2"))]);
+        db.apply_file_events(vec![FileEvent::Created(root.join("p2"))]);
+        assert_eq!(child_pids(&db), Vec::<Value>::new());
+
+        let events = db.apply_file_events(vec![FileEvent::Rescan]);
+
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        assert_eq!(child_pids(&db), vec![Value::Integer(2)]);
+    }
+
+    #[test]
+    fn an_orphaned_aggregate_keeps_its_rows_while_the_rest_of_its_batch_lands() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut fake = FakeFs::default();
+        for f in ["p1", "c1", "c9", "p2"] {
+            fake.stats.insert(root.join(f), fake_stat());
+        }
+        let db = DirSQL::with_ignore_and_fs(
+            root,
+            vec![
+                Table::per_table(
+                    "agg",
+                    "CREATE TABLE agg (pid INTEGER REFERENCES parent(id))",
+                    "c*",
+                    |paths: &[PathBuf]| {
+                        Ok(paths
+                            .iter()
+                            .map(|p| {
+                                let name = p.to_string_lossy();
+                                infer::JsonRow(vec![(
+                                    "pid".into(),
+                                    serde_json::json!(
+                                        name[name.len() - 1..].parse::<i64>().unwrap()
+                                    ),
+                                )])
+                            })
+                            .collect())
+                    },
+                ),
+                Table::new(
+                    "parent",
+                    "CREATE TABLE parent (id INTEGER PRIMARY KEY)",
+                    "p*",
+                    |path| vec![Row::from_iter([("id".to_string(), trailing_id(path))])],
+                ),
+            ],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap();
+        db.set_fresh_reads(false);
+        let seeded = db.apply_file_events(vec![
+            FileEvent::Created(root.join("p1")),
+            FileEvent::Created(root.join("c1")),
+        ]);
+        assert_eq!(error_count(&seeded), 0, "got: {seeded:?}");
+
+        let events = db.apply_file_events(vec![
+            FileEvent::Created(root.join("c9")),
+            FileEvent::Created(root.join("p2")),
+        ]);
+
+        assert_eq!(
+            error_sources(&events),
+            vec![(Some("agg".into()), PathBuf::new())],
+            "got: {events:?}"
+        );
+        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(2)]);
+        let agg: Vec<Value> = db
+            .query("SELECT pid FROM agg ORDER BY pid")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["pid"].clone())
+            .collect();
+        assert_eq!(agg, vec![Value::Integer(1)]);
     }
 
     type Reads = Arc<Mutex<Vec<String>>>;

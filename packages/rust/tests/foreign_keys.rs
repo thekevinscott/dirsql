@@ -293,3 +293,52 @@ fn editing_a_parent_keeps_the_children_its_delete_would_cascade_to() {
         vec!["renamed"]
     );
 }
+
+#[test]
+fn an_orphan_is_left_out_and_the_rest_of_its_batch_lands() {
+    let (_dir, root, db) = family(&[("1", "alpha")], &[]);
+    db.set_fresh_reads(false);
+    let kid = root.join("children").join("kid.txt");
+    let lost = root.join("children").join("lost.txt");
+    fs::write(&kid, "1").unwrap();
+    fs::write(&lost, "9").unwrap();
+
+    let events = db.apply_file_events(vec![FileEvent::Created(kid), FileEvent::Created(lost)]);
+
+    let reported = errors(&events);
+    assert_eq!(reported.len(), 1, "expected one error, got {events:?}");
+    assert!(reported[0].contains("children/lost.txt"), "{}", reported[0]);
+    assert_eq!(names(&db, "SELECT name FROM child"), vec!["kid"]);
+}
+
+#[test]
+fn deleting_a_parent_drops_its_children_and_reports_each() {
+    let (_dir, root, db) = family(
+        &[("1", "alpha"), ("2", "beta")],
+        &[("a", "1"), ("b", "1"), ("c", "2")],
+    );
+    db.set_fresh_reads(false);
+    let parent = root.join("parents").join("1.txt");
+    fs::remove_file(&parent).unwrap();
+
+    let events = db.apply_file_events(vec![FileEvent::Deleted(parent)]);
+
+    let mut files: Vec<PathBuf> = events
+        .iter()
+        .filter_map(|event| match event {
+            RowEvent::Error { file_path, .. } => Some(file_path.clone()),
+            _ => None,
+        })
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        vec![
+            PathBuf::from("children/a.txt"),
+            PathBuf::from("children/b.txt")
+        ],
+        "{events:?}"
+    );
+    assert_eq!(names(&db, "SELECT name FROM parent"), vec!["beta"]);
+    assert_eq!(names(&db, "SELECT name FROM child"), vec!["c"]);
+}
