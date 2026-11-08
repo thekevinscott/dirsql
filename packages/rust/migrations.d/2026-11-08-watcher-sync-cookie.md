@@ -8,7 +8,8 @@
 
 | Before | After |
 | --- | --- |
-| `let events = watcher.try_recv_all();` | `let events = watcher.try_recv_all()?;` |
+| `let events = watcher.try_recv_all();` | `let events = watcher.try_recv_all()?;` (barrier) |
+| `let events = watcher.try_recv_all();` | `let events = watcher.queued();` (no wait, as before) |
 
 #### Deprecations removed
 

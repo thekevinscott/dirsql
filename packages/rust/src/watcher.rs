@@ -164,6 +164,11 @@ impl Watcher {
         }
     }
 
+    /// The events already copied off the OS queue, without waiting for more.
+    pub fn queued(&self) -> Vec<FileEvent> {
+        self.rx.try_iter().filter(|e| !self.is_cookie(e)).collect()
+    }
+
     /// Every event the OS queued before this call. Where the watcher has a
     /// sync cookie, that includes those not yet copied off the OS queue;
     /// elsewhere, only those already copied.

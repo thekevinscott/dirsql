@@ -375,3 +375,44 @@ fn an_undrained_backlog_past_the_queue_bound_ends_in_a_rescan() {
         events.len()
     );
 }
+
+fn queued_until(
+    watcher: &Watcher,
+    budget: Duration,
+    done: impl Fn(&[FileEvent]) -> bool,
+) -> Vec<FileEvent> {
+    let deadline = Instant::now() + budget;
+    let mut seen = Vec::new();
+    while Instant::now() < deadline && !done(&seen) {
+        seen.extend(watcher.queued());
+        thread::sleep(Duration::from_millis(20));
+    }
+    seen
+}
+
+#[test]
+fn queued_returns_what_has_arrived_without_waiting() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+    fs::write(root.join("a.txt"), "a").unwrap();
+
+    let seen = queued_until(&watcher, Duration::from_secs(5), |seen| {
+        created_under(seen, &root)
+    });
+
+    assert!(created_under(&seen, &root), "no Created in {seen:?}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn queued_never_returns_a_sync_cookie() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+    watcher.try_recv_all().unwrap();
+
+    let seen = queued_until(&watcher, Duration::from_millis(500), |_| false);
+
+    assert!(seen.is_empty(), "cookie events leaked: {seen:?}");
+}
