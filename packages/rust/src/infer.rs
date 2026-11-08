@@ -180,9 +180,63 @@ pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>
 /// `from_str` does.
 fn parse_row(line: &str, keys: &mut Keys) -> serde_json::Result<JsonRow> {
     let mut deserializer = serde_json::Deserializer::from_str(line);
-    let row = RowSeed(keys).deserialize(&mut deserializer)?;
+    let mut row = RowSeed(keys).deserialize(&mut deserializer)?;
     deserializer.end()?;
+    restore_integral_zeros(line, &mut row)?;
     Ok(row)
+}
+
+/// serde_json parses both `-0` and `-0.0` to the float -0.0, so the value
+/// alone cannot say whether the line spelled an integer.
+fn is_negative_zero(value: &serde_json::Value) -> bool {
+    value
+        .as_number()
+        .and_then(serde_json::Number::as_f64)
+        .is_some_and(|f| f == 0.0 && f.is_sign_negative())
+}
+
+/// Turn each -0.0 the line spelled without a fraction or exponent back into
+/// the integer 0, as SQLite's JSON functions type it. The line is re-read only
+/// when a row holds a negative zero.
+fn restore_integral_zeros(line: &str, row: &mut JsonRow) -> serde_json::Result<()> {
+    let mut spelled: Option<SpelledValues<'_>> = None;
+    for (index, (_, value)) in row.0.iter_mut().enumerate() {
+        if !is_negative_zero(value) {
+            continue;
+        }
+        let spelled = match &spelled {
+            Some(spelled) => spelled,
+            None => spelled.insert(serde_json::from_str(line)?),
+        };
+        if !spelled.0[index].get().contains(['.', 'e', 'E']) {
+            *value = serde_json::Value::from(0);
+        }
+    }
+    Ok(())
+}
+
+/// A row object's values as the line spells them, in line order.
+struct SpelledValues<'a>(Vec<&'a serde_json::value::RawValue>);
+
+impl<'de> serde::Deserialize<'de> for SpelledValues<'de> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(SpelledValues(Vec::new()))
+    }
+}
+
+impl<'de> Visitor<'de> for SpelledValues<'de> {
+    type Value = SpelledValues<'de>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON row object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(mut self, mut map: A) -> Result<Self, A::Error> {
+        while let Some((serde::de::IgnoredAny, raw)) = map.next_entry()? {
+            self.0.push(raw);
+        }
+        Ok(self)
+    }
 }
 
 /// The first `\uXXXX` escape in `line` naming a UTF-16 surrogate that is not
@@ -447,6 +501,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_rows_turns_only_a_bare_negative_zero_into_integer_zero() {
+        let row = &rows(&[r#"{"n":-5,"p":5,"z":-0,"f":-0.0,"e":-0E0,"o":{"z":-0}}"#])[0];
+        assert_eq!(row.get("n"), Some(&serde_json::json!(-5)));
+        assert_eq!(row.get("p"), Some(&serde_json::json!(5)));
+        assert_eq!(row.get("z"), Some(&serde_json::json!(0)));
+        assert_eq!(row.get("f"), Some(&serde_json::json!(-0.0)));
+        assert_eq!(row.get("e"), Some(&serde_json::json!(-0.0)));
+        assert!(row.get("z").unwrap().is_i64());
+        assert!(row.get("f").unwrap().is_f64());
+    }
+
+    #[test]
+    fn spelled_values_expects_a_row_object() {
+        let visitor = SpelledValues(Vec::new());
+        let expected: &dyn serde::de::Expected = &visitor;
+        assert_eq!(format!("{expected}"), "a JSON row object");
+    }
+
+    #[test]
     fn lone_surrogate_finds_an_unpaired_leading_or_trailing_half() {
         assert_eq!(lone_surrogate(r#"{"a":"\ud800"}"#), Some(r"\ud800"));
         assert_eq!(lone_surrogate(r#"{"a":"\uDBFF\u0041"}"#), Some(r"\uDBFF"));
@@ -559,6 +632,19 @@ mod tests {
     fn a_negative_integer_is_integer() {
         let columns = infer_schema(&rows(&[r#"{"i":-42}"#]));
         assert_eq!(ty_of(&columns, "i"), SqlType::Integer);
+    }
+
+    #[test]
+    fn a_negative_zero_is_integer() {
+        let columns = infer_schema(&rows(&[r#"{"z":-0}"#]));
+        assert_eq!(ty_of(&columns, "z"), SqlType::Integer);
+    }
+
+    #[test]
+    fn a_negative_zero_with_a_fraction_or_exponent_is_real() {
+        let columns = infer_schema(&rows(&[r#"{"f":-0.0,"e":-0e0}"#]));
+        assert_eq!(ty_of(&columns, "f"), SqlType::Real);
+        assert_eq!(ty_of(&columns, "e"), SqlType::Real);
     }
 
     #[test]
@@ -699,6 +785,14 @@ mod tests {
         let row = &rows(&[r#"{"s":"x","i":1}"#])[0];
         assert_eq!(cell(row, "s"), Value::Text("x".into()));
         assert_eq!(cell(row, "i"), Value::Integer(1));
+    }
+
+    #[test]
+    fn cell_reads_a_negative_zero_as_integer_zero() {
+        let row = &rows(&[r#"{"z":-0,"s":"-0","f":-0.0}"#])[0];
+        assert_eq!(cell(row, "z"), Value::Integer(0));
+        assert_eq!(cell(row, "s"), Value::Text("-0".into()));
+        assert!(matches!(cell(row, "f"), Value::Real(f) if f == 0.0 && f.is_sign_negative()));
     }
 
     #[test]
