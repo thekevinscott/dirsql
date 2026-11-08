@@ -196,10 +196,11 @@ fn steps(lo: i64, hi: i64, step: i64) -> Option<impl Iterator<Item = i128>> {
     Some((0..count).map(move |k| i128::from(lo) + k * signed))
 }
 
-/// Escape the braces bash left as literal text, so globset matches them
-/// rather than reading an alternation. A complete `[...]` class is copied as
-/// written; an unclosed `[` is a literal character, and so is one whose
-/// class would span a `/`, which ends a component first.
+/// Backslash-escape the braces bash left as literal text, so globset matches
+/// them rather than reading an alternation, and a word with no wildcard still
+/// reads as one. A complete `[...]` class is copied as written; an unclosed
+/// `[` is a literal character, and so is one whose class would span a `/`,
+/// which ends a component first.
 fn escape_braces(word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::with_capacity(word.len());
@@ -210,12 +211,10 @@ fn escape_braces(word: &str) -> String {
         }
         match (c, chars.get(i + 1)) {
             ('\\', Some(&next)) => {
-                match next {
-                    '{' => out.push_str("[{]"),
-                    '}' => out.push_str("[}]"),
-                    ',' => out.push(','),
-                    _ => out.extend(['\\', next]),
+                if next != ',' {
+                    out.push('\\');
                 }
+                out.push(next);
                 resume = i + 2;
             }
             ('[', _) => match class_end(&chars, i).filter(|&end| !chars[i..end].contains(&'/')) {
@@ -223,10 +222,9 @@ fn escape_braces(word: &str) -> String {
                     out.extend(&chars[i..=end]);
                     resume = end + 1;
                 }
-                None => out.push_str("[[]"),
+                None => out.push_str("\\["),
             },
-            ('{', _) => out.push_str("[{]"),
-            ('}', _) => out.push_str("[}]"),
+            ('{' | '}', _) => out.extend(['\\', c]),
             _ => out.push(c),
         }
     }
@@ -394,8 +392,8 @@ mod tests {
 
     #[test]
     fn literal_braces_are_escaped_for_globset() {
-        assert_eq!(escape_braces("x{q}y"), "x[{]q[}]y");
-        assert_eq!(escape_braces(r"x\{a,b\}"), "x[{]a,b[}]");
+        assert_eq!(escape_braces("x{q}y"), r"x\{q\}y");
+        assert_eq!(escape_braces(r"x\{a,b\}"), r"x\{a,b\}");
         assert_eq!(escape_braces(r"a\,b"), "a,b");
         assert_eq!(escape_braces(r"a\*b\"), r"a\*b\");
     }
@@ -403,38 +401,38 @@ mod tests {
     #[test]
     fn a_class_is_copied_as_written() {
         assert_eq!(escape_braces("[{}]x"), "[{}]x");
-        assert_eq!(escape_braces("[]{]{"), "[]{][{]");
-        assert_eq!(escape_braces("[!]{]{"), "[!]{][{]");
-        assert_eq!(escape_braces("[^}]}"), "[^}][}]");
+        assert_eq!(escape_braces("[]{]{"), r"[]{]\{");
+        assert_eq!(escape_braces("[!]{]{"), r"[!]{]\{");
+        assert_eq!(escape_braces("[^}]}"), r"[^}]\}");
     }
 
     #[test]
     fn an_unclosed_bracket_is_literal() {
-        assert_eq!(escape_braces("x[{q}"), "x[[][{]q[}]");
-        assert_eq!(escape_braces("x[]{"), "x[[]][{]");
-        assert_eq!(escape_braces("[!a"), "[[]!a");
+        assert_eq!(escape_braces("x[{q}"), r"x\[\{q\}");
+        assert_eq!(escape_braces("x[]{"), r"x\[]\{");
+        assert_eq!(escape_braces("[!a"), r"\[!a");
         assert_eq!(escape_braces("a].md"), "a].md");
     }
 
     #[test]
     fn a_class_spanning_a_slash_is_literal() {
-        assert_eq!(escape_braces("[b/c]/*"), "[[]b/c]/*");
-        assert_eq!(escape_braces("a[/]b"), "a[[]/]b");
-        assert_eq!(escape_braces("[!/]x"), "[[]!/]x");
+        assert_eq!(escape_braces("[b/c]/*"), r"\[b/c]/*");
+        assert_eq!(escape_braces("a[/]b"), r"a\[/]b");
+        assert_eq!(escape_braces("[!/]x"), r"\[!/]x");
         assert_eq!(escape_braces("[a]/[b]"), "[a]/[b]");
     }
 
     #[test]
     fn expand_leaves_an_unpartnered_brace_literal() {
-        assert_eq!(expand("{a.md"), vec!["[{]a.md"]);
-        assert_eq!(expand("a}.md"), vec!["a[}].md"]);
-        assert_eq!(expand("{a,b}}.md"), vec!["a[}].md", "b[}].md"]);
+        assert_eq!(expand("{a.md"), vec![r"\{a.md"]);
+        assert_eq!(expand("a}.md"), vec![r"a\}.md"]);
+        assert_eq!(expand("{a,b}}.md"), vec![r"a\}.md", r"b\}.md"]);
     }
 
     #[test]
     fn expand_escapes_every_word() {
-        assert_eq!(expand("{a,{b}}.md"), vec!["a.md", "[{]b[}].md"]);
-        assert_eq!(expand("{q}"), vec!["[{]q[}]"]);
+        assert_eq!(expand("{a,{b}}.md"), vec!["a.md", r"\{b\}.md"]);
+        assert_eq!(expand("{q}"), vec![r"\{q\}"]);
         assert_eq!(expand("plain/*.md"), vec!["plain/*.md"]);
     }
 }
