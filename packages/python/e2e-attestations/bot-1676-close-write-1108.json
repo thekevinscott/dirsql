@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/fresh_declared_repros_test.py -x -q",
+  "ran_at": 1794165840,
+  "exit_code": 0,
+  "commit": "3c632531a82b6c1eb96c896b00e928a1a274726e",
+  "branch": "bot/1676-close-write-1108"
+}
