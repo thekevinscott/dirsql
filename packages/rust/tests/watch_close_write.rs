@@ -1,8 +1,8 @@
 //! On Linux a watched file is read once its writer closes it, never while
-//! it is still being written.
+//! it is still being written; a file renamed into the tree is read at once.
 #![cfg(target_os = "linux")]
 
-use dirsql::{DirSQL, RowEvent, Value};
+use dirsql::{DirSQL, Row, RowEvent, Table, Value};
 use std::fs::{self, File};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -60,4 +60,53 @@ fn a_file_still_open_for_writing_is_not_read_until_it_closes() {
         "got: {after_close:?}"
     );
     assert_eq!(names(&db), vec![Value::Text("alpha".into())]);
+}
+
+fn incomplete_json_fails() -> Table {
+    Table::try_new(
+        "items",
+        "CREATE TABLE items (name TEXT)",
+        "**/*.json",
+        |path| {
+            let text = fs::read_to_string(path)?;
+            if !text.ends_with('}') {
+                return Err("incomplete".into());
+            }
+            Ok(vec![Row::from([("name".to_string(), Value::Text(text))])])
+        },
+    )
+}
+
+#[test]
+fn a_malformed_file_in_a_directory_renamed_into_the_tree_is_reported() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root");
+    let staging = dir.path().join("staging");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("bad.json"), r#"{"name": "#).unwrap();
+    let root = root.canonicalize().unwrap();
+    let db = DirSQL::builder()
+        .root(&root)
+        .table(incomplete_json_fails())
+        .build()
+        .unwrap();
+    db.start_watching().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    fs::rename(&staging, root.join("sub")).unwrap();
+
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && events.is_empty() {
+        events.extend(db.poll_events(Duration::from_millis(200)).unwrap());
+    }
+    assert!(
+        matches!(
+            events.as_slice(),
+            [RowEvent::Error { file_path, error, .. }]
+                if file_path == "sub/bad.json" && error.contains("incomplete")
+        ),
+        "got: {events:?}"
+    );
 }

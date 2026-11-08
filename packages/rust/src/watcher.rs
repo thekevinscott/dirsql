@@ -17,6 +17,9 @@ const EMFILE: i32 = 24;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileEvent {
     Created(PathBuf),
+    /// A path renamed into the tree, whose contents were complete before it
+    /// arrived.
+    MovedIn(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
     /// The OS dropped events (an inotify queue overflow); the index may have
@@ -144,7 +147,7 @@ fn forward(
 ) {
     for event in raw_rx {
         for fe in translate_event(&event) {
-            if let FileEvent::Created(path) = &fe
+            if let FileEvent::Created(path) | FileEvent::MovedIn(path) = &fe
                 && is_real_dir(path)
             {
                 let Some(watcher) = watcher.upgrade() else {
@@ -318,9 +321,9 @@ fn translate(
             // the same two paths; both sides were already translated above.
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => None,
             // A rename INTO the tree puts a path here that did not exist a
-            // moment ago — a creation, and for a directory one the watcher must
-            // walk, since the OS reports nothing for the files already inside.
-            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::Created(path.clone())),
+            // moment ago, and for a directory one the watcher must walk, since
+            // the OS reports nothing for the files already inside.
+            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::MovedIn(path.clone())),
             EventKind::Modify(_) if read_on_close => None,
             EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
             EventKind::Access(AccessKind::Close(AccessMode::Write)) if read_on_close => {
@@ -817,7 +820,7 @@ mod tests {
         let to = rename_to_event(vec![PathBuf::from("/tmp/in")]);
         let from = rename_from_event(vec![PathBuf::from("/tmp/out")]);
         let gone = remove_event(vec![PathBuf::from("/tmp/gone")]);
-        assert_eq!(on_close(&to), one(FileEvent::Created, "/tmp/in"));
+        assert_eq!(on_close(&to), one(FileEvent::MovedIn, "/tmp/in"));
         assert_eq!(on_close(&from), one(FileEvent::Deleted, "/tmp/out"));
         assert_eq!(on_close(&gone), one(FileEvent::Deleted, "/tmp/gone"));
     }
@@ -884,24 +887,24 @@ mod tests {
     }
 
     #[test]
-    fn translate_event_maps_rename_to_as_create() {
+    fn translate_event_maps_rename_to_as_moved_in() {
         // inotify emits `Modify(Name(To))` when a path is renamed INTO the
-        // watched tree; it is a creation so a moved-in directory gets walked.
+        // watched tree.
         let results = elsewhere(&rename_to_event(vec![PathBuf::from("/tmp/arrived")]));
         assert_eq!(
             results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/arrived"))]
+            vec![FileEvent::MovedIn(PathBuf::from("/tmp/arrived"))]
         );
     }
 
     #[test]
-    fn translate_event_maps_rename_any_as_create() {
-        // kqueue / FSEvents cannot tell which side of a rename they saw; a
-        // creation of a path that turns out not to exist is a harmless no-op.
+    fn translate_event_maps_rename_any_as_moved_in() {
+        // kqueue / FSEvents cannot tell which side of a rename they saw; an
+        // arrival of a path that turns out not to exist is a harmless no-op.
         let results = elsewhere(&rename_any_event(vec![PathBuf::from("/tmp/either")]));
         assert_eq!(
             results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/either"))]
+            vec![FileEvent::MovedIn(PathBuf::from("/tmp/either"))]
         );
     }
 

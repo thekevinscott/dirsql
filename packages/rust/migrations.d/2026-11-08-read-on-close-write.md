@@ -4,12 +4,15 @@
 
 On Linux the watcher reads a file on close-after-write or rename-into-place
 instead of on create or write. Affects `watch()`, `poll_events()` and the CLI
-`--watch` stream on Linux only; macOS and Windows are unchanged. Nothing
-breaks.
+`--watch` stream on Linux only; macOS and Windows are unchanged. Separately,
+on every platform a rename into the tree is now reported as
+`RawFileEvent::MovedIn` instead of `RawFileEvent::Created`, which breaks an
+exhaustive `match` on `RawFileEvent`.
 
 #### Required changes
 
-_None._
+- Handle `RawFileEvent::MovedIn(path)` wherever you `match` on
+  `RawFileEvent`. Treat it as you treated `Created`.
 
 #### Deprecations removed
 
@@ -20,8 +23,9 @@ _None._
 - A file is indexed when its writer closes it. While it is held open its
   previous rows stay and no event is emitted for it.
 - A `chmod` or `touch` on a file no longer re-reads it.
-- Scanning a newly created or renamed-in directory emits no error for a file
-  that fails to parse; the row appears once that file is closed.
+- Scanning a newly created directory emits no error for a file that fails
+  to parse; the row appears once that file is closed. A directory renamed
+  into the tree still reports such a file as an error.
 
 #### Verification
 
