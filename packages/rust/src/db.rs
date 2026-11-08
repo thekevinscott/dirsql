@@ -97,6 +97,26 @@ const READING_PRAGMAS: [&str; 10] = [
     "table_xinfo",
 ];
 
+fn deny_internal_pragma(ctx: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
+    match ctx.action {
+        rusqlite::hooks::AuthAction::Pragma {
+            pragma_value: Some(value),
+            ..
+        } if is_internal_table(value) => rusqlite::hooks::Authorization::Deny,
+        _ => rusqlite::hooks::Authorization::Allow,
+    }
+}
+
+/// A denial raised while a statement runs can only come from
+/// [`deny_internal_pragma`], the one authorizer left installed then.
+fn denied_while_running(error: rusqlite::Error) -> DbError {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) {
+        DbError::Unauthorized(INTERNAL_TABLE_DENIED_MSG.to_string())
+    } else {
+        DbError::Sqlite(error)
+    }
+}
+
 fn sets_session_state(pragma_name: &str) -> bool {
     !READING_PRAGMAS
         .iter()
@@ -104,7 +124,8 @@ fn sets_session_state(pragma_name: &str) -> bool {
 }
 
 fn is_internal_table(name: &str) -> bool {
-    name.starts_with(INTERNAL_TABLE_PREFIX)
+    name.get(..INTERNAL_TABLE_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(INTERNAL_TABLE_PREFIX))
 }
 
 /// The prefix SQLite puts on the one prepare error a path-table can rescue.
@@ -1636,10 +1657,11 @@ impl Db {
     /// A SQLite authorizer makes dirsql's internal bookkeeping tables
     /// unreachable through this surface: any read (or schema `PRAGMA`)
     /// targeting the reserved `_dirsql_*` namespace is denied at prepare time,
-    /// surfaced as [`DbError::Unauthorized`]. The authorizer is installed only
-    /// around this `prepare` and cleared immediately after, so the engine's own
-    /// internal writes (`insert_row`, delete-by-file, persist), which never go
-    /// through `query()`, are unaffected.
+    /// surfaced as [`DbError::Unauthorized`]; a `pragma_*` table-valued
+    /// function naming the namespace is denied when the statement runs. The
+    /// full authorizer is installed only around this `prepare`, so the
+    /// engine's own internal writes (`insert_row`, delete-by-file, persist),
+    /// which never go through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         self.query_ordered(sql).map(|result| result.rows)
     }
@@ -1775,7 +1797,7 @@ impl Db {
         bind(&mut stmt, params)?;
         let mut rows = stmt.raw_query();
         let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
-        while let Some(row) = rows.next()? {
+        while let Some(row) = rows.next().map_err(denied_while_running)? {
             let mut cells = recycled(spare);
             for (i, column) in column_names.iter().enumerate() {
                 cells.push(utf8_checked(row.get_ref(i)?, column)?);
@@ -1794,7 +1816,7 @@ impl Db {
         bind(&mut stmt, params)?;
         let mut rows = stmt.raw_query();
         let mut results = Vec::new();
-        while let Some(row) = rows.next()? {
+        while let Some(row) = rows.next().map_err(denied_while_running)? {
             let mut map = HashMap::new();
             for (i, name) in column_names.iter().enumerate() {
                 let val = rusqlite::types::Value::from(utf8_checked(row.get_ref(i)?, name)?);
@@ -1904,7 +1926,11 @@ impl Db {
         let reads_cb = Arc::clone(&reads);
         self.conn
             .authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
-                AuthAction::Read { table_name, .. } if is_internal_table(table_name) => {
+                // dbstat lists every b-tree by name, so it would enumerate the
+                // namespace no per-table check can filter.
+                AuthAction::Read { table_name, .. }
+                    if is_internal_table(table_name) || table_name == "dbstat" =>
+                {
                     *denial_cb.lock().unwrap() = Some(INTERNAL_TABLE_DENIED_MSG);
                     Authorization::Deny
                 }
@@ -1943,10 +1969,11 @@ impl Db {
             }));
         let mut statements = rusqlite::Batch::new(&self.conn, sql);
         let prepared = statements.next();
-        // Clear the authorizer so it only ever gates this one user query; the
-        // shared connection's internal write paths must not see it.
-        self.conn
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        // The shared connection's internal write paths must not see the full
+        // authorizer. What stays installed gates the PRAGMA a `pragma_*`
+        // table-valued function prepares only once the statement runs, the
+        // first point its argument is known.
+        self.conn.authorizer(Some(deny_internal_pragma));
 
         match prepared {
             Ok(Some(stmt)) => {
@@ -3516,6 +3543,8 @@ mod tests {
         assert!(is_internal_table("_dirsql_files"));
         assert!(is_internal_table("_dirsql_meta"));
         assert!(is_internal_table("_dirsql_anything_future"));
+        assert!(is_internal_table("_DIRSQL_INTERNAL_ROWS"));
+        assert!(is_internal_table("_DirSql_meta"));
     }
 
     #[test]
@@ -3545,6 +3574,46 @@ mod tests {
             .query("PRAGMA table_info(_dirsql_internal_rows)")
             .unwrap_err();
         assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+    }
+
+    #[test]
+    fn query_denies_internal_schema_reads_in_every_spelling() {
+        let db = Db::new().unwrap();
+        for sql in [
+            "PRAGMA table_info('_DIRSQL_INTERNAL_ROWS')",
+            "SELECT name FROM pragma_table_info('_dirsql_internal_rows')",
+            "SELECT name FROM pragma_index_list('_dirsql_internal_rows')",
+            "SELECT name FROM pragma_table_info('_DIRSQL_' || 'internal_rows')",
+            "SELECT name, ncell FROM dbstat",
+        ] {
+            let err = db.query(sql).unwrap_err();
+            assert!(
+                matches!(err, DbError::Unauthorized(_)),
+                "{sql} should be denied, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_each_denies_a_pragma_function_on_an_internal_table() {
+        let db = Db::new().unwrap();
+        let err = db
+            .query_each(
+                "SELECT name FROM pragma_table_info('_dirsql_internal_rows')",
+                |_| (),
+                |_, _| {},
+            )
+            .unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+    }
+
+    #[test]
+    fn query_allows_a_pragma_function_on_a_user_table() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let rows = db.query("SELECT name FROM pragma_table_info('t')").unwrap();
+        assert_eq!(rows.len(), 1, "expected one column row, got {rows:?}");
+        assert_eq!(rows[0]["name"], Value::Text("id".into()));
     }
 
     #[test]
