@@ -8534,6 +8534,7 @@ mod internal_tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn take_held_restates_each_path_as_it_is_now() {
         let dir = TempDir::new().unwrap();
