@@ -314,3 +314,64 @@ fn scoped_watcher_reports_files_in_a_new_directory() {
         "saw: {events:?}"
     );
 }
+
+/// A directory renamed into the tree with `breadth` subdirectories: the
+/// forwarder watches each before passing on anything queued behind it.
+#[cfg(target_os = "linux")]
+fn busy_forwarder(base: &std::path::Path, root: &std::path::Path, breadth: usize) {
+    let staging = base.join("staging");
+    for i in 0..breadth {
+        fs::create_dir_all(staging.join(format!("d{i}"))).unwrap();
+    }
+    fs::rename(&staging, root.join("moved")).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn try_recv_all_returns_every_event_queued_before_it_was_called() {
+    let base = TempDir::new().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let root = base.join("root");
+    fs::create_dir(&root).unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+
+    busy_forwarder(&base, &root, 2000);
+    let files: Vec<_> = (0..50).map(|i| root.join(format!("f{i}.txt"))).collect();
+    for file in &files {
+        fs::write(file, "x").unwrap();
+    }
+
+    let events = watcher.try_recv_all();
+    let missing: Vec<_> = files
+        .iter()
+        .filter(|file| !events.contains(&FileEvent::Created((*file).clone())))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} of {} writes missing from try_recv_all",
+        missing.len(),
+        files.len()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_undrained_backlog_past_the_queue_bound_ends_in_a_rescan() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+
+    let file = root.join("f");
+    for _ in 0..60_000 {
+        fs::write(&file, "x").unwrap();
+    }
+
+    let events = collect_events_until(&watcher, Duration::from_secs(20), |seen| {
+        seen.contains(&FileEvent::Rescan)
+    });
+    assert!(
+        events.contains(&FileEvent::Rescan),
+        "no Rescan after {} events",
+        events.len()
+    );
+}
