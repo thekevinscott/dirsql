@@ -3,10 +3,13 @@
 //! constraint to its COMMIT, and a COMMIT that finds an orphan rolls the unit
 //! back and names the rows that broke it.
 
+use std::collections::HashMap;
+
 use rusqlite::Connection;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::types::ValueRef;
 
-use crate::db::DbError;
+use crate::db::{DbError, Value};
 use crate::sql_literal::{quote_identifier, quote_literal};
 
 /// How many offending rows a violation message lists before summarizing.
@@ -54,15 +57,62 @@ pub(crate) fn begin(conn: &Connection) -> rusqlite::Result<()> {
 /// transaction back; one refused for an orphaned row reports it as a
 /// [`DbError::ForeignKey`].
 pub(crate) fn commit(conn: &Connection) -> Result<(), DbError> {
-    let Err(err) = conn.execute_batch("COMMIT") else {
+    let Some(violation) = try_commit(conn)? else {
         return Ok(());
+    };
+    conn.execute_batch("ROLLBACK")?;
+    Err(DbError::ForeignKey(violation))
+}
+
+/// Commit the open transaction, or, when an orphaned row refuses it, leave
+/// the transaction open and report the violation so the caller can resolve
+/// it and try again. Any other refusal rolls the transaction back.
+pub(crate) fn try_commit(conn: &Connection) -> Result<Option<ForeignKeyViolation>, DbError> {
+    let Err(err) = conn.execute_batch("COMMIT") else {
+        return Ok(None);
     };
     if conn.is_autocommit() {
         return Err(DbError::Sqlite(err));
     }
-    let violation = describe(conn).ok().flatten();
-    conn.execute_batch("ROLLBACK")?;
-    Err(violation.map_or(DbError::Sqlite(err), DbError::ForeignKey))
+    match describe(conn) {
+        Ok(Some(violation)) => Ok(Some(violation)),
+        _ => {
+            conn.execute_batch("ROLLBACK")?;
+            Err(DbError::Sqlite(err))
+        }
+    }
+}
+
+/// Whether `table` declares a foreign key.
+pub(crate) fn references(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_foreign_key_list(?1))",
+        [table],
+        |row| row.get(0),
+    )
+}
+
+/// Every row of `table` that breaks none of its foreign keys, in rowid order.
+pub(crate) fn sound_rows(
+    conn: &Connection,
+    table: &str,
+) -> rusqlite::Result<Vec<HashMap<String, Value>>> {
+    let sql = format!(
+        "SELECT * FROM {} WHERE rowid NOT IN \
+         (SELECT rowid FROM pragma_foreign_key_check({})) ORDER BY rowid",
+        quote_identifier(table),
+        quote_literal(table)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+    stmt.query_map([], |row| {
+        columns
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Ok((name.clone(), Value::from(row.get::<_, SqlValue>(i)?))))
+            .collect()
+    })?
+    .collect()
 }
 
 /// Run `unit` so that it either applies whole or not at all, inside or
@@ -497,6 +547,76 @@ mod tests {
     #[test]
     fn a_null_value_renders_as_null() {
         assert_eq!(render(ValueRef::Null), "NULL");
+    }
+
+    #[test]
+    fn try_commit_commits_a_clean_unit() {
+        let conn = family(CHILD);
+        begin(&conn).unwrap();
+        conn.execute_batch("INSERT INTO parent VALUES (1, 'a')")
+            .unwrap();
+        assert_eq!(try_commit(&conn).unwrap(), None);
+        assert!(conn.is_autocommit());
+        assert_eq!(count(&conn, "parent"), 1);
+    }
+
+    #[test]
+    fn try_commit_leaves_an_orphaned_unit_open_to_resolve() {
+        let conn = family(CHILD);
+        begin(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO parent VALUES (1, 'a');
+             INSERT INTO child VALUES ('kid', 9);
+             INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/a.txt', 1, 1);",
+        )
+        .unwrap();
+
+        let v = try_commit(&conn)
+            .unwrap()
+            .expect("an orphan refuses the commit");
+        assert_eq!(v.offenders, vec![offender("child", Some("kids/a.txt"))]);
+        assert!(!conn.is_autocommit());
+
+        conn.execute_batch("DELETE FROM child").unwrap();
+        assert_eq!(try_commit(&conn).unwrap(), None);
+        assert!(conn.is_autocommit());
+        assert_eq!(count(&conn, "parent"), 1);
+    }
+
+    #[test]
+    fn try_commit_without_a_transaction_reports_sqlite() {
+        let conn = family(CHILD);
+        assert!(matches!(try_commit(&conn), Err(DbError::Sqlite(_))));
+    }
+
+    #[test]
+    fn references_is_whether_a_table_declares_a_foreign_key() {
+        let conn = family(CHILD);
+        assert!(references(&conn, "child").unwrap());
+        assert!(!references(&conn, "parent").unwrap());
+    }
+
+    #[test]
+    fn sound_rows_are_every_row_but_the_orphans() {
+        let conn = family(CHILD);
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO parent VALUES (1, 'a');
+             INSERT INTO child VALUES ('lost', 9), ('kid', 1), ('gone', 8);",
+        )
+        .unwrap();
+        let names: Vec<Value> = sound_rows(&conn, "child")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["name"].clone())
+            .collect();
+        assert_eq!(names, vec![Value::Text("kid".into())]);
+    }
+
+    #[test]
+    fn sound_rows_of_a_missing_table_fails() {
+        let conn = family(CHILD);
+        assert!(sound_rows(&conn, "ghost").is_err());
     }
 
     #[test]

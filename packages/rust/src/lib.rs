@@ -453,9 +453,6 @@ struct DirSqlInner {
     /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
     /// deleted directory is traced back to the tables it fed.
     batch_files: Mutex<HashMap<String, Vec<String>>>,
-    /// The file events of watch batches a foreign key rejected, replayed
-    /// with every later batch until one lands them.
-    held: Mutex<Vec<FileEvent>>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Watcher>>,
@@ -987,6 +984,8 @@ impl DirSQL {
         out
     }
 
+    /// Apply `events`, and those `late` reports while they are routed, in one
+    /// transaction whose foreign keys are checked at its end.
     fn apply_events(
         &self,
         events: Vec<FileEvent>,
@@ -995,51 +994,8 @@ impl DirSQL {
         if events.is_empty() {
             return Vec::new();
         }
-        let held = self.take_held();
-        if held.is_empty() {
-            return match self.apply_batch(events, &mut late) {
-                Ok(out) => out,
-                Err(rejected) => {
-                    self.hold(rejected.events);
-                    rejected.errors
-                }
-            };
-        }
-        // An orphan the held events left may be resolved by this batch, so
-        // they go first, together. When they still can't land, this batch
-        // is tried alone, so a change elsewhere is not held up behind them.
-        let held_len = held.len();
-        let mut rejected =
-            match self.apply_batch(held.into_iter().chain(events).collect(), &mut late) {
-                Ok(out) => return out,
-                Err(rejected) => rejected,
-            };
-        let fresh = rejected.events.split_off(held_len);
-        self.hold(rejected.events);
-        match self.apply_batch(fresh, &mut Vec::new) {
-            Ok(out) => rejected
-                .errors
-                .split_off(rejected.errors.len() - 1)
-                .into_iter()
-                .chain(out)
-                .collect(),
-            Err(fresh) => {
-                self.hold(fresh.events);
-                rejected.errors
-            }
-        }
-    }
-
-    /// Apply `events`, and those `late` reports while they are routed, in one
-    /// transaction whose foreign keys are checked at its end.
-    fn apply_batch(
-        &self,
-        events: Vec<FileEvent>,
-        late: &mut impl FnMut() -> Vec<FileEvent>,
-    ) -> std::result::Result<Vec<RowEvent>, RejectedBatch> {
-        let mut applied = Vec::new();
         if let Err(e) = self.with_db(|db| Ok(foreign_key::begin(db.conn())?)) {
-            return Ok(vec![batch_error(e)]);
+            return vec![batch_error(e)];
         }
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
@@ -1047,7 +1003,6 @@ impl DirSQL {
         let mut batch = events;
         while !batch.is_empty() {
             for fe in batch {
-                applied.push(fe.clone());
                 if fe == FileEvent::Rescan {
                     rescan = true;
                     continue;
@@ -1061,62 +1016,100 @@ impl DirSQL {
         if rescan {
             out.extend(self.rescan(&mut pending));
         }
+        let snapshots = self.aggregate_snapshots(&pending);
         out.extend(self.refresh_pending(pending));
-        match self.with_db(|db| foreign_key::commit(db.conn())) {
-            Ok(()) => Ok(out),
-            Err(e) => {
-                let mut errors: Vec<RowEvent> = out
-                    .into_iter()
-                    .filter(|event| matches!(event, RowEvent::Error { .. }))
-                    .collect();
-                errors.push(batch_error(e));
-                Err(RejectedBatch {
-                    events: applied,
-                    errors,
-                })
-            }
-        }
+        self.commit_batch(out, snapshots)
     }
 
-    /// Keep `events` to replay with the next batch, once per path.
-    fn hold(&self, events: Vec<FileEvent>) {
-        let Ok(mut held) = self.inner.held.lock() else {
-            return;
+    /// The rows each per-table hook in `pending` that declares a foreign key
+    /// holds before it re-runs, to put back should its new rows reference
+    /// nothing.
+    fn aggregate_snapshots(&self, pending: &PendingRefresh) -> HashMap<String, Vec<Row>> {
+        let Ok(db) = self.inner.db.lock() else {
+            return HashMap::new();
         };
-        for event in events {
-            if !held.contains(&event) {
-                held.push(event);
-            }
-        }
+        pending
+            .0
+            .iter()
+            .filter(|(table, _)| foreign_key::references(db.conn(), table).unwrap_or(false))
+            .filter_map(|(table, _)| {
+                let rows = db.get_rows_by_file(table, BATCH_OWNER).ok()?;
+                Some((table.clone(), rows))
+            })
+            .collect()
     }
 
-    /// The held events, each restated as the path's state now: a path that
-    /// exists is re-read (or, for a directory, walked), and one that doesn't
-    /// is deleted. A replay then can't undo a later change to the same path.
-    fn take_held(&self) -> Vec<FileEvent> {
-        let held = match self.inner.held.lock() {
-            Ok(mut held) => std::mem::take(&mut *held),
-            Err(_) => return Vec::new(),
-        };
-        let mut restated: Vec<FileEvent> = Vec::new();
-        for event in held {
-            let event = match event {
-                FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => {
-                    if self.inner.fs.is_file(&p).unwrap_or(false)
-                        || self.inner.fs.is_dir(&p).unwrap_or(false)
-                    {
-                        FileEvent::Created(p)
-                    } else {
-                        FileEvent::Deleted(p)
-                    }
-                }
-                FileEvent::Rescan => FileEvent::Rescan,
+    /// Commit the open batch. While a foreign key refuses it, the rows of
+    /// each offending file are dropped and an offending per-table hook's
+    /// rows are put back as they were, each reported once. A violation
+    /// neither resolves rolls the whole batch back.
+    fn commit_batch(
+        &self,
+        mut out: Vec<RowEvent>,
+        mut snapshots: HashMap<String, Vec<Row>>,
+    ) -> Vec<RowEvent> {
+        loop {
+            let violation = match self.with_db(|db| foreign_key::try_commit(db.conn())) {
+                Ok(None) => return out,
+                Ok(Some(violation)) => violation,
+                Err(e) => return rejected(out, e),
             };
-            if !restated.contains(&event) {
-                restated.push(event);
+            let mut resolved = false;
+            for offender in &violation.offenders {
+                let undone = match &offender.file {
+                    Some(file) => self.handle_delete(&offender.table, file),
+                    None => match snapshots.remove(&offender.table) {
+                        Some(rows) => self.restore_aggregate(&offender.table, rows),
+                        None => self.drop_orphaned_aggregate_rows(&offender.table),
+                    },
+                };
+                resolved |= !undone
+                    .iter()
+                    .any(|event| matches!(event, RowEvent::Error { .. }));
+                out.extend(undone);
+                out.push(error_event(
+                    Some(&offender.table),
+                    offender.file.as_deref().unwrap_or(BATCH_OWNER),
+                    violation.message.clone(),
+                ));
+            }
+            if !resolved {
+                let rolled_back = self.with_db(|db| Ok(db.conn().execute_batch("ROLLBACK")?));
+                return rejected(
+                    out,
+                    rolled_back
+                        .err()
+                        .unwrap_or(DirSqlError::Core(DbError::ForeignKey(violation))),
+                );
             }
         }
-        restated
+    }
+
+    /// Leave out each row of the per-table hook's `table` that breaks a
+    /// foreign key, keeping the rest.
+    fn drop_orphaned_aggregate_rows(&self, table: &str) -> Vec<RowEvent> {
+        let sound = match self.with_db(|db| Ok(foreign_key::sound_rows(db.conn(), table)?)) {
+            Ok(rows) => rows,
+            Err(e) => return vec![error_event(Some(table), BATCH_OWNER, e.to_string())],
+        };
+        self.restore_aggregate(table, sound)
+    }
+
+    /// Put `rows` back as every row of the per-table hook's `table`.
+    fn restore_aggregate(&self, table: &str, rows: Vec<Row>) -> Vec<RowEvent> {
+        let db = match self.inner.db.lock() {
+            Ok(db) => db,
+            Err(e) => return vec![error_event(Some(table), BATCH_OWNER, e.to_string())],
+        };
+        let restored = db.shape_value_rows(table, rows, false).and_then(|rows| {
+            foreign_key::atomically(db.conn(), || {
+                db.reconcile_batch_rows(table, BATCH_OWNER, &rows)
+            })
+        });
+        match restored {
+            Ok(changes) => table_diff(table, &changes, BATCH_OWNER),
+            Err(e) => vec![error_event(Some(table), BATCH_OWNER, e.to_string())],
+        }
     }
 
     fn with_db<T>(&self, f: impl FnOnce(&Db) -> std::result::Result<T, DbError>) -> Result<T> {
@@ -1384,17 +1377,7 @@ impl DirSQL {
             Err(message) => return vec![error_event(Some(table), trigger, message)],
         };
 
-        if changes.keyed {
-            differ::diff_keyed(
-                table,
-                &changes.removed,
-                &changes.updated,
-                &changes.added,
-                trigger,
-            )
-        } else {
-            differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
-        }
+        table_diff(table, &changes, trigger)
     }
 
     /// Shape a per-table hook's rows and write them as `table`'s, held open
@@ -2190,7 +2173,6 @@ impl DirSQL {
                 strict_map,
                 declared,
                 batch_files: Mutex::new(batch_files),
-                held: Mutex::new(Vec::new()),
                 scan_failures: Vec::new(),
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
@@ -3218,11 +3200,30 @@ fn start_per_table_hooks(
     (feeds, running)
 }
 
-/// A watch batch a foreign key rejected: the events it applied, and the
-/// errors that report it.
-struct RejectedBatch {
-    events: Vec<FileEvent>,
-    errors: Vec<RowEvent>,
+/// The errors of a batch that could not be applied, then the failure that
+/// rolled it back. Its row changes never landed, so none are reported.
+fn rejected(out: Vec<RowEvent>, e: DirSqlError) -> Vec<RowEvent> {
+    let mut errors: Vec<RowEvent> = out
+        .into_iter()
+        .filter(|event| matches!(event, RowEvent::Error { .. }))
+        .collect();
+    errors.push(batch_error(e));
+    errors
+}
+
+/// The row events that take a per-table hook's rows through `changes`.
+fn table_diff(table: &str, changes: &db::RowChanges, trigger: &str) -> Vec<RowEvent> {
+    if changes.keyed {
+        differ::diff_keyed(
+            table,
+            &changes.removed,
+            &changes.updated,
+            &changes.added,
+            trigger,
+        )
+    } else {
+        differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
+    }
 }
 
 /// The error event for a watch batch that could not be applied: an orphaned
@@ -7734,109 +7735,6 @@ mod internal_tests {
             .count()
     }
 
-    fn held(db: &DirSQL) -> Vec<FileEvent> {
-        db.inner.held.lock().unwrap().clone()
-    }
-
-    #[test]
-    fn a_rejected_batch_is_held_until_a_batch_resolves_it() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let (fake, db) = fk_db(root, &["p1", "p2", "c1"], &[]);
-        fake.remove(&root.join("p1"));
-
-        let rejected = db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
-        assert_eq!(error_count(&rejected), 1, "got: {rejected:?}");
-        assert_eq!(rejected.len(), 1, "got: {rejected:?}");
-        assert_eq!(held(&db), vec![FileEvent::Deleted(root.join("p1"))]);
-        assert_eq!(db.apply_file_events(Vec::new()), Vec::new());
-        assert_eq!(held(&db).len(), 1, "an empty poll replays nothing");
-
-        fake.remove(&root.join("c1"));
-        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("c1"))]);
-        assert_eq!(error_count(&events), 0, "got: {events:?}");
-        assert_eq!(events.len(), 2, "got: {events:?}");
-        assert_eq!(parent_ids(&db), vec![Value::Integer(2)]);
-        assert_eq!(held(&db), Vec::new());
-    }
-
-    #[test]
-    fn a_batch_lands_alone_while_a_held_one_still_fails() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let (fake, db) = fk_db(root, &["p1", "c1"], &["p3"]);
-        fake.remove(&root.join("p1"));
-        db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
-
-        let events = db.apply_file_events(vec![FileEvent::Created(root.join("p3"))]);
-
-        assert_eq!(error_count(&events), 1, "the held rejection: {events:?}");
-        assert_eq!(events.len(), 2, "the error and p3's insert: {events:?}");
-        assert_eq!(held(&db), vec![FileEvent::Deleted(root.join("p1"))]);
-        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(3)]);
-    }
-
-    #[test]
-    fn a_held_batch_and_a_failing_one_are_both_held() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let (fake, db) = fk_db(root, &["p1", "p2", "c1", "c2"], &[]);
-        fake.remove(&root.join("p1"));
-        db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
-        fake.remove(&root.join("p2"));
-
-        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("p2"))]);
-
-        assert_eq!(error_count(&events), 1, "got: {events:?}");
-        assert_eq!(events.len(), 1, "got: {events:?}");
-        assert_eq!(
-            held(&db),
-            vec![
-                FileEvent::Deleted(root.join("p1")),
-                FileEvent::Deleted(root.join("p2"))
-            ]
-        );
-        assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(2)]);
-    }
-
-    #[test]
-    fn hold_keeps_each_event_once() {
-        let dir = TempDir::new().unwrap();
-        let (_fake, db) = fk_db(dir.path(), &[], &[]);
-        let a = FileEvent::Modified(dir.path().join("a"));
-        db.hold(vec![a.clone(), FileEvent::Rescan]);
-        db.hold(vec![FileEvent::Rescan, a.clone()]);
-        assert_eq!(held(&db), vec![a, FileEvent::Rescan]);
-    }
-
-    #[test]
-    fn take_held_restates_each_path_as_it_is_now() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let mut fake = FakeFs::default().with_dir(root.join("d"));
-        fake.stats.insert(root.join("f"), fake_stat());
-        let db = DirSQL::with_ignore_and_fs(root, Vec::new(), Vec::<String>::new(), Arc::new(fake))
-            .unwrap();
-        db.hold(vec![
-            FileEvent::Deleted(root.join("f")),
-            FileEvent::Modified(root.join("f")),
-            FileEvent::Deleted(root.join("d")),
-            FileEvent::Created(root.join("gone")),
-            FileEvent::Rescan,
-        ]);
-
-        assert_eq!(
-            db.take_held(),
-            vec![
-                FileEvent::Created(root.join("f")),
-                FileEvent::Created(root.join("d")),
-                FileEvent::Deleted(root.join("gone")),
-                FileEvent::Rescan,
-            ]
-        );
-        assert_eq!(held(&db), Vec::new());
-    }
-
     fn child_pids(db: &DirSQL) -> Vec<Value> {
         db.query("SELECT pid FROM child ORDER BY pid")
             .unwrap()
@@ -7946,14 +7844,15 @@ mod internal_tests {
         assert_eq!(child_pids(&db), vec![Value::Integer(2)]);
     }
 
-    #[test]
-    fn an_orphaned_aggregate_keeps_its_rows_while_the_rest_of_its_batch_lands() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
+    /// `parent` rows from `p<id>` files and `agg`, a per-table hook over
+    /// `c<id>` files, one row per file referencing the parent with its id.
+    /// `files` are applied; `unseen` exist but have not been reported yet.
+    fn agg_db(root: &Path, files: &[&str], unseen: &[&str]) -> (Arc<FakeFs>, DirSQL) {
         let mut fake = FakeFs::default();
-        for f in ["p1", "c1", "c9", "p2"] {
+        for f in files.iter().chain(unseen) {
             fake.stats.insert(root.join(f), fake_stat());
         }
+        let fake = Arc::new(fake);
         let db = DirSQL::with_ignore_and_fs(
             root,
             vec![
@@ -7966,12 +7865,8 @@ mod internal_tests {
                             .iter()
                             .map(|p| {
                                 let name = p.to_string_lossy();
-                                infer::JsonRow(vec![(
-                                    "pid".into(),
-                                    serde_json::json!(
-                                        name[name.len() - 1..].parse::<i64>().unwrap()
-                                    ),
-                                )])
+                                let id: i64 = name[name.len() - 1..].parse().unwrap();
+                                infer::JsonRow(vec![("pid".into(), serde_json::json!(id))])
                             })
                             .collect())
                     },
@@ -7984,15 +7879,33 @@ mod internal_tests {
                 ),
             ],
             Vec::<String>::new(),
-            Arc::new(fake),
+            fake.clone(),
         )
         .unwrap();
         db.set_fresh_reads(false);
-        let seeded = db.apply_file_events(vec![
-            FileEvent::Created(root.join("p1")),
-            FileEvent::Created(root.join("c1")),
-        ]);
+        let seeded = db.apply_file_events(
+            files
+                .iter()
+                .map(|f| FileEvent::Created(root.join(f)))
+                .collect(),
+        );
         assert_eq!(error_count(&seeded), 0, "got: {seeded:?}");
+        (fake, db)
+    }
+
+    fn agg_pids(db: &DirSQL) -> Vec<Value> {
+        db.query("SELECT pid FROM agg ORDER BY pid")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["pid"].clone())
+            .collect()
+    }
+
+    #[test]
+    fn an_orphaned_aggregate_keeps_its_rows_while_the_rest_of_its_batch_lands() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (_fake, db) = agg_db(root, &["p1", "c1"], &["c9", "p2"]);
 
         let events = db.apply_file_events(vec![
             FileEvent::Created(root.join("c9")),
@@ -8005,13 +7918,49 @@ mod internal_tests {
             "got: {events:?}"
         );
         assert_eq!(parent_ids(&db), vec![Value::Integer(1), Value::Integer(2)]);
-        let agg: Vec<Value> = db
-            .query("SELECT pid FROM agg ORDER BY pid")
-            .unwrap()
-            .into_iter()
-            .map(|row| row["pid"].clone())
-            .collect();
-        assert_eq!(agg, vec![Value::Integer(1)]);
+        assert_eq!(agg_pids(&db), vec![Value::Integer(1)]);
+    }
+
+    #[test]
+    fn deleting_a_parent_leaves_out_only_the_aggregate_rows_it_strands() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = agg_db(root, &["p1", "p2", "c1", "c2"], &[]);
+        fake.remove(&root.join("p1"));
+
+        let events = db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+
+        assert_eq!(
+            error_sources(&events),
+            vec![(Some("agg".into()), PathBuf::new())],
+            "got: {events:?}"
+        );
+        assert_eq!(parent_ids(&db), vec![Value::Integer(2)]);
+        assert_eq!(agg_pids(&db), vec![Value::Integer(2)]);
+    }
+
+    #[test]
+    fn an_aggregate_rerun_alongside_its_parents_delete_keeps_only_sound_rows() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = agg_db(root, &["p1", "p2", "c1", "c2"], &["c3"]);
+        fake.remove(&root.join("p1"));
+
+        let events = db.apply_file_events(vec![
+            FileEvent::Deleted(root.join("p1")),
+            FileEvent::Created(root.join("c3")),
+        ]);
+
+        assert_eq!(
+            error_sources(&events),
+            vec![
+                (Some("agg".into()), PathBuf::new()),
+                (Some("agg".into()), PathBuf::new())
+            ],
+            "got: {events:?}"
+        );
+        assert_eq!(parent_ids(&db), vec![Value::Integer(2)]);
+        assert_eq!(agg_pids(&db), vec![Value::Integer(2)]);
     }
 
     type Reads = Arc<Mutex<Vec<String>>>;

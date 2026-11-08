@@ -171,48 +171,6 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 }
 
 #[test]
-fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
-    let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
-    db.set_fresh_reads(false);
-    let parent = root.join("parents").join("1.txt");
-    fs::remove_file(&parent).unwrap();
-
-    let events = db.apply_file_events(vec![FileEvent::Deleted(parent)]);
-
-    let reported = errors(&events);
-    assert_eq!(reported.len(), 1, "expected one error, got {events:?}");
-    for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
-        assert!(
-            reported[0].contains(needle),
-            "{needle:?} missing from: {}",
-            reported[0]
-        );
-    }
-    assert_eq!(
-        events.len(),
-        1,
-        "a rolled-back batch reports no row changes: {events:?}"
-    );
-    assert_eq!(
-        names(&db, "SELECT name FROM parent ORDER BY id"),
-        vec!["alpha", "beta"]
-    );
-
-    let other = root.join("parents").join("2.txt");
-    fs::write(&other, "beta renamed").unwrap();
-    let events = db.apply_file_events(vec![FileEvent::Modified(other)]);
-    assert_eq!(
-        errors(&events),
-        reported,
-        "the held deletion is still rejected"
-    );
-    assert_eq!(
-        names(&db, "SELECT name FROM parent ORDER BY id"),
-        vec!["alpha", "beta renamed"]
-    );
-}
-
-#[test]
 fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
@@ -230,12 +188,12 @@ fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
 }
 
 #[test]
-fn a_rejected_batch_lands_with_the_batch_that_resolves_it() {
+fn a_dropped_child_returns_when_its_own_file_is_rewritten() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
-    let rejected = db.apply_file_events(vec![FileEvent::Deleted(parent)]);
-    assert_eq!(errors(&rejected).len(), 1, "{rejected:?}");
+    let dropped = db.apply_file_events(vec![FileEvent::Deleted(parent)]);
+    assert_eq!(errors(&dropped).len(), 1, "{dropped:?}");
 
     let child = root.join("children").join("kid.txt");
     fs::write(&child, "2").unwrap();
