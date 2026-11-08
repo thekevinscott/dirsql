@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/repl_interactive_test.py -x -q",
+  "ran_at": 1793920764,
+  "exit_code": 0,
+  "commit": "856ecb04a9f9aa8bc98e28f1c9fffafbd61ef8ec",
+  "branch": "bot/1618-table-inf-1105"
+}

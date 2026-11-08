@@ -22,6 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use super::AppState;
 use super::execute::{QueryFailure, execute_query, require_ready};
+use super::serialize::result_to_json;
 use crate::TableInfo;
 
 pub(super) struct AppContext {
@@ -92,7 +93,7 @@ fn table_json(table: &TableInfo) -> serde_json::Value {
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
-    match execute_query(&ctx.state, body, Some(ctx.query_timeout)).await {
+    match execute_query(&ctx.state, body, Some(ctx.query_timeout), result_to_json).await {
         Ok(value) => Json(value).into_response(),
         Err(failure) => failure_response(&failure),
     }
@@ -224,6 +225,21 @@ mod tests {
             query_timeout: Duration::from_secs(1),
         });
         let resp = handle_events(State(ctx)).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn a_query_returns_503_while_the_server_is_unavailable() {
+        let (events, _) = broadcast::channel::<String>(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+        let ctx = Arc::new(AppContext {
+            state: AppState::Unavailable("config failed to load".into()),
+            events,
+            watch_failure: None,
+            cancel,
+            query_timeout: Duration::from_secs(1),
+        });
+        let resp = handle_query(State(ctx), r#"{"sql":"SELECT 1"}"#.into()).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

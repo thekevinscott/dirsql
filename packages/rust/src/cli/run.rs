@@ -23,9 +23,10 @@ use super::{
     execute::{execute_query, execute_query_json},
     init::InitOptions,
     repl::run_repl,
+    serialize::{result_to_json, result_to_table_json},
     serve_with_state, table,
 };
-use crate::{DirSQL, Extension};
+use crate::{DirSQL, Extension, QueryResult};
 use axum::http::HeaderValue;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
@@ -251,6 +252,15 @@ impl Format {
             settled => settled,
         }
     }
+
+    /// How a result becomes the rows this format renders. A table names the
+    /// infinite REAL that JSON can only print as `null`.
+    pub(super) fn rows(self) -> fn(&QueryResult) -> Vec<Value> {
+        match self {
+            Self::Table => result_to_table_json,
+            _ => result_to_json,
+        }
+    }
 }
 
 /// Render one result the way `format` asks. `Auto` must already be settled.
@@ -436,7 +446,7 @@ async fn run_query(args: QueryArgs, out: &mut dyn Write) -> u8 {
     let format = args.format.resolve(std::io::stdout().is_terminal());
 
     let printed = match format {
-        Format::Table => execute_query(&state, query_body(&args.sql), None)
+        Format::Table => execute_query(&state, query_body(&args.sql), None, format.rows())
             .await
             .map(|value| render_rows(&value, format).into_bytes()),
         _ => execute_query_json(&state, query_body(&args.sql)).await,
@@ -741,6 +751,20 @@ mod tests {
         let args = query_args(&["dirsql", "query", "--format", "table", "SELECT 1 AS a"]);
         assert_eq!(run_query(args, &mut out).await, 0);
         assert_eq!(out, b"a\n-\n1\n\n1 row\n");
+    }
+
+    #[tokio::test]
+    async fn run_query_names_infinite_reals_in_a_table() {
+        let mut out = Vec::new();
+        let args = query_args(&[
+            "dirsql",
+            "query",
+            "--format",
+            "table",
+            "SELECT 9e999 AS p, -9e999 AS m",
+        ]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"p    m\n---  ----\ninf  -inf\n\n1 row\n");
     }
 
     #[tokio::test]
