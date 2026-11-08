@@ -822,17 +822,16 @@ mod tests {
         assert_eq!(on_close(&gone), one(FileEvent::Deleted, "/tmp/gone"));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn is_symlink_is_true_only_for_a_symlink() {
-        let root = tempfile::tempdir().unwrap();
-        let file = root.path().join("f");
-        let link = root.path().join("l");
-        std::fs::write(&file, "").unwrap();
-        std::os::unix::fs::symlink(&file, &link).unwrap();
-        assert!(is_symlink(&link));
-        assert!(!is_symlink(&file));
-        assert!(!is_symlink(&root.path().join("missing")));
+    fn translate_event_reads_a_created_path_only_when_it_is_a_symlink() {
+        let link = PathBuf::from("/proc/self");
+        let missing = PathBuf::from("/nowhere/a");
+        assert_eq!(
+            translate_event(&create_event(vec![link.clone()])),
+            vec![FileEvent::Created(link)]
+        );
+        assert!(translate_event(&create_event(vec![missing])).is_empty());
     }
 
     #[test]
