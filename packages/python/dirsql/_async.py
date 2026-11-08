@@ -54,6 +54,26 @@ class _WatchStream:
             stream._buffer.extend(events)
 
 
+class _IndexLock:
+    """The context manager behind :attr:`DirSQL.lock`."""
+
+    def __init__(self, owner):
+        self._owner = owner
+
+    def __enter__(self):
+        db = self._owner._db
+        if db is None:
+            raise RuntimeError(
+                "DirSQL.lock needs a built index: await db.ready() first"
+            )
+        db._lock()
+        return self
+
+    def __exit__(self, *exc):
+        self._owner._db._unlock()
+        return False
+
+
 class DirSQL:
     """Async-by-default wrapper around the Rust DirSQL engine.
 
@@ -227,6 +247,18 @@ class DirSQL:
         db = self._db
         assert db is not None  # ready() returned, so _init_bg set _db
         return await asyncio.to_thread(db.query, sql, params)
+
+    @property
+    def lock(self):
+        """Hold the index still while a ``with`` block writes several files.
+
+        Until the block exits, no query reads the disk and no watch batch
+        applies, so no query sees a child file without the parent written
+        alongside it. Entering waits for a read already in progress. Use it
+        from a thread, after :meth:`ready`; a query made inside the block
+        waits for the block to exit.
+        """
+        return _IndexLock(self)
 
     async def scan_failures(self):
         """The files the initial scan could not index.

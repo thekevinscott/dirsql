@@ -538,3 +538,54 @@ def describe_DirSQL_async():
 
                 with pytest.raises(RuntimeError, match="no named tables"):
                     await stream.__anext__()
+
+
+class _FakeLockDb:
+    def __init__(self):
+        self.calls = []
+
+    def _lock(self):
+        self.calls.append("lock")
+
+    def _unlock(self):
+        self.calls.append("unlock")
+
+
+def describe_lock():
+    def it_holds_the_core_lock_for_the_block():
+        db = _FakeLockDb()
+        owner = _ReadyOwner(db)
+        with async_mod._IndexLock(owner):
+            assert db.calls == ["lock"]
+        assert db.calls == ["lock", "unlock"]
+
+    def it_releases_the_core_lock_when_the_block_raises():
+        db = _FakeLockDb()
+        with (
+            pytest.raises(ValueError, match="boom"),
+            async_mod._IndexLock(_ReadyOwner(db)),
+        ):
+            raise ValueError("boom")
+        assert db.calls == ["lock", "unlock"]
+
+    def it_refuses_before_the_index_is_built():
+        owner = _ReadyOwner(None)
+        with (
+            pytest.raises(RuntimeError, match=r"await db\.ready\(\) first"),
+            async_mod._IndexLock(owner),
+        ):
+            pass
+
+    @pytest.mark.asyncio
+    async def it_is_a_property_of_DirSQL_over_its_core():
+        db_ = _FakeLockDb()
+
+        class InjectedDirSQL(async_mod.DirSQL):
+            def _new_core(self, root, **kwargs):
+                return db_
+
+        db = InjectedDirSQL("/tmp/root")
+        await db.ready()
+        with db.lock as held:
+            assert isinstance(held, async_mod._IndexLock)
+        assert db_.calls == ["lock", "unlock"]
