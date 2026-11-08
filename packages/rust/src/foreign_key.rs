@@ -341,6 +341,29 @@ mod tests {
     }
 
     #[test]
+    fn two_orphan_files_in_one_unit_are_both_named() {
+        let conn = family(CHILD);
+        begin(&conn).unwrap();
+        for pid in 0..=LISTED {
+            conn.execute("INSERT INTO child VALUES ('kid', ?1)", [100 + pid])
+                .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/a.txt', 1, ?1)",
+            [LISTED],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/b.txt', ?1, ?1)",
+            [LISTED + 1],
+        )
+        .unwrap();
+        let v = violation(commit(&conn).unwrap_err());
+        assert!(v.message.contains("`kids/a.txt`"), "{}", v.message);
+        assert!(v.message.contains("`kids/b.txt`"), "{}", v.message);
+    }
+
+    #[test]
     fn orphans_up_to_the_limit_are_all_listed() {
         let conn = family(CHILD);
         begin(&conn).unwrap();
