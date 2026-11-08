@@ -78,7 +78,7 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::{Found, scan_directory_reporting};
-use crate::watcher::{FileEvent, WatchScope, Watcher};
+use crate::watcher::{FileEvent, READ_ON_CLOSE, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
@@ -1213,7 +1213,7 @@ impl DirSQL {
             if matches!(event, FileEvent::Created(_))
                 && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
             {
-                events.extend(self.index_subtree(group, &abs_path, pending));
+                events.extend(self.index_subtree(group, &abs_path, pending, READ_ON_CLOSE));
                 continue;
             }
 
@@ -1504,19 +1504,22 @@ impl DirSQL {
                 }
                 pending.mark(table, ".");
             }
-            events.extend(self.index_subtree(group, &group.watch_anchor, pending));
+            events.extend(self.index_subtree(group, &group.watch_anchor, pending, false));
         }
         events
     }
 
     /// Index every file beneath `dir` as if each had its own create event,
     /// using the scanner's walk so the watch path and the initial scan share
-    /// one definition of what counts as a row.
+    /// one definition of what counts as a row. With `unclosed_ok`, a file
+    /// that fails to parse is skipped silently: it may still be being
+    /// written, and its close will be reported.
     fn index_subtree(
         &self,
         group: &AnchorGroup,
         dir: &Path,
         pending: &mut PendingRefresh,
+        unclosed_ok: bool,
     ) -> Vec<RowEvent> {
         let base = if dir.starts_with(&group.watch_anchor) {
             &group.watch_anchor
@@ -1550,7 +1553,7 @@ impl DirSQL {
                 pending.mark(&table, &rel_path);
                 continue;
             }
-            events.extend(self.handle_upsert(&table, &path, &rel_path));
+            events.extend(self.upsert(&table, &path, &rel_path, unclosed_ok));
         }
         events
     }
@@ -1581,6 +1584,16 @@ impl DirSQL {
     }
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
+        self.upsert(table, abs_path, rel_path, false)
+    }
+
+    fn upsert(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        unclosed_ok: bool,
+    ) -> Vec<RowEvent> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
@@ -1598,6 +1611,7 @@ impl DirSQL {
 
         let raw_rows = match on_file(&abs_path.to_string_lossy()) {
             Ok(r) => r,
+            Err(_) if unclosed_ok => return Vec::new(),
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
@@ -5445,7 +5459,7 @@ mod internal_tests {
         db.start_watching().unwrap();
         std::fs::write(dir.path().join("a.none"), "x").unwrap();
         let mut held = Vec::new();
-        while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
+        while held.is_empty() {
             held.extend(db.queued_file_events());
         }
     }
@@ -5695,6 +5709,48 @@ mod internal_tests {
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
         assert!(dbg.contains("boom"), "got: {dbg}");
+    }
+
+    fn failing_db_over(dir: &Path, sub: &Path) -> DirSQL {
+        let fake = FakeFs::default()
+            .with_subtree(sub.to_path_buf(), vec![(sub.join("a.txt"), "items".into())]);
+        DirSQL::with_ignore_and_fs(
+            dir,
+            vec![Table::try_new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| Err("boom".into()),
+            )],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_directory_scan_reports_a_parse_failure_only_where_no_close_follows() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let db = failing_db_over(dir.path(), &sub);
+        let events = db.process_file_event(FileEvent::Created(sub));
+        assert_eq!(events.is_empty(), READ_ON_CLOSE, "got: {events:?}");
+    }
+
+    #[test]
+    fn index_subtree_reports_a_parse_failure_unless_unclosed_files_are_expected() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let db = failing_db_over(dir.path(), &sub);
+        let group = &db.inner.groups[0];
+        let mut pending = PendingRefresh::default();
+        let reported = db.index_subtree(group, &sub, &mut pending, false);
+        assert!(
+            format!("{reported:?}").contains("boom"),
+            "got: {reported:?}"
+        );
+        let quiet = db.index_subtree(group, &sub, &mut pending, true);
+        assert!(quiet.is_empty(), "got: {quiet:?}");
     }
 
     #[test]
