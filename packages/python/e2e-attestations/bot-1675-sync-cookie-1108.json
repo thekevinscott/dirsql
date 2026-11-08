@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/fanout_test.py tests/e2e/query_contract_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/watch_speed_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1794164668,
+  "exit_code": 0,
+  "commit": "5593e58d26d6a4be6bbf36db6a64cea12cb42f77",
+  "branch": "bot/1675-sync-cookie-1108"
+}
