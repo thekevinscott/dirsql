@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794166701,
+  "exit_code": 0,
+  "commit": "9a234b16f6e9b63fb39c17dff0294d0da138370f",
+  "branch": "bot/1679-orphan-drop-1108"
+}
