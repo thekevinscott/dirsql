@@ -7728,6 +7728,27 @@ mod internal_tests {
             .collect()
     }
 
+    #[test]
+    fn a_rejected_batch_reports_only_its_errors_then_the_failure() {
+        let row = Row::from_iter([("id".to_string(), Value::Integer(1))]);
+        let mut out = differ::diff("t", None, Some(&[row]), "a");
+        out.push(error_event(Some("t"), "b", "bad b".into()));
+
+        let events = rejected(
+            out,
+            DirSqlError::Core(DbError::Sqlite(rusqlite::Error::InvalidQuery)),
+        );
+
+        let sources: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                RowEvent::Error { file_path, .. } => file_path.clone(),
+                other => panic!("expected only errors, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(sources, vec![PathBuf::from("b"), PathBuf::new()]);
+    }
+
     fn error_count(events: &[RowEvent]) -> usize {
         events
             .iter()
