@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fresh-declared-repros",
+  "ran_at": 1794165939,
+  "exit_code": 0,
+  "commit": "6bb6ed1f0be4ff761eb2a31abd1dd85fb58b6f88",
+  "branch": "bot/1676-close-write-1108"
+}

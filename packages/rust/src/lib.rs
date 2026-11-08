@@ -78,7 +78,7 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::{Found, scan_directory_reporting};
-use crate::watcher::{FileEvent, WatchScope, Watcher};
+use crate::watcher::{FileEvent, READ_ON_CLOSE, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
@@ -505,6 +505,7 @@ impl Link {
     fn restate(&self, event: &FileEvent) -> Option<FileEvent> {
         let (path, kind): (&Path, fn(PathBuf) -> FileEvent) = match event {
             FileEvent::Created(p) => (p, FileEvent::Created),
+            FileEvent::MovedIn(p) => (p, FileEvent::MovedIn),
             FileEvent::Modified(p) => (p, FileEvent::Modified),
             FileEvent::Deleted(p) => (p, FileEvent::Deleted),
             FileEvent::Rescan => return None,
@@ -1101,13 +1102,16 @@ impl DirSQL {
         let mut restated: Vec<FileEvent> = Vec::new();
         for event in held {
             let event = match event {
-                FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => {
-                    if self.inner.fs.is_file(&p).unwrap_or(false)
-                        || self.inner.fs.is_dir(&p).unwrap_or(false)
-                    {
-                        FileEvent::Created(p)
-                    } else {
-                        FileEvent::Deleted(p)
+                FileEvent::Created(ref p)
+                | FileEvent::MovedIn(ref p)
+                | FileEvent::Modified(ref p)
+                | FileEvent::Deleted(ref p) => {
+                    let exists = self.inner.fs.is_file(p).unwrap_or(false)
+                        || self.inner.fs.is_dir(p).unwrap_or(false);
+                    match event {
+                        FileEvent::MovedIn(p) if exists => FileEvent::MovedIn(p),
+                        _ if exists => FileEvent::Created(p.clone()),
+                        _ => FileEvent::Deleted(p.clone()),
                     }
                 }
                 FileEvent::Rescan => FileEvent::Rescan,
@@ -1187,7 +1191,10 @@ impl DirSQL {
     /// hook's table is marked in `pending` for one re-run after the batch.
     fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let abs_path = match &event {
-            FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
+            FileEvent::Created(p)
+            | FileEvent::MovedIn(p)
+            | FileEvent::Modified(p)
+            | FileEvent::Deleted(p) => p.clone(),
             FileEvent::Rescan => return Vec::new(),
         };
         let mut events = Vec::new();
@@ -1210,10 +1217,17 @@ impl DirSQL {
             // Only on creation: a metadata change on a directory says nothing
             // about its files, and walking on every one would re-run `on_file`
             // across the subtree for a `chmod`.
-            if matches!(event, FileEvent::Created(_))
+            // Files in a new directory may still be open for writing; a
+            // renamed-in directory's are already complete.
+            let unclosed_ok = match event {
+                FileEvent::Created(_) => Some(READ_ON_CLOSE),
+                FileEvent::MovedIn(_) => Some(false),
+                _ => None,
+            };
+            if let Some(unclosed_ok) = unclosed_ok
                 && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
             {
-                events.extend(self.index_subtree(group, &abs_path, pending));
+                events.extend(self.index_subtree(group, &abs_path, pending, unclosed_ok));
                 continue;
             }
 
@@ -1235,7 +1249,7 @@ impl DirSQL {
                     FileEvent::Deleted(_) => {
                         events.extend(self.handle_delete(&m.table_name, &rel_path));
                     }
-                    FileEvent::Created(_) | FileEvent::Modified(_) => {
+                    FileEvent::Created(_) | FileEvent::MovedIn(_) | FileEvent::Modified(_) => {
                         events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                     }
                     FileEvent::Rescan => {}
@@ -1504,19 +1518,22 @@ impl DirSQL {
                 }
                 pending.mark(table, ".");
             }
-            events.extend(self.index_subtree(group, &group.watch_anchor, pending));
+            events.extend(self.index_subtree(group, &group.watch_anchor, pending, false));
         }
         events
     }
 
     /// Index every file beneath `dir` as if each had its own create event,
     /// using the scanner's walk so the watch path and the initial scan share
-    /// one definition of what counts as a row.
+    /// one definition of what counts as a row. With `unclosed_ok`, a file
+    /// that fails to parse is skipped silently: it may still be being
+    /// written, and its close will be reported.
     fn index_subtree(
         &self,
         group: &AnchorGroup,
         dir: &Path,
         pending: &mut PendingRefresh,
+        unclosed_ok: bool,
     ) -> Vec<RowEvent> {
         let base = if dir.starts_with(&group.watch_anchor) {
             &group.watch_anchor
@@ -1550,7 +1567,7 @@ impl DirSQL {
                 pending.mark(&table, &rel_path);
                 continue;
             }
-            events.extend(self.handle_upsert(&table, &path, &rel_path));
+            events.extend(self.upsert(&table, &path, &rel_path, unclosed_ok));
         }
         events
     }
@@ -1581,6 +1598,16 @@ impl DirSQL {
     }
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
+        self.upsert(table, abs_path, rel_path, false)
+    }
+
+    fn upsert(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        unclosed_ok: bool,
+    ) -> Vec<RowEvent> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
@@ -1598,6 +1625,7 @@ impl DirSQL {
 
         let raw_rows = match on_file(&abs_path.to_string_lossy()) {
             Ok(r) => r,
+            Err(_) if unclosed_ok => return Vec::new(),
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
@@ -3230,7 +3258,12 @@ struct RejectedBatch {
 fn batch_error(e: DirSqlError) -> RowEvent {
     match e {
         DirSqlError::Core(DbError::ForeignKey(v)) => {
-            error_event(Some(&v.table), v.file.as_deref().unwrap_or(""), v.message)
+            let first = &v.offenders[0];
+            error_event(
+                Some(&first.table),
+                first.file.as_deref().unwrap_or(""),
+                v.message,
+            )
         }
         other => error_event(None, "", other.to_string()),
     }
@@ -5445,7 +5478,7 @@ mod internal_tests {
         db.start_watching().unwrap();
         std::fs::write(dir.path().join("a.none"), "x").unwrap();
         let mut held = Vec::new();
-        while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
+        while held.is_empty() {
             held.extend(db.queued_file_events());
         }
     }
@@ -5695,6 +5728,60 @@ mod internal_tests {
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
         assert!(dbg.contains("boom"), "got: {dbg}");
+    }
+
+    fn failing_db_over(dir: &Path, sub: &Path) -> DirSQL {
+        let fake = FakeFs::default()
+            .with_subtree(sub.to_path_buf(), vec![(sub.join("a.txt"), "items".into())]);
+        DirSQL::with_ignore_and_fs(
+            dir,
+            vec![Table::try_new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| Err("boom".into()),
+            )],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_directory_scan_reports_a_parse_failure_only_where_no_close_follows() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let db = failing_db_over(dir.path(), &sub);
+        let events = db.process_file_event(FileEvent::Created(sub));
+        assert_eq!(events.is_empty(), READ_ON_CLOSE, "got: {events:?}");
+    }
+
+    #[test]
+    fn a_renamed_in_directory_scan_reports_a_parse_failure() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let db = failing_db_over(dir.path(), &sub);
+        let events = db.process_file_event(FileEvent::MovedIn(sub));
+        assert!(
+            matches!(events.as_slice(), [RowEvent::Error { error, .. }] if error.contains("boom")),
+            "got: {events:?}"
+        );
+    }
+
+    #[test]
+    fn index_subtree_reports_a_parse_failure_unless_unclosed_files_are_expected() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let db = failing_db_over(dir.path(), &sub);
+        let group = &db.inner.groups[0];
+        let mut pending = PendingRefresh::default();
+        let reported = db.index_subtree(group, &sub, &mut pending, false);
+        assert!(
+            format!("{reported:?}").contains("boom"),
+            "got: {reported:?}"
+        );
+        let quiet = db.index_subtree(group, &sub, &mut pending, true);
+        assert!(quiet.is_empty(), "got: {quiet:?}");
     }
 
     #[test]
@@ -7800,6 +7887,27 @@ mod internal_tests {
     }
 
     #[test]
+    fn take_held_keeps_a_rename_into_the_tree_while_the_path_exists() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let fake = FakeFs::default().with_dir(root.join("d"));
+        let db = DirSQL::with_ignore_and_fs(root, Vec::new(), Vec::<String>::new(), Arc::new(fake))
+            .unwrap();
+        db.hold(vec![
+            FileEvent::MovedIn(root.join("d")),
+            FileEvent::MovedIn(root.join("gone")),
+        ]);
+
+        assert_eq!(
+            db.take_held(),
+            vec![
+                FileEvent::MovedIn(root.join("d")),
+                FileEvent::Deleted(root.join("gone")),
+            ]
+        );
+    }
+
+    #[test]
     fn take_held_restates_each_path_as_it_is_now() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -8084,6 +8192,10 @@ mod internal_tests {
             (
                 FileEvent::Created("/ws/real/a/x.txt".into()),
                 FileEvent::Created("/ws/link/a/x.txt".into()),
+            ),
+            (
+                FileEvent::MovedIn("/ws/real/a".into()),
+                FileEvent::MovedIn("/ws/link/a".into()),
             ),
             (
                 FileEvent::Deleted("/ws/real/x.txt".into()),
