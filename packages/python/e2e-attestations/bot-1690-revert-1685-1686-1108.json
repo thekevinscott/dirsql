@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_join_test.py tests/e2e/watch_speed_test.py -x -q",
+  "ran_at": 1794174841,
+  "exit_code": 0,
+  "commit": "6fbe1393770c627debc960f9b64c4abe650e0b4f",
+  "branch": "bot/1690-revert-1685-1686-1108"
+}
