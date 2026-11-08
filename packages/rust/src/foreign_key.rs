@@ -15,28 +15,12 @@ const LISTED: usize = 10;
 /// A unit of work that left rows referencing nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignKeyViolation {
-    /// Every table and file holding an offending row, each once, in the
-    /// order SQLite reports them.
-    pub offenders: Vec<Offender>,
-    /// The offending rows, named, and every offender among them.
-    pub message: String,
-}
-
-/// Where offending rows came from: a file, or, for rows a per-table hook
-/// produced or no file owns, the table itself.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Offender {
+    /// The table holding the first offending row.
     pub table: String,
+    /// The file that produced the first offending row, when one owns it.
     pub file: Option<String>,
-}
-
-impl std::fmt::Display for Offender {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.file {
-            Some(file) => write!(f, "`{file}`"),
-            None => write!(f, "table `{}`", self.table),
-        }
-    }
+    /// Every offending row, named.
+    pub message: String,
 }
 
 /// Defer every constraint in the open transaction to its COMMIT.
@@ -112,57 +96,27 @@ fn describe(conn: &Connection) -> rusqlite::Result<Option<ForeignKeyViolation>> 
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    if found.is_empty() {
+    let Some((table, rowid, _, _)) = found.first() else {
         return Ok(None);
-    }
-    let mut owners = Vec::with_capacity(found.len());
-    for (table, rowid, _, _) in &found {
-        let file = match rowid {
-            Some(rowid) => owner(conn, table, *rowid)?,
-            None => None,
-        };
-        owners.push(Offender {
-            table: table.clone(),
-            file,
-        });
-    }
+    };
+    let table = table.clone();
+    let file = match rowid {
+        Some(rowid) => owner(conn, &table, *rowid)?,
+        None => None,
+    };
     let mut rows = Vec::new();
-    for ((child, rowid, parent, fkid), offender) in found.iter().zip(&owners).take(LISTED) {
-        rows.push(name_row(
-            conn,
-            child,
-            *rowid,
-            offender.file.as_deref(),
-            parent,
-            *fkid,
-        )?);
+    for (child, rowid, parent, fkid) in found.iter().take(LISTED) {
+        rows.push(name_row(conn, child, *rowid, parent, *fkid)?);
     }
-    let offenders = distinct(&owners);
     let mut message = format!("foreign key violation: {}", rows.join("; "));
     if found.len() > LISTED {
-        let listed = &owners[..LISTED];
-        let unlisted = offenders
-            .iter()
-            .filter(|offender| !listed.contains(offender))
-            .map(Offender::to_string)
-            .collect::<Vec<_>>();
-        message.push_str(&format!(" (and {} more", found.len() - LISTED));
-        if !unlisted.is_empty() {
-            message.push_str(&format!(", from {}", unlisted.join(", ")));
-        }
-        message.push(')');
+        message.push_str(&format!(" (and {} more)", found.len() - LISTED));
     }
-    Ok(Some(ForeignKeyViolation { offenders, message }))
-}
-
-/// `offenders` with repeats dropped, in first-seen order.
-fn distinct(offenders: &[Offender]) -> Vec<Offender> {
-    let mut seen = std::collections::HashSet::new();
-    offenders
-        .iter()
-        .filter(|offender| seen.insert(*offender))
-        .cloned()
-        .collect()
+    Ok(Some(ForeignKeyViolation {
+        table,
+        file,
+        message,
+    }))
 }
 
 /// One offending row: its table, the file that produced it, and the values
@@ -171,7 +125,6 @@ fn name_row(
     conn: &Connection,
     child: &str,
     rowid: Option<i64>,
-    file: Option<&str>,
     parent: &str,
     fkid: i64,
 ) -> rusqlite::Result<String> {
@@ -185,7 +138,7 @@ fn name_row(
     let Some(rowid) = rowid else {
         return Ok(format!("{named} matches no row in `{parent}`"));
     };
-    if let Some(file) = file {
+    if let Some(file) = owner(conn, child, rowid)? {
         named.push_str(&format!(" from `{file}`"));
     }
     let select = columns
@@ -266,13 +219,6 @@ mod tests {
             .unwrap()
     }
 
-    fn offender(table: &str, file: Option<&str>) -> Offender {
-        Offender {
-            table: table.to_string(),
-            file: file.map(str::to_string),
-        }
-    }
-
     fn violation(err: DbError) -> ForeignKeyViolation {
         match err {
             DbError::ForeignKey(v) => v,
@@ -306,7 +252,8 @@ mod tests {
         )
         .unwrap();
         let v = violation(commit(&conn).unwrap_err());
-        assert_eq!(v.offenders, vec![offender("child", Some("kids/a.txt"))]);
+        assert_eq!(v.table, "child");
+        assert_eq!(v.file.as_deref(), Some("kids/a.txt"));
         assert_eq!(
             v.message,
             "foreign key violation: `child` row from `kids/a.txt` has pid = 9, \
@@ -327,7 +274,7 @@ mod tests {
         )
         .unwrap();
         let v = violation(commit(&conn).unwrap_err());
-        assert_eq!(v.offenders, vec![offender("child", Some("kids/b.txt"))]);
+        assert_eq!(v.file.as_deref(), Some("kids/b.txt"));
     }
 
     #[test]
@@ -340,7 +287,7 @@ mod tests {
         )
         .unwrap();
         let v = violation(commit(&conn).unwrap_err());
-        assert_eq!(v.offenders, vec![offender("child", None)]);
+        assert_eq!(v.file, None);
         assert!(
             v.message
                 .starts_with("foreign key violation: `child` row has"),
@@ -356,7 +303,7 @@ mod tests {
         conn.execute_batch("INSERT INTO child VALUES ('kid', 9)")
             .unwrap();
         let v = violation(commit(&conn).unwrap_err());
-        assert_eq!(v.offenders, vec![offender("child", None)]);
+        assert_eq!(v.file, None);
         assert_eq!(
             v.message,
             "foreign key violation: `child` row has pid = 9, which matches no row in `parent`"
@@ -373,7 +320,7 @@ mod tests {
         conn.execute_batch("INSERT INTO child VALUES ('kid', 9)")
             .unwrap();
         let v = violation(commit(&conn).unwrap_err());
-        assert_eq!(v.offenders, vec![offender("child", None)]);
+        assert_eq!(v.file, None);
         assert_eq!(
             v.message,
             "foreign key violation: `child` row matches no row in `parent`"
@@ -391,68 +338,6 @@ mod tests {
         let v = violation(commit(&conn).unwrap_err());
         assert_eq!(v.message.matches("matches no row").count(), LISTED);
         assert!(v.message.ends_with(" (and 2 more)"), "{}", v.message);
-    }
-
-    #[test]
-    fn two_orphan_files_in_one_unit_are_both_named() {
-        let conn = family(CHILD);
-        begin(&conn).unwrap();
-        for pid in 0..=LISTED {
-            conn.execute("INSERT INTO child VALUES ('kid', ?1)", [100 + pid])
-                .unwrap();
-        }
-        conn.execute(
-            "INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/a.txt', 1, ?1)",
-            [LISTED],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/b.txt', ?1, ?1)",
-            [LISTED + 1],
-        )
-        .unwrap();
-        let v = violation(commit(&conn).unwrap_err());
-        assert!(v.message.contains("`kids/a.txt`"), "{}", v.message);
-        assert!(
-            v.message.ends_with(" (and 1 more, from `kids/b.txt`)"),
-            "{}",
-            v.message
-        );
-        assert_eq!(
-            v.offenders,
-            vec![
-                offender("child", Some("kids/a.txt")),
-                offender("child", Some("kids/b.txt")),
-            ]
-        );
-    }
-
-    #[test]
-    fn an_unlisted_row_no_file_owns_is_named_by_its_table() {
-        let conn = family(CHILD);
-        begin(&conn).unwrap();
-        for pid in 0..=LISTED {
-            conn.execute("INSERT INTO child VALUES ('kid', ?1)", [100 + pid])
-                .unwrap();
-        }
-        conn.execute(
-            "INSERT INTO _dirsql_internal_ranges VALUES ('child', 'kids/a.txt', 1, ?1)",
-            [LISTED],
-        )
-        .unwrap();
-        let v = violation(commit(&conn).unwrap_err());
-        assert!(
-            v.message.ends_with(" (and 1 more, from table `child`)"),
-            "{}",
-            v.message
-        );
-        assert_eq!(
-            v.offenders,
-            vec![
-                offender("child", Some("kids/a.txt")),
-                offender("child", None),
-            ]
-        );
     }
 
     #[test]
