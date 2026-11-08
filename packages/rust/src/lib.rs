@@ -3230,7 +3230,12 @@ struct RejectedBatch {
 fn batch_error(e: DirSqlError) -> RowEvent {
     match e {
         DirSqlError::Core(DbError::ForeignKey(v)) => {
-            error_event(Some(&v.table), v.file.as_deref().unwrap_or(""), v.message)
+            let first = &v.offenders[0];
+            error_event(
+                Some(&first.table),
+                first.file.as_deref().unwrap_or(""),
+                v.message,
+            )
         }
         other => error_event(None, "", other.to_string()),
     }
