@@ -101,3 +101,54 @@ fn a_dot_slash_glob_with_repeated_separators_anchors_at_the_config_directory() {
 
     assert_eq!(paths(&db), vec!["a/x.json".to_string()]);
 }
+
+/// `y/link -> real/sub`, so `y/link/..` is `real` to the filesystem and `y`
+/// to a lexical fold. Each `f.md` says which one was read.
+#[cfg(unix)]
+fn contents_through_link(glob_under: impl Fn(&Path) -> String) -> Vec<String> {
+    let dir = tempfile::TempDir::new().unwrap();
+    let at = |rel: &str| dir.path().join(rel);
+    fs::create_dir_all(at("cfg")).unwrap();
+    fs::create_dir_all(at("real/sub")).unwrap();
+    fs::create_dir_all(at("y")).unwrap();
+    fs::write(at("real/f.md"), "PHYSICAL").unwrap();
+    fs::write(at("y/f.md"), "LEXICAL").unwrap();
+    std::os::unix::fs::symlink(at("real/sub"), at("y/link")).unwrap();
+    let cfg = at("cfg/.dirsql.toml");
+    fs::write(
+        &cfg,
+        format!(
+            "[[table]]\nname = \"files\"\nddl = \"CREATE TABLE files (content TEXT)\"\nglob = '{}'\non-file = '''sh -c 'for p; do printf \"{{\\\"content\\\":\\\"%s\\\"}}\\n\" \"$(cat \"$p\")\"; done' sh'''\n",
+            glob_under(dir.path())
+        ),
+    )
+    .unwrap();
+
+    let db = DirSQL::builder().config(&cfg).build().unwrap();
+    db.query("SELECT content FROM files")
+        .unwrap()
+        .iter()
+        .map(|row| match &row["content"] {
+            Value::Text(text) => text.clone(),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absolute_glob_resolves_a_parent_through_a_symlinked_directory_physically() {
+    assert_eq!(
+        contents_through_link(|d| format!("{}/y/link/../*.md", d.display())),
+        vec!["PHYSICAL".to_string()]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_parent_relative_glob_resolves_a_parent_through_a_symlinked_directory_physically() {
+    assert_eq!(
+        contents_through_link(|_| "../y/link/../*.md".to_string()),
+        vec!["PHYSICAL".to_string()]
+    );
+}
