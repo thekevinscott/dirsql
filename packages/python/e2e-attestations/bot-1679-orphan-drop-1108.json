@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1794166618,
+  "exit_code": 0,
+  "commit": "4f73939fc7aad63692a0677aece8d24aa2c2ab1a",
+  "branch": "bot/1679-orphan-drop-1108"
+}
