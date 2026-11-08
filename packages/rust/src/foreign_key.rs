@@ -3,13 +3,10 @@
 //! constraint to its COMMIT, and a COMMIT that finds an orphan rolls the unit
 //! back and names the rows that broke it.
 
-use std::collections::HashMap;
-
 use rusqlite::Connection;
-use rusqlite::types::Value as SqlValue;
 use rusqlite::types::ValueRef;
 
-use crate::db::{DbError, Value};
+use crate::db::DbError;
 use crate::sql_literal::{quote_identifier, quote_literal};
 
 /// How many offending rows a violation message lists before summarizing.
@@ -83,6 +80,7 @@ pub(crate) fn try_commit(conn: &Connection) -> Result<Option<ForeignKeyViolation
     }
 }
 
+#[cfg(target_os = "linux")]
 /// Whether `table` declares a foreign key.
 pub(crate) fn references(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
     conn.query_row(
@@ -92,11 +90,12 @@ pub(crate) fn references(conn: &Connection, table: &str) -> rusqlite::Result<boo
     )
 }
 
+#[cfg(target_os = "linux")]
 /// Every row of `table` that breaks none of its foreign keys, in rowid order.
 pub(crate) fn sound_rows(
     conn: &Connection,
     table: &str,
-) -> rusqlite::Result<Vec<HashMap<String, Value>>> {
+) -> rusqlite::Result<Vec<std::collections::HashMap<String, crate::db::Value>>> {
     let sql = format!(
         "SELECT * FROM {} WHERE rowid NOT IN \
          (SELECT rowid FROM pragma_foreign_key_check({})) ORDER BY rowid",
@@ -109,7 +108,12 @@ pub(crate) fn sound_rows(
         columns
             .iter()
             .enumerate()
-            .map(|(i, name)| Ok((name.clone(), Value::from(row.get::<_, SqlValue>(i)?))))
+            .map(|(i, name)| {
+                Ok((
+                    name.clone(),
+                    crate::db::Value::from(row.get::<_, rusqlite::types::Value>(i)?),
+                ))
+            })
             .collect()
     })?
     .collect()
@@ -589,6 +593,7 @@ mod tests {
         assert!(matches!(try_commit(&conn), Err(DbError::Sqlite(_))));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn references_is_whether_a_table_declares_a_foreign_key() {
         let conn = family(CHILD);
@@ -596,6 +601,7 @@ mod tests {
         assert!(!references(&conn, "parent").unwrap());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn sound_rows_are_every_row_but_the_orphans() {
         let conn = family(CHILD);
@@ -605,14 +611,18 @@ mod tests {
              INSERT INTO child VALUES ('lost', 9), ('kid', 1), ('gone', 8);",
         )
         .unwrap();
-        let names: Vec<Value> = sound_rows(&conn, "child")
+        let names: Vec<crate::db::Value> = sound_rows(&conn, "child")
             .unwrap()
             .into_iter()
             .map(|row| row["name"].clone())
             .collect();
-        assert_eq!(names, vec![Value::Text("kid".into())]);
+        assert!(
+            matches!(&names[..], [crate::db::Value::Text(name)] if name == "kid"),
+            "{names:?}"
+        );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn sound_rows_of_a_missing_table_fails() {
         let conn = family(CHILD);

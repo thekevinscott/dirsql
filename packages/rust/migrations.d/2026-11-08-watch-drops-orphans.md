@@ -2,11 +2,11 @@
 
 #### Summary
 
-A watch batch that broke a foreign key used to roll back whole, report one
-error, and replay with every later batch until one let it land. Now only the
-offending files' rows are left out, each with its own error, and the rest of
-the batch lands. No API changes; the row events and errors a watch delivers
-differ.
+On Linux, a watch batch that broke a foreign key used to roll back whole,
+report one error, and replay with every later batch until one let it land.
+Now only the offending files' rows are left out, each with its own error, and
+the rest of the batch lands. No API changes; the row events and errors a watch
+delivers differ. macOS and Windows keep the old behavior.
 
 #### Required changes
 
@@ -20,12 +20,13 @@ _None._
 
 - A batch with an orphaned row lands every other file's rows at once.
 - Each file whose rows break a foreign key gets its own `Error` event naming
-  that file, after `Delete` events for any of its rows already present.
+  that file. Its new rows are never announced; `Delete` events cover only
+  rows of it that had landed before.
   Deleting a parent removes and reports each child file referencing it.
 - A per-table hook whose rows break a foreign key keeps the rows it had,
   less any a deleted parent strands, and reports one `Error` naming its table
-  with an empty file path. Every `on-file` table in a `.dirsql.toml` is such
-  a hook.
+  with an empty file path. Its rejected rows are never announced. Every
+  `on-file` table in a `.dirsql.toml` is such a hook.
 - A left-out file is not re-admitted when its parent arrives later. It
   returns when its own file is rewritten or touched, when a directory holding
   it is renamed in, or on a rescan.
@@ -60,5 +61,5 @@ sleep 2
 kill %2 %1
 ```
 
-The event stream inserts `parents/2.json` and reports one `error` for
-`child`, after a `delete` of its `pid = 9` row.
+On Linux the event stream inserts `parents/2.json` and reports one `error`
+for `child`, with no event for the `pid = 9` row.
