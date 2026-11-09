@@ -84,7 +84,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, MutexGuard,
+    Arc, Condvar, Mutex, MutexGuard,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -477,6 +477,8 @@ struct DirSqlInner {
     /// watch batch never interleave and their events reach consumers in the
     /// order they were applied.
     fresh: Mutex<FreshState>,
+    /// Signalled when [`DirSQL::unlock_index`] releases the index.
+    unlocked: Condvar,
     /// The symlinked directories the index reaches files through. The watcher
     /// reports a change only at the link's target, so each is restated here.
     links: Mutex<Vec<Link>>,
@@ -526,6 +528,9 @@ struct FreshState {
     seeded: bool,
     /// Row events a query's reconcile produced, for the next watch batch.
     outbox: Vec<RowEvent>,
+    /// Set by [`DirSQL::lock_index`]: nothing changes the index until
+    /// [`DirSQL::unlock_index`].
+    locked: bool,
 }
 
 fn watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
@@ -702,8 +707,33 @@ impl DirSQL {
     /// `on_file` cannot be called calls this first, on the thread that can.
     #[doc(hidden)]
     pub fn read_changes(&self) -> Result<()> {
-        let mut state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
+        let mut state = self.unlocked_fresh()?;
         self.reconcile(&mut state)
+    }
+
+    /// Hold the index still until [`unlock_index`](Self::unlock_index): no
+    /// query reads the disk and no watch batch applies until then. Waits for
+    /// a read or batch already in progress, and for another holder.
+    #[doc(hidden)]
+    pub fn lock_index(&self) -> Result<()> {
+        self.unlocked_fresh()?.locked = true;
+        Ok(())
+    }
+
+    /// Release [`lock_index`](Self::lock_index).
+    #[doc(hidden)]
+    pub fn unlock_index(&self) -> Result<()> {
+        self.inner.fresh.lock().map_err(DirSqlError::lock)?.locked = false;
+        self.inner.unlocked.notify_all();
+        Ok(())
+    }
+
+    fn unlocked_fresh(&self) -> Result<MutexGuard<'_, FreshState>> {
+        let state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
+        self.inner
+            .unlocked
+            .wait_while(state, |state| state.locked)
+            .map_err(DirSqlError::lock)
     }
 
     /// Hold the index still until the returned guard drops, first bringing
@@ -712,7 +742,7 @@ impl DirSQL {
     /// transaction, so a query that took only the database could read it
     /// half applied.
     fn refresh(&self) -> Result<MutexGuard<'_, FreshState>> {
-        let mut state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
+        let mut state = self.unlocked_fresh()?;
         if !self.inner.groups.is_empty() && self.inner.fresh_reads.load(Ordering::SeqCst) {
             self.reconcile(&mut state)?;
         }
@@ -977,10 +1007,15 @@ impl DirSQL {
         events: Vec<FileEvent>,
         late: impl FnMut() -> Vec<FileEvent>,
     ) -> Vec<RowEvent> {
-        let mut fresh = self
+        let fresh = self
             .inner
             .fresh
             .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut fresh = self
+            .inner
+            .unlocked
+            .wait_while(fresh, |state| state.locked)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = std::mem::take(&mut fresh.outbox);
         out.extend(self.apply_events(events, late));
@@ -2200,6 +2235,7 @@ impl DirSQL {
                 fresh_reads: AtomicBool::new(true),
                 built_ns,
                 fresh: Mutex::new(FreshState::default()),
+                unlocked: Condvar::new(),
                 links: Mutex::new(links),
             }),
         })
@@ -7913,6 +7949,22 @@ mod internal_tests {
         assert!(db.inner.fresh.try_lock().is_err());
         drop(held);
         assert!(db.inner.fresh.try_lock().is_ok());
+    }
+
+    #[test]
+    fn lock_index_marks_the_index_locked() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        db.lock_index().unwrap();
+        assert!(db.inner.fresh.lock().unwrap().locked);
+    }
+
+    #[test]
+    fn unlock_index_lets_a_query_run_at_once() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.lock_index().unwrap();
+        db.unlock_index().unwrap();
+        assert!(!db.inner.fresh.lock().unwrap().locked);
+        assert_eq!(row_names(&db), vec!["one"]);
     }
 
     #[test]

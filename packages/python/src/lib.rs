@@ -230,6 +230,16 @@ mod python {
             py.detach(move || db.start_watching()).map_err(to_py_err)
         }
 
+        fn _lock(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.lock_index()).map_err(to_py_err)
+        }
+
+        fn _unlock(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.unlock_index()).map_err(to_py_err)
+        }
+
         fn _poll_events(&self, py: Python<'_>, timeout_ms: u64) -> PyResult<Vec<PyRowEvent>> {
             let db = self.inner.clone();
             let events = py
