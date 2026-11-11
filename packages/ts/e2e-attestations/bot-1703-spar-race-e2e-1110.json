@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts tests/e2e/fanout.test.ts tests/e2e/sigint-interrupt.test.ts",
+  "ran_at": 1794367971,
+  "exit_code": 0,
+  "commit": "6e53b1eac5ffc348e3c3c81d7aed2c36ea1f7de3",
+  "branch": "bot/1703-spar-race-e2e-1110"
+}
