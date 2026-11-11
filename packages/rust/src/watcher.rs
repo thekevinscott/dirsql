@@ -123,6 +123,11 @@ impl Watcher {
         self.rx.recv_timeout(timeout).ok()
     }
 
+    /// Every event queued so far, in order, without blocking.
+    pub fn drain(&self) -> Vec<FileEvent> {
+        self.try_recv_all()
+    }
+
     /// Drain all currently pending events without blocking.
     pub fn try_recv_all(&self) -> Vec<FileEvent> {
         let mut events = Vec::new();

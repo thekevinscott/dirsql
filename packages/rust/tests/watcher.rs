@@ -314,3 +314,59 @@ fn scoped_watcher_reports_files_in_a_new_directory() {
         "saw: {events:?}"
     );
 }
+
+#[cfg(target_os = "linux")]
+fn published(events: &[FileEvent]) -> std::collections::HashSet<std::path::PathBuf> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            FileEvent::Created(p) | FileEvent::Modified(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn drain_returns_every_write_finished_before_it() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+
+    let staged = TempDir::new_in(root.parent().unwrap()).unwrap();
+    let missed: Vec<_> = (0..200)
+        .map(|i| root.join(format!("f{i}.txt")))
+        .filter(|path| {
+            let draft = staged.path().join("draft");
+            fs::write(&draft, "x").unwrap();
+            fs::rename(&draft, path).unwrap();
+            !published(&watcher.drain()).contains(path)
+        })
+        .collect();
+
+    assert!(
+        missed.is_empty(),
+        "drain missed {} writes: {missed:?}",
+        missed.len()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_is_published_once_it_is_closed_and_not_before() {
+    use std::io::Write;
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = Watcher::new(&root).unwrap();
+    let path = root.join("open.txt");
+
+    let mut file = fs::File::create(&path).unwrap();
+    file.write_all(b"half").unwrap();
+    file.flush().unwrap();
+    let open = collect_events_until(&watcher, Duration::from_millis(500), |_| false);
+    assert!(!published(&open).contains(&path), "saw: {open:?}");
+
+    drop(file);
+    let closed = watcher.drain();
+    assert!(published(&closed).contains(&path), "saw: {closed:?}");
+}
