@@ -1,12 +1,14 @@
-"""Binding-tier tests: ``db.lock`` holds the index still during a write.
+"""Binding-tier tests: a writer creating a parent and then its child, in the
+experiment layout, while queries run.
 
-The #1673 reproduction, with the writer wrapping each parent-then-child write
-in ``db.lock``. Without the lock a query's read can see the child but not its
-parent and fail on the foreign key.
+With the writer wrapping each pair in ``db.lock`` no query fails on any
+platform. Without it no query fails on Linux, where a query applies every
+event the kernel has queued before it checks a foreign key.
 """
 
 import asyncio
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -251,6 +253,16 @@ def _seed(root):
     (root / "advices").mkdir()
 
 
+def _write_pair(root, n):
+    a = root / f"advices/{n:064x}"
+    a.mkdir()
+    (a / "advice.txt").write_text(str(n))
+    (a / "advice.json").write_text("{}")
+    t = root / f"windows/0/forks/0/turns/{n}"
+    t.mkdir(parents=True)
+    (t / "metadata.json").write_text(json.dumps({"advice": f"advices/{n:064x}"}))
+
+
 def describe_lock():
     @pytest.mark.asyncio
     async def it_keeps_a_query_from_reading_a_child_without_its_parent(tmp_path):
@@ -266,15 +278,7 @@ def describe_lock():
             try:
                 while not stop.is_set():
                     with db.dirsql.lock:
-                        a = root / f"advices/{n:064x}"
-                        a.mkdir()
-                        (a / "advice.txt").write_text(str(n))
-                        (a / "advice.json").write_text("{}")
-                        t = root / f"windows/0/forks/0/turns/{n}"
-                        t.mkdir(parents=True)
-                        (t / "metadata.json").write_text(
-                            json.dumps({"advice": f"advices/{n:064x}"})
-                        )
+                        _write_pair(root, n)
                     n += 1
                     time.sleep(0.003)
             except Exception as exc:
@@ -299,3 +303,46 @@ def describe_lock():
         assert failures == []
         assert errors == []
         assert queries > 0
+
+
+def describe_no_lock():
+    @pytest.mark.skipif(
+        sys.platform != "linux", reason="the empty-queue guarantee is Linux's"
+    )
+    @pytest.mark.asyncio
+    async def it_fails_no_query_and_ends_with_every_pair(tmp_path):
+        root = tmp_path
+        _seed(root)
+        db = _experiment_database(root)
+        await db.dirsql.ready()
+        stop = threading.Event()
+        written = []
+
+        def writer():
+            n = 0
+            while not stop.is_set():
+                _write_pair(root, n)
+                n += 1
+                written.append(n)
+                time.sleep(0.003)
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        errors = []
+        queries = 0
+        end = time.time() + SECONDS
+        try:
+            while time.time() < end:
+                try:
+                    await db.query("SELECT count(*) AS n FROM turn_advice")
+                    queries += 1
+                except RuntimeError as exc:
+                    errors.append(str(exc))
+        finally:
+            stop.set()
+            thread.join()
+
+        assert errors == []
+        assert queries > 0
+        pairs = written[-1]
+        assert await db.query("SELECT count(*) AS n FROM turn_advice") == [{"n": pairs}]
