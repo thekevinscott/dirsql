@@ -149,6 +149,17 @@ pub struct OnFileFailure {
     pub message: String,
 }
 
+/// An error the OS reported, which each binding raises as its own native OS
+/// error. Carried inside [`DirSqlError::Io`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct OsError {
+    pub errno: i32,
+    /// The errno's symbolic name, as Node's `code`.
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
 #[derive(Debug, Error)]
 pub enum DirSqlError {
     #[error(transparent)]
@@ -238,6 +249,11 @@ pub enum DirSqlError {
 }
 
 impl DirSqlError {
+    /// The OS error this is, when a binding should raise its native one.
+    pub fn os_error(&self) -> Option<&OsError> {
+        None
+    }
+
     fn lock(e: impl std::fmt::Display) -> Self {
         DirSqlError::Lock(e.to_string())
     }
@@ -508,7 +524,7 @@ impl Link {
             FileEvent::Created(p) => (p, FileEvent::Created),
             FileEvent::Modified(p) => (p, FileEvent::Modified),
             FileEvent::Deleted(p) => (p, FileEvent::Deleted),
-            FileEvent::Rescan => return None,
+            FileEvent::Rescan | FileEvent::Fault(_) => return None,
         };
         match path.strip_prefix(&self.target) {
             Ok(rest) => Some(kind(self.path.join(rest))),
@@ -527,6 +543,11 @@ struct FreshState {
     /// Set by [`DirSQL::lock_index`]: nothing changes the index until
     /// [`DirSQL::unlock_index`].
     locked: bool,
+}
+
+/// The watcher the build keeps, given how starting it went.
+fn watcher_at_build<W>(started: std::result::Result<W, notify::Error>) -> Result<Option<W>> {
+    Ok(started.ok())
 }
 
 /// [`watch_scopes`] before the build has canonicalized each anchor.
@@ -1085,7 +1106,7 @@ impl DirSQL {
                         FileEvent::Deleted(p)
                     }
                 }
-                FileEvent::Rescan => FileEvent::Rescan,
+                other @ (FileEvent::Rescan | FileEvent::Fault(_)) => other,
             };
             if !restated.contains(&event) {
                 restated.push(event);
@@ -1155,7 +1176,7 @@ impl DirSQL {
     fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
-            FileEvent::Rescan => return Vec::new(),
+            FileEvent::Rescan | FileEvent::Fault(_) => return Vec::new(),
         };
         let mut events = Vec::new();
         for (group, rel_path_buf) in self.groups_containing(&abs_path) {
@@ -1205,7 +1226,7 @@ impl DirSQL {
                     FileEvent::Created(_) | FileEvent::Modified(_) => {
                         events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                     }
-                    FileEvent::Rescan => {}
+                    FileEvent::Rescan | FileEvent::Fault(_) => {}
                 }
             }
             // The mirror of the walk above: a directory that leaves the tree
@@ -1749,7 +1770,7 @@ impl DirSQL {
         let watcher = if table_names.is_empty() {
             None
         } else {
-            Watcher::scoped(build_watch_scopes(&groups)).ok()
+            watcher_at_build(Watcher::scoped(build_watch_scopes(&groups)))?
         };
         let (scanned, fresh_db) = if table_names.is_empty() {
             let fresh_db = if persist_ctx.is_none() {
@@ -3527,6 +3548,16 @@ fn generic_watch_error(message: &str) -> notify::Error {
 }
 
 #[cfg(test)]
+fn max_files_watch_error() -> notify::Error {
+    notify::Error::new(notify::ErrorKind::MaxFilesWatch)
+}
+
+#[cfg(test)]
+fn missing_watch_error() -> notify::Error {
+    notify::Error::io(std::io::Error::from(std::io::ErrorKind::NotFound))
+}
+
+#[cfg(test)]
 impl AsyncDirSqlInner {
     /// Fresh inner with an empty `db` cell — the pre-`ready` state.
     fn empty() -> Self {
@@ -3709,6 +3740,7 @@ mod readonly_tests {
 #[cfg(test)]
 mod internal_tests {
     use super::*;
+    use crate::watcher::WatchFault;
     use std::cell::Cell;
     use std::collections::HashMap as StdHashMap;
     use std::collections::HashSet as StdHashSet;
@@ -7515,6 +7547,90 @@ mod internal_tests {
     fn a_rescan_of_a_tree_that_did_not_drift_emits_nothing() {
         let (_dir, _root, db, _) = rescan_fixture(false);
         assert_eq!(db.apply_file_events(vec![FileEvent::Rescan]), vec![]);
+    }
+
+    fn two_query_errors(db: &DirSQL) -> Vec<DirSqlError> {
+        (0..2)
+            .map(|_| match db.query("SELECT name FROM items") {
+                Ok(rows) => panic!("the query returned {rows:?}"),
+                Err(e) => e,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_overflow_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Rescan]);
+
+        for err in two_query_errors(&db) {
+            assert!(matches!(err, DirSqlError::Watch { .. }), "got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn a_directory_over_the_watch_limit_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Fault(WatchFault::Limit)]);
+
+        for err in two_query_errors(&db) {
+            assert_eq!(err.os_error().map(|os| os.errno), Some(28), "got: {err:?}");
+            assert_eq!(err.to_string(), "inotify watch limit reached");
+        }
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_watched_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Fault(WatchFault::Failed(
+            "denied".to_string(),
+        ))]);
+
+        for err in two_query_errors(&db) {
+            assert_eq!(err.to_string(), "watcher error: denied");
+        }
+    }
+
+    #[test]
+    fn a_build_over_the_watch_limit_raises_what_watchdog_raises() {
+        let err = match watcher_at_build::<()>(Err(max_files_watch_error())) {
+            Ok(kept) => panic!("the build kept {kept:?}"),
+            Err(e) => e,
+        };
+        let DirSqlError::Io(io) = &err else {
+            panic!("not an io error: {err:?}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::StorageFull);
+        assert_eq!(
+            err.os_error(),
+            Some(&OsError {
+                errno: 28,
+                code: "ENOSPC",
+                message: "inotify watch limit reached",
+            })
+        );
+        assert_eq!(err.to_string(), "inotify watch limit reached");
+    }
+
+    #[test]
+    fn a_build_whose_watcher_cannot_start_fails_with_the_watch_error() {
+        let err = match watcher_at_build::<()>(Err(generic_watch_error("denied"))) {
+            Ok(kept) => panic!("the build kept {kept:?}"),
+            Err(e) => e,
+        };
+        assert_eq!(err.to_string(), "watcher error: denied");
+    }
+
+    #[test]
+    fn a_build_over_a_missing_anchor_starts_no_watcher() {
+        assert_eq!(
+            watcher_at_build::<()>(Err(missing_watch_error())).unwrap(),
+            None
+        );
+        assert_eq!(watcher_at_build(Ok(7)).unwrap(), Some(7));
     }
 
     fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {

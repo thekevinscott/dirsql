@@ -32,6 +32,20 @@ pub enum FileEvent {
     /// The OS dropped events (an inotify queue overflow); the index may have
     /// diverged from disk and must be rebuilt from a walk.
     Rescan,
+    /// A directory that appeared could not be watched, so changes inside it
+    /// go unseen.
+    Fault(WatchFault),
+}
+
+/// Why the watcher no longer sees every change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchFault {
+    /// inotify's watch limit is exhausted.
+    Limit,
+    /// The OS dropped events.
+    Overflow,
+    /// A directory could not be watched for another reason, described.
+    Failed(String),
 }
 
 /// A tree to watch, and the skip rules the scan applies within it.

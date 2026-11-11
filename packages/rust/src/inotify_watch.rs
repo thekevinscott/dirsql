@@ -362,6 +362,7 @@ fn everything(root: &str) -> WatchScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::watcher::WatchFault;
 
     // Effectful tests reading a real inotify fd live in `tests/watcher.rs`
     // (unit-lint isolation).
@@ -579,6 +580,43 @@ mod tests {
                 PathBuf::from("/s"),
                 PathBuf::from("/s/sub"),
             ]
+        );
+    }
+
+    fn step_failing(errno: i32) -> Option<FileEvent> {
+        let mut dirs = watching(&[(1, "/r")]);
+        dirs.step(
+            &[everything("/r")],
+            &|_, dir| vec![dir.to_path_buf()],
+            &1,
+            mask(&["create", "isdir"]),
+            Some(OsStr::new("d")),
+            &mut |_| Err(watch_error(os_error(errno)).add_path(PathBuf::from("/r/d"))),
+            &mut |_| {},
+        )
+    }
+
+    #[test]
+    fn step_reports_a_new_directory_over_the_watch_limit() {
+        assert_eq!(
+            step_failing(ENOSPC),
+            Some(FileEvent::Fault(WatchFault::Limit))
+        );
+    }
+
+    #[test]
+    fn step_reports_a_new_directory_it_cannot_watch() {
+        let Some(FileEvent::Fault(WatchFault::Failed(message))) = step_failing(13) else {
+            panic!("no fault reported");
+        };
+        assert!(message.contains("/r/d"), "{message}");
+    }
+
+    #[test]
+    fn step_watches_nothing_for_a_new_directory_already_gone() {
+        assert_eq!(
+            step_failing(2),
+            Some(FileEvent::Created(PathBuf::from("/r/d")))
         );
     }
 
