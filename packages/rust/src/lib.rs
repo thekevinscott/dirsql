@@ -79,13 +79,13 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::{Found, scan_directory_reporting};
-use crate::watcher::{FileEvent, WatchScope, Watcher};
+use crate::watcher::{FileEvent, WatchFault, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard,
+    Arc, Condvar, Mutex, MutexGuard, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -251,7 +251,10 @@ pub enum DirSqlError {
 impl DirSqlError {
     /// The OS error this is, when a binding should raise its native one.
     pub fn os_error(&self) -> Option<&OsError> {
-        None
+        match self {
+            Self::Io(e) => e.get_ref()?.downcast_ref(),
+            _ => None,
+        }
     }
 
     fn lock(e: impl std::fmt::Display) -> Self {
@@ -473,6 +476,7 @@ struct DirSqlInner {
     /// The file events of watch batches a foreign key rejected, replayed
     /// with every later batch until one lands them.
     held: Mutex<Vec<FileEvent>>,
+    fault: OnceLock<WatchFault>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Arc<Watcher>>>,
@@ -547,7 +551,34 @@ struct FreshState {
 
 /// The watcher the build keeps, given how starting it went.
 fn watcher_at_build<W>(started: std::result::Result<W, notify::Error>) -> Result<Option<W>> {
-    Ok(started.ok())
+    match started {
+        Ok(watcher) => Ok(Some(watcher)),
+        Err(e) if watcher::is_not_found(&e) => Ok(None),
+        Err(e) => match WatchFault::of(&e) {
+            WatchFault::Limit => Err((&WatchFault::Limit).into()),
+            _ => Err(DirSqlError::watch(e)),
+        },
+    }
+}
+
+impl From<&WatchFault> for DirSqlError {
+    fn from(fault: &WatchFault) -> Self {
+        match fault {
+            // What watchdog raises, so each binding raises its own OS error.
+            WatchFault::Limit => Self::Io(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                OsError {
+                    errno: 28,
+                    code: "ENOSPC",
+                    message: "inotify watch limit reached",
+                },
+            )),
+            WatchFault::Overflow => Self::watch_msg(
+                "the OS dropped file events, so the index no longer matches the files; rebuild it",
+            ),
+            WatchFault::Failed(message) => Self::watch_msg(message.clone()),
+        }
+    }
 }
 
 /// [`watch_scopes`] before the build has canonicalized each anchor.
@@ -773,6 +804,9 @@ impl DirSQL {
         let mut state = self.unlocked_fresh()?;
         if self.inner.query_applies_events.load(Ordering::SeqCst) {
             self.apply_queued(&mut state);
+        }
+        if let Some(fault) = self.inner.fault.get() {
+            return Err(fault.into());
         }
         Ok(state)
     }
@@ -1057,9 +1091,17 @@ impl DirSQL {
         while !batch.is_empty() {
             for fe in batch {
                 applied.push(fe.clone());
-                if fe == FileEvent::Rescan {
-                    rescan = true;
-                    continue;
+                match fe {
+                    FileEvent::Rescan => {
+                        self.record_fault(WatchFault::Overflow);
+                        rescan = true;
+                        continue;
+                    }
+                    FileEvent::Fault(fault) => {
+                        self.record_fault(fault);
+                        continue;
+                    }
+                    _ => {}
                 }
                 for fe in self.through_links(fe) {
                     out.extend(self.route_file_event(fe, &mut pending));
@@ -1072,6 +1114,12 @@ impl DirSQL {
         }
         out.extend(self.refresh_pending(pending));
         (out, applied)
+    }
+
+    /// The watcher has stopped seeing every change: from now on, every query
+    /// fails with the first such fault.
+    fn record_fault(&self, fault: WatchFault) {
+        let _ = self.inner.fault.set(fault);
     }
 
     /// Keep `events` to replay with the next batch, once per path.
@@ -1766,7 +1814,7 @@ impl DirSQL {
             (HashMap::new(), Vec::new())
         };
         // A watcher that cannot start yet (an anchor not created) does not
-        // fail the build; watching starts it, or surfaces why it cannot.
+        // fail the build; watching starts it.
         let watcher = if table_names.is_empty() {
             None
         } else {
@@ -2192,6 +2240,7 @@ impl DirSQL {
                 declared,
                 batch_files: Mutex::new(batch_files),
                 held: Mutex::new(Vec::new()),
+                fault: OnceLock::new(),
                 scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
                 poll_used: AtomicBool::new(false),
@@ -3553,8 +3602,8 @@ fn max_files_watch_error() -> notify::Error {
 }
 
 #[cfg(test)]
-fn missing_watch_error() -> notify::Error {
-    notify::Error::io(std::io::Error::from(std::io::ErrorKind::NotFound))
+fn path_not_found_error() -> notify::Error {
+    notify::Error::path_not_found()
 }
 
 #[cfg(test)]
@@ -3740,7 +3789,6 @@ mod readonly_tests {
 #[cfg(test)]
 mod internal_tests {
     use super::*;
-    use crate::watcher::WatchFault;
     use std::cell::Cell;
     use std::collections::HashMap as StdHashMap;
     use std::collections::HashSet as StdHashSet;
@@ -7504,6 +7552,19 @@ mod internal_tests {
         out
     }
 
+    /// The rows stored, read past the query a rescan fails.
+    fn stored_names(db: &DirSQL) -> Vec<String> {
+        let guard = db.inner.db.lock().unwrap();
+        let mut stmt = guard
+            .conn()
+            .prepare("SELECT name FROM items ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
     #[test]
     fn a_rescan_reconciles_a_per_file_table_with_the_tree() {
         let (_dir, root, db, _) = rescan_fixture(false);
@@ -7515,7 +7576,7 @@ mod internal_tests {
             rescan_summary(&events),
             vec!["delete a.txt", "insert c.txt", "insert d.txt"]
         );
-        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+        assert_eq!(stored_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
     }
 
     #[test]
@@ -7540,7 +7601,7 @@ mod internal_tests {
                 "insert c.txt"
             ]
         );
-        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+        assert_eq!(stored_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
     }
 
     #[test]
@@ -7627,7 +7688,7 @@ mod internal_tests {
     #[test]
     fn a_build_over_a_missing_anchor_starts_no_watcher() {
         assert_eq!(
-            watcher_at_build::<()>(Err(missing_watch_error())).unwrap(),
+            watcher_at_build::<()>(Err(path_not_found_error())).unwrap(),
             None
         );
         assert_eq!(watcher_at_build(Ok(7)).unwrap(), Some(7));

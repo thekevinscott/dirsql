@@ -48,6 +48,15 @@ pub enum WatchFault {
     Failed(String),
 }
 
+impl WatchFault {
+    pub(crate) fn of(err: &notify::Error) -> Self {
+        match err.kind {
+            ErrorKind::MaxFilesWatch => Self::Limit,
+            _ => Self::Failed(describe_watch_error(err, cfg!(target_os = "linux"))),
+        }
+    }
+}
+
 /// A tree to watch, and the skip rules the scan applies within it.
 pub struct WatchScope {
     pub root: PathBuf,
@@ -213,9 +222,12 @@ fn forward(
                     return;
                 };
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                watch_tree_quietly(scopes, path, &walk_scope, &mut |dir| {
+                if let Err(fault) = watch_new_tree(scopes, path, &walk_scope, &mut |dir| {
                     watcher.watch(dir, RecursiveMode::NonRecursive)
-                });
+                }) && tx.send(FileEvent::Fault(fault)).is_err()
+                {
+                    return;
+                }
             }
             if fe == FileEvent::Rescan && PER_DIRECTORY {
                 let Some(watcher) = watcher.upgrade() else {
@@ -225,9 +237,14 @@ fn forward(
                 // Directories created while events were being dropped have no
                 // watch yet.
                 for scope in scopes {
-                    watch_tree_quietly(scopes, &scope.root, &walk_scope, &mut |dir| {
-                        watcher.watch(dir, RecursiveMode::NonRecursive)
-                    });
+                    if let Err(fault) =
+                        watch_new_tree(scopes, &scope.root, &walk_scope, &mut |dir| {
+                            watcher.watch(dir, RecursiveMode::NonRecursive)
+                        })
+                        && tx.send(FileEvent::Fault(fault)).is_err()
+                    {
+                        return;
+                    }
                 }
             }
             if tx.send(fe).is_err() {
@@ -237,18 +254,18 @@ fn forward(
     }
 }
 
-/// [`watch_tree`] from `dir`, carrying on past any directory that cannot be
-/// watched: one gone again before its watch lands has nothing to report.
-pub(crate) fn watch_tree_quietly(
+/// [`watch_tree`] from a directory that appeared after the watcher started.
+/// One gone again before its watch lands has nothing to report.
+pub(crate) fn watch_new_tree(
     scopes: &[WatchScope],
     dir: &Path,
     walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
     watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
-) {
-    let _ = watch_tree(scopes, dir, walk, &mut HashSet::new(), &mut |dir| {
-        let _ = tolerate_missing(watch(dir));
-        Ok(())
-    });
+) -> Result<(), WatchFault> {
+    watch_tree(scopes, dir, walk, &mut HashSet::new(), &mut |dir| {
+        tolerate_missing(watch(dir))
+    })
+    .map_err(|e| WatchFault::of(&e))
 }
 
 /// Watch each directory [`dirs_to_watch`] finds from `dir` that is not in
@@ -296,7 +313,7 @@ pub(crate) fn tolerate_missing(result: Result<(), notify::Error>) -> Result<(), 
     }
 }
 
-fn is_not_found(error: &notify::Error) -> bool {
+pub(crate) fn is_not_found(error: &notify::Error) -> bool {
     match &error.kind {
         notify::ErrorKind::PathNotFound => true,
         notify::ErrorKind::Io(io) => io.kind() == std::io::ErrorKind::NotFound,
@@ -644,25 +661,50 @@ mod tests {
     }
 
     #[test]
-    fn watch_tree_quietly_watches_every_directory_past_a_failed_one() {
+    fn watch_new_tree_stops_at_a_directory_it_cannot_watch() {
         let scopes = [scope("/r", &[])];
         let mut seen = Vec::new();
-        watch_tree_quietly(
+        let result = watch_new_tree(
             &scopes,
             Path::new("/r"),
             &|_, dir| vec![dir.to_path_buf(), dir.join("a"), dir.join("b")],
             &mut |dir| {
                 seen.push(dir.to_path_buf());
-                Err(io_error(13))
+                if dir.ends_with("a") {
+                    Err(max_files_watch_error())
+                } else {
+                    Ok(())
+                }
             },
         );
+        assert_eq!(result, Err(WatchFault::Limit));
+        assert_eq!(seen, vec![PathBuf::from("/r"), PathBuf::from("/r/a")]);
+    }
+
+    #[test]
+    fn watch_new_tree_passes_a_directory_gone_before_its_watch() {
+        let scopes = [scope("/r", &[])];
+        let mut seen = Vec::new();
+        let result = watch_new_tree(
+            &scopes,
+            Path::new("/r"),
+            &|_, dir| vec![dir.to_path_buf(), dir.join("a")],
+            &mut |dir| {
+                seen.push(dir.to_path_buf());
+                Err(io_error(2))
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, vec![PathBuf::from("/r"), PathBuf::from("/r/a")]);
+    }
+
+    #[test]
+    fn a_fault_is_the_limit_for_max_files_watch_and_described_otherwise() {
+        assert_eq!(WatchFault::of(&max_files_watch_error()), WatchFault::Limit);
+        let other = io_error(13);
         assert_eq!(
-            seen,
-            vec![
-                PathBuf::from("/r"),
-                PathBuf::from("/r/a"),
-                PathBuf::from("/r/b")
-            ]
+            WatchFault::of(&other),
+            WatchFault::Failed(describe_watch_error(&other, cfg!(target_os = "linux")))
         );
     }
 

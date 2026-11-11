@@ -1,5 +1,7 @@
+#[cfg(test)]
+use crate::watcher::WatchFault;
 use crate::watcher::{
-    FileEvent, WatchScope, tolerate_missing, walk_scope, watch_tree, watch_tree_quietly,
+    FileEvent, WatchScope, tolerate_missing, walk_scope, watch_new_tree, watch_tree,
 };
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -300,7 +302,11 @@ impl<W: Eq + Hash + Clone> Dirs<W> {
             // Directories created while events were being dropped have no
             // watch yet.
             for scope in scopes {
-                watch_tree_quietly(scopes, &scope.root, walk, &mut |dir| self.watch(dir, add));
+                if let Err(fault) =
+                    watch_new_tree(scopes, &scope.root, walk, &mut |dir| self.watch(dir, add))
+                {
+                    return Some(FileEvent::Fault(fault));
+                }
             }
             return Some(FileEvent::Rescan);
         }
@@ -314,8 +320,10 @@ impl<W: Eq + Hash + Clone> Dirs<W> {
             Change::Publish => FileEvent::Created(path),
             Change::Remove => FileEvent::Deleted(path),
             Change::DirIn => {
-                watch_tree_quietly(scopes, &path, walk, &mut |dir| self.watch(dir, add));
-                FileEvent::Created(path)
+                match watch_new_tree(scopes, &path, walk, &mut |dir| self.watch(dir, add)) {
+                    Ok(()) => FileEvent::Created(path),
+                    Err(fault) => FileEvent::Fault(fault),
+                }
             }
             Change::DirOut => {
                 self.unwatch_below(&path, remove);
@@ -362,7 +370,6 @@ fn everything(root: &str) -> WatchScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::watcher::WatchFault;
 
     // Effectful tests reading a real inotify fd live in `tests/watcher.rs`
     // (unit-lint isolation).
