@@ -4134,6 +4134,51 @@ mod internal_tests {
         assert!(DirSQL::finish_build(prepared).is_ok());
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_parent_and_child_landing_mid_walk_both_reach_the_build() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (parents, children) = (root.join("parents"), root.join("children"));
+        std::fs::create_dir(&parents).unwrap();
+        std::fs::create_dir(&children).unwrap();
+        let tables = vec![
+            Table::new(
+                "parent",
+                "CREATE TABLE parent (id INTEGER PRIMARY KEY)",
+                "*.p",
+                |_| vec![Row::from_iter([("id".to_string(), Value::Integer(1))])],
+            )
+            .anchored(&parents),
+            Table::new(
+                "child",
+                "CREATE TABLE child (pid INTEGER REFERENCES parent(id))",
+                "*.c",
+                |_| vec![Row::from_iter([("pid".to_string(), Value::Integer(1))])],
+            )
+            .anchored(&children),
+        ];
+        let scan = |anchor: &Path,
+                    matcher: &TableMatcher,
+                    on_file: &mut dyn FnMut(u64),
+                    on_match: &mut dyn FnMut(&Path, &str),
+                    on_link: &(dyn Fn(&Path) + Sync)| {
+            if anchor == children {
+                std::fs::write(parents.join("one.p"), "").unwrap();
+                std::fs::write(children.join("one.c"), "").unwrap();
+            }
+            scan_directory_reporting(anchor, matcher, on_file, on_match, on_link)
+        };
+
+        let prepared =
+            DirSQL::prepare_resolved_with(resolved_over(&root, tables, false), &scan).unwrap();
+        let db = DirSQL::finish_build(prepared).unwrap();
+
+        db.set_fresh_reads(false);
+        assert_eq!(db.query("SELECT id FROM parent").unwrap().len(), 1);
+        assert_eq!(db.query("SELECT pid FROM child").unwrap().len(), 1);
+    }
+
     /// Configless startup declares zero tables, so nothing the walk could
     /// visit can match: the walk must not run at all.
     #[test]
