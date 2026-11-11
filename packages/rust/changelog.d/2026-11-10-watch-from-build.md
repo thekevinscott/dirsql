@@ -1,0 +1,1 @@
+**Fixed** The file watcher starts before the build walks the directory, and what it saw during the walk is applied before the build commits. A parent and a child file written while the index is being built no longer fail the build with a foreign-key error.

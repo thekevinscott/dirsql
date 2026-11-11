@@ -60,7 +60,6 @@ fn swapping_a_unique_value_between_keyed_rows_updates_both_in_place() {
         .config(&cfg)
         .build()
         .unwrap();
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
     write_rows(
@@ -97,7 +96,6 @@ fn rotating_a_unique_value_through_three_keyed_rows_updates_each_in_place() {
         .config(&cfg)
         .build()
         .unwrap();
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
     write_rows(

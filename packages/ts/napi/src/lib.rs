@@ -377,7 +377,7 @@ impl DirSQL {
         let inner = inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        inner.start_watching().map_err(to_napi_err)
+        inner.attach_watcher().map_err(to_napi_err)
     }
 
     /// Poll for file events with a timeout (in milliseconds).

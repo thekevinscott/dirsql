@@ -53,7 +53,6 @@ fn paths(db: &DirSQL) -> Vec<String> {
 fn mkdir_under_root_inserts_no_row() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::create_dir(dir.path().join("subdir")).unwrap();
@@ -91,7 +90,6 @@ fn rename_out_deletes_rows() {
         paths(&db)
     );
 
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(dir.path().join("a.txt"), outside.path().join("a.txt")).unwrap();
@@ -130,7 +128,6 @@ fn dir_moved_into_root_indexes_its_files() {
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
     db.set_fresh_reads(false);
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();
@@ -165,7 +162,6 @@ fn dir_moved_into_root_indexes_nested_files() {
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
     db.set_fresh_reads(false);
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();
@@ -222,7 +218,6 @@ fn dir_moved_out_of_root_deletes_its_rows() {
         "initial scan should index both files under leaving/"
     );
 
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(dir.path().join("leaving"), outside.path().join("leaving")).unwrap();
@@ -274,7 +269,6 @@ fn dir_renamed_within_root_deletes_rows_under_old_name() {
         paths(&db)
     );
 
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(dir.path().join("a"), dir.path().join("b")).unwrap();

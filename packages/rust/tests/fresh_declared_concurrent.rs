@@ -43,7 +43,6 @@ fn every_write_is_read_by_the_next_query_while_another_thread_consumes_watch() {
 fn every_write_is_read_by_the_next_query_while_another_thread_polls_events() {
     let tree = Tree::new();
     let db = tree.open();
-    db.start_watching().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let poller = {
         let db = db.clone();
