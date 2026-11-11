@@ -98,7 +98,7 @@ def describe_a_server_over_a_child_with_no_parent():
         answer = _ask(port, COUNTS)
         assert isinstance(answer, str), answer
         assert "foreign key violation" in answer, answer
-        assert "c/lost.json" in answer, answer
+        assert "`child` row has pid = 1" in answer, answer
 
     def it_fails_every_query_until_the_parent_is_written(served):
         root, port = served

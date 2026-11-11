@@ -297,8 +297,10 @@ db.query_with(
 - **Applies the watcher's queued events.** Before reading, a query applies
   every file event the watcher has queued, and checks foreign keys only once
   that queue is empty, so a writer creating a parent file and then its child
-  never fails a query. A file is read when it is closed after writing or
-  renamed into place. On Linux the query first drains the kernel's queue, so a
+  never fails a query. While a batch a foreign key rejected waits to be
+  retried, the query raises its violation instead: see
+  [Foreign keys](./config.md#foreign-keys). A file is read when it is closed
+  after writing or renamed into place. On Linux the query first drains the kernel's queue, so a
   write that returned before the call is reflected in its rows; on macOS and
   Windows it applies what the watcher has delivered, so a query issued the
   moment a write returns may read the previous rows. The row events applied
