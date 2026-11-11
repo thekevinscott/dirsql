@@ -186,15 +186,12 @@ impl Watcher {
     }
 
     /// Block until an event is queued or `timeout` runs out, taking none.
-    pub fn wait(&self, timeout: Duration) -> bool {
-        if !lock(&self.waited).is_empty() {
-            return true;
+    pub fn wait(&self, timeout: Duration) {
+        if lock(&self.waited).is_empty() {
+            if let Ok(event) = lock(&self.rx).recv_timeout(timeout) {
+                lock(&self.waited).push_back(event);
+            }
         }
-        let Ok(event) = lock(&self.rx).recv_timeout(timeout) else {
-            return false;
-        };
-        lock(&self.waited).push_back(event);
-        true
     }
 }
 

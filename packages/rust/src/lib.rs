@@ -4484,6 +4484,53 @@ mod internal_tests {
         );
     }
 
+    fn failing_subtree_db(fake: FakeFs, root: &Path) -> DirSQL {
+        DirSQL::with_ignore_and_fs(
+            root,
+            vec![Table::try_new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| Err("half written".into()),
+            )],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap()
+    }
+
+    /// A file found inside a just-created directory may still be mid-write,
+    /// so failing to parse it is no error: its close-write reads it again.
+    #[test]
+    fn a_created_directory_skips_a_file_that_fails_to_parse() {
+        let dir = TempDir::new().unwrap();
+        let moved = dir.path().join("moved");
+        let fake = FakeFs::default()
+            .with_subtree(moved.clone(), vec![(moved.join("a.txt"), "items".into())]);
+        let db = failing_subtree_db(fake, dir.path());
+
+        let events = db.process_file_event(FileEvent::Created(moved));
+
+        assert!(events.is_empty(), "got: {events:?}");
+    }
+
+    /// A file that is no longer being written does report its parse failure.
+    #[test]
+    fn a_closed_file_that_fails_to_parse_reports_the_error() {
+        let dir = TempDir::new().unwrap();
+        let moved = dir.path().join("moved");
+        let a = moved.join("a.txt");
+        let fake = FakeFs::default().with_subtree(moved, vec![(a.clone(), "items".into())]);
+        let db = failing_subtree_db(fake, dir.path());
+
+        let events = db.process_file_event(FileEvent::Modified(a));
+
+        assert!(
+            matches!(&events[..], [RowEvent::Error { error, .. }] if error.contains("half written")),
+            "got: {events:?}"
+        );
+    }
+
     /// The walk is matched against the root the event was stripped with, so
     /// the rows it writes carry the same relative paths a create event would.
     #[test]
@@ -5533,6 +5580,8 @@ mod internal_tests {
         assert!(e1.to_string().contains("watch() is active"), "got: {e1}");
         let e2 = db.wait_file_events(Duration::from_millis(0)).unwrap_err();
         assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
+        let e3 = db.wait_for_events(Duration::from_millis(0)).unwrap_err();
+        assert!(e3.to_string().contains("watch() is active"), "got: {e3}");
     }
 
     #[test]
