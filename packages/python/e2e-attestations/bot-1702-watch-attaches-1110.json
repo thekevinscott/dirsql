@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/watch_speed_test.py -x -q",
+  "ran_at": 1794366829,
+  "exit_code": 0,
+  "commit": "3e82d0908def7feeed241c26cbfe9ffe6b7bc2cc",
+  "branch": "bot/1702-watch-attaches-1110"
+}
