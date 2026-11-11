@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts",
+  "ran_at": 1794363658,
+  "exit_code": 0,
+  "commit": "80322f9ecc2e06ff18583ee2d0c4e77b08c46a91",
+  "branch": "bot/1696-inotify-watcher-1110"
+}
