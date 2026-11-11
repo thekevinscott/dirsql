@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts tests/e2e/fanout.test.ts tests/e2e/sigint-interrupt.test.ts",
+  "ran_at": 1794366104,
+  "exit_code": 0,
+  "commit": "3fe6ffa65777ef3c72701fb75946d91672f2506a",
+  "branch": "bot/1698-queries-apply-events-1110"
+}
