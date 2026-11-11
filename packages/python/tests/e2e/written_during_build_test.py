@@ -62,8 +62,10 @@ def describe_files_written_during_the_build():
             [
                 _cli(),
                 "query",
-                "SELECT (SELECT count(*) FROM parent) AS parents, "
-                "(SELECT count(*) FROM child) AS children",
+                (
+                    "SELECT (SELECT count(*) FROM parent) AS parents, "
+                    "(SELECT count(*) FROM child) AS children"
+                ),
                 "--config",
                 str(cfg),
             ],
