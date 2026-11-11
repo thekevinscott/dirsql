@@ -1,7 +1,7 @@
 {
   "command": "PATH=\"$PWD/.venv/bin:$PATH\" .venv/bin/python -m pytest tests/e2e/many_dirs_speed_test.py tests/e2e/written_during_build_test.py tests/e2e/frontmatter_parse_speed_test.py -q -p no:cacheprovider",
-  "ran_at": 1794388088,
+  "ran_at": 1794388297,
   "exit_code": 0,
-  "commit": "1cd6a85f79441ba175c810f4dd9959aaf8c08275",
+  "commit": "006d7ba64e49ff58426e5db5aa48e1202df8fc1f",
   "branch": "bot/1701-oneshot-watch-1110"
 }
