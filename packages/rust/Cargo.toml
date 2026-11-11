@@ -93,7 +93,10 @@ typed-path = "0.12"
 
 # Reads a directory's names into one buffer instead of one allocation each.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["event", "fs"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify = { version = "0.10", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

@@ -29,6 +29,8 @@ mod gitignore_frame;
 mod glob_unescape;
 #[doc(hidden)]
 pub mod infer;
+#[cfg(target_os = "linux")]
+mod inotify_watch;
 #[doc(hidden)]
 pub mod launcher;
 mod listing;

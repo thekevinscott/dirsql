@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/watch_speed_test.py -x -q",
+  "ran_at": 1794363568,
+  "exit_code": 0,
+  "commit": "f455bca0b1a4f68c0329d41d9caa2a07d700cb5f",
+  "branch": "bot/1696-inotify-watcher-1110"
+}
