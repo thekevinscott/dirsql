@@ -2,7 +2,7 @@
 //! returns with that write: over the server's HTTP query endpoint, and in the
 //! REPL. Real binary, real filesystem, nothing mocked.
 
-#![cfg(feature = "cli")]
+#![cfg(all(feature = "cli", target_os = "linux"))]
 
 #[path = "common/fresh.rs"]
 mod fresh;

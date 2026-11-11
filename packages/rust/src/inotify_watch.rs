@@ -2,12 +2,13 @@ use crate::watcher::{
     FileEvent, WatchScope, tolerate_missing, walk_scope, watch_tree, watch_tree_quietly,
 };
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::hash::Hash;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const ENOSPC: i32 = 28;
@@ -25,7 +26,10 @@ const MASK: WatchMask = WatchMask::CLOSE_WRITE
 /// Reads inotify itself, one non-recursive watch per directory the scan
 /// enters, so [`drain`](Self::drain) can empty the kernel's queue on demand.
 pub struct Watcher {
-    reader: RefCell<Reader>,
+    reader: Mutex<Reader>,
+    /// The inotify fd again, so [`wait`](Self::wait) can block on it without
+    /// holding the reader a query drains.
+    fd: OwnedFd,
 }
 
 struct Reader {
@@ -75,8 +79,10 @@ impl Watcher {
                 &mut |dir| tolerate_missing(add(dir)),
             )?;
         }
+        let fd = rustix::io::dup(&inotify).map_err(|e| notify::Error::io(e.into()))?;
         Ok(Self {
-            reader: RefCell::new(Reader {
+            fd,
+            reader: Mutex::new(Reader {
                 inotify,
                 dirs,
                 scopes,
@@ -98,9 +104,17 @@ impl Watcher {
     /// `rename` returns only once its event is queued, so every write
     /// finished before this call is in the result.
     pub fn drain(&self) -> Vec<FileEvent> {
-        let mut reader = self.reader.borrow_mut();
+        let mut reader = self.reader();
         reader.read();
         reader.queued.drain(..).collect()
+    }
+
+    /// Block until an event is queued or `timeout` runs out, taking none.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        if !self.reader().queued.is_empty() {
+            return true;
+        }
+        wait_readable(&self.fd, Some(timeout)).unwrap_or(false)
     }
 
     pub fn try_recv_all(&self) -> Vec<FileEvent> {
@@ -108,18 +122,26 @@ impl Watcher {
     }
 
     fn next(&self, deadline: Option<Instant>) -> Option<FileEvent> {
-        let mut reader = self.reader.borrow_mut();
         loop {
-            reader.read();
-            if let Some(event) = reader.queued.pop_front() {
-                return Some(event);
+            {
+                let mut reader = self.reader();
+                reader.read();
+                if let Some(event) = reader.queued.pop_front() {
+                    return Some(event);
+                }
             }
             let left = match deadline {
                 Some(deadline) => Some(deadline.checked_duration_since(Instant::now())?),
                 None => None,
             };
-            reader.wait(left).ok()?;
+            wait_readable(&self.fd, left).ok()?;
         }
+    }
+
+    fn reader(&self) -> MutexGuard<'_, Reader> {
+        self.reader
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -154,21 +176,19 @@ impl Reader {
             }
         }
     }
+}
 
-    /// Block until the fd is readable or `left` runs out.
-    fn wait(&self, left: Option<Duration>) -> io::Result<()> {
-        let timeout = left
-            .map(rustix::event::Timespec::try_from)
-            .transpose()
-            .map_err(|_| io::ErrorKind::InvalidInput)?;
-        let mut fds = [rustix::event::PollFd::new(
-            &self.inotify,
-            rustix::event::PollFlags::IN,
-        )];
-        match rustix::event::poll(&mut fds, timeout.as_ref()) {
-            Ok(_) | Err(rustix::io::Errno::INTR) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+/// Block until `fd` is readable or `left` runs out; whether it is.
+fn wait_readable(fd: &OwnedFd, left: Option<Duration>) -> io::Result<bool> {
+    let timeout = left
+        .map(rustix::event::Timespec::try_from)
+        .transpose()
+        .map_err(|_| io::ErrorKind::InvalidInput)?;
+    let mut fds = [rustix::event::PollFd::new(fd, rustix::event::PollFlags::IN)];
+    match rustix::event::poll(&mut fds, timeout.as_ref()) {
+        Ok(n) => Ok(n > 0),
+        Err(rustix::io::Errno::INTR) => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 

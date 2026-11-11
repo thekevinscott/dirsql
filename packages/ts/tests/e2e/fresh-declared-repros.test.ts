@@ -84,7 +84,8 @@ function consume(db: DirSQL): void {
   });
 }
 
-describe("a long-lived DirSQL reads what is on disk", () => {
+// A query reads a write at once only where it drains the inotify queue.
+describe.runIf(process.platform === "linux")("a long-lived DirSQL reads what is on disk", () => {
   let dir: string;
   let db: DirSQL | undefined;
 

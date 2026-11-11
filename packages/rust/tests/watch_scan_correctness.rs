@@ -127,7 +127,6 @@ fn dir_moved_into_root_indexes_its_files() {
     fs::write(stage.path().join("moved/a.txt"), "alpha").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
-    db.set_fresh_reads(false);
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();
@@ -161,7 +160,6 @@ fn dir_moved_into_root_indexes_nested_files() {
     fs::write(stage.path().join("moved/one/two/deep.txt"), "deep").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
-    db.set_fresh_reads(false);
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();

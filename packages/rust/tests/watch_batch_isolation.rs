@@ -125,7 +125,7 @@ fn a_query_during_a_batch_sees_every_table_before_it_or_after_it() {
         ],
     )
     .unwrap();
-    db.set_fresh_reads(false);
+    db.set_query_applies_events(false);
     let added = root.join("d").join("2.txt");
     fs::write(&added, "two").unwrap();
 
@@ -164,7 +164,7 @@ fn a_query_during_a_batch_never_sees_rows_the_batch_rolls_back() {
         ],
     )
     .unwrap();
-    db.set_fresh_reads(false);
+    db.set_query_applies_events(false);
     let orphan = root.join("c").join("orphan.txt");
     fs::write(&orphan, "MISSING").unwrap();
 

@@ -216,7 +216,8 @@ function seedTree(root: string, below: (n: number) => number): void {
   }
 }
 
-describe("a declared table reads exactly what is on disk", () => {
+// A query reads a write at once only where it drains the inotify queue.
+describe.runIf(process.platform === "linux")("a declared table reads exactly what is on disk", () => {
   let dir: string;
   let db: DirSQL | undefined;
 

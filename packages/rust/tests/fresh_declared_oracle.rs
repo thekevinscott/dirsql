@@ -1,6 +1,8 @@
 //! After any sequence of file operations, a long-lived instance reads exactly
 //! what an instance built fresh over the same tree reads.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 

@@ -173,7 +173,7 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 #[test]
 fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
-    db.set_fresh_reads(false);
+    db.set_query_applies_events(false);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
 
@@ -213,16 +213,19 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
 }
 
 #[test]
-fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
+#[cfg(target_os = "linux")]
+fn a_query_over_an_orphaned_child_keeps_the_previous_state_and_reports_it() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
 
-    let message = db.query("SELECT name FROM parent").unwrap_err().to_string();
-
+    assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha"]);
+    let reported = errors(&db.apply_file_events(Vec::new()));
+    assert_eq!(reported.len(), 1, "expected one error, got {reported:?}");
     for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
         assert!(
-            message.contains(needle),
-            "{needle:?} missing from: {message}"
+            reported[0].contains(needle),
+            "{needle:?} missing from: {}",
+            reported[0]
         );
     }
     fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();

@@ -8,11 +8,17 @@ import asyncio
 import os
 import random
 import shutil
+import sys
 import threading
 
 import pytest
 
 from dirsql import DirSQL, Table
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="a query reads a write at once only where it drains the inotify queue",
+)
 
 ROUNDS = 2000
 
