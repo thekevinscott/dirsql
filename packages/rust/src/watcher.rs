@@ -303,7 +303,7 @@ pub(crate) fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
     scan_dirs(&scope.root, dir, &scope.ignore)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(test, not(target_os = "linux")))]
 /// `err` as not found when `root` does not exist: Windows reports a missing
 /// path only as a generic error.
 fn missing_root(root: &Path, err: notify::Error) -> notify::Error {
@@ -670,7 +670,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn missing_root_is_not_found_only_when_the_root_is_gone() {
         let dir = tempfile::tempdir().unwrap();
