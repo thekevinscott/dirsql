@@ -126,7 +126,9 @@ impl Watcher {
         };
         let mut watched = HashSet::new();
         for scope in &scopes {
-            watcher.watch(&scope.root, mode)?;
+            watcher
+                .watch(&scope.root, mode)
+                .map_err(|e| missing_root(&scope.root, e))?;
             watched.insert(scope.root.clone());
         }
         // A recursive watch already covers every directory below its root.
@@ -302,6 +304,17 @@ fn is_real_dir(path: &Path) -> bool {
 
 pub(crate) fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
     scan_dirs(&scope.root, dir, &scope.ignore)
+}
+
+#[cfg(not(target_os = "linux"))]
+/// `err` as not found when `root` does not exist: Windows reports a missing
+/// path only as a generic error.
+fn missing_root(root: &Path, err: notify::Error) -> notify::Error {
+    if root.exists() {
+        err
+    } else {
+        notify::Error::path_not_found().add_path(root.to_path_buf())
+    }
 }
 
 /// A directory removed since the walk found it is no error: there is nothing
@@ -658,6 +671,15 @@ mod tests {
             seen,
             vec![PathBuf::from("/r/new"), PathBuf::from("/r/new/late")]
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn missing_root_is_not_found_only_when_the_root_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        assert!(is_not_found(&missing_root(&gone, io_error(13))));
+        assert!(!is_not_found(&missing_root(dir.path(), io_error(13))));
     }
 
     #[test]
