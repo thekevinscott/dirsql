@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/parent_then_child_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_failure_test.py tests/e2e/on_file_query_test.py tests/e2e/on_file_value_types_test.py tests/e2e/repl_interactive_test.py tests/e2e/watch_speed_test.py tests/e2e/server_speed_test.py -q",
+  "ran_at": 1794366064,
+  "exit_code": 0,
+  "commit": "8bc3f60cc54fb562e390545df29303165d169ff0",
+  "branch": "bot/1698-queries-apply-events-1110"
+}
