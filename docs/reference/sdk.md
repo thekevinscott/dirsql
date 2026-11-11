@@ -425,7 +425,6 @@ await db.pollEvents(timeoutMs) -> RowEvent[]
 ```
 
 ```rust [Rust]
-db.start_watching() -> Result<()>     // idempotent; implied by poll_events/watch
 db.poll_events(timeout: Duration) -> Result<Vec<RowEvent>>
 ```
 

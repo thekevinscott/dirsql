@@ -181,11 +181,10 @@ on-file = "printf '{}'"
 }
 
 #[tokio::test]
-async fn start_watching_and_poll_events_forward() {
+async fn poll_events_forwards() {
     let root = TempDir::new().unwrap();
     let db = AsyncDirSQL::new(root.path(), vec![items_table()]).unwrap();
     db.ready().await.unwrap();
-    db.start_watching().unwrap();
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     fs::write(root.path().join("apple.txt"), "apple").unwrap();
@@ -259,12 +258,6 @@ async fn sync_backed_methods_before_ready_error() {
     assert!(
         matches!(sync_err, dirsql::DirSqlError::Lock(_)),
         "got: {sync_err}"
-    );
-
-    let start_err = db.start_watching().unwrap_err();
-    assert!(
-        matches!(start_err, dirsql::DirSqlError::Lock(_)),
-        "got: {start_err}"
     );
 
     let poll_err = db.poll_events(Duration::from_millis(10)).unwrap_err();

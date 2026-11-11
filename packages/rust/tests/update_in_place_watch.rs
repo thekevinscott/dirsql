@@ -67,7 +67,6 @@ fn renaming_an_experiment_keeps_its_id_and_emits_one_update() {
         .build()
         .unwrap();
     let alpha = id_of(&db, "a");
-    db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
     write_experiment(root.path(), "0", "Zero");

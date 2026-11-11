@@ -493,7 +493,6 @@ fn it_streams_watch_error_events() {
 fn it_splits_wait_and_apply_for_async_bindings() {
     let root = TempDir::new().unwrap();
     let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
-    db.start_watching().unwrap();
 
     // Empty wait returns no events and apply on empty returns no row events.
     let empty = db.wait_file_events(Duration::from_millis(50)).unwrap();
@@ -731,7 +730,6 @@ on-file = "printf '{}'"
 fn poll_events_returns_row_events_for_new_file() {
     let root = TempDir::new().unwrap();
     let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
-    db.start_watching().unwrap();
 
     std::thread::sleep(Duration::from_millis(250));
     fs::write(root.path().join("apple.txt"), "apple").unwrap();

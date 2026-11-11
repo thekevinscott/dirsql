@@ -227,7 +227,7 @@ mod python {
 
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
             let db = self.inner.clone();
-            py.detach(move || db.start_watching()).map_err(to_py_err)
+            py.detach(move || db.attach_watcher()).map_err(to_py_err)
         }
 
         fn _lock(&self, py: Python<'_>) -> PyResult<()> {

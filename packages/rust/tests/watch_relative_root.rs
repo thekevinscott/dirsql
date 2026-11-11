@@ -64,7 +64,7 @@ fn items_table() -> Table {
 }
 
 /// A watcher built on a relative `root` (`"."`) must emit an insert
-/// `RowEvent` when a matching file is created after `start_watching()`. The
+/// `RowEvent` when a matching file is created after the build. The
 /// absolute-root comparison lives inside this same `#[test]` (not a separate
 /// one) so it can't race for the cwd lock.
 #[test]
@@ -79,7 +79,6 @@ fn watch_with_relative_root_emits_events() {
     let _cwd = CwdGuard::enter(&canonical_dir);
 
     let db = DirSQL::new(".", vec![items_table()]).unwrap();
-    db.start_watching().unwrap();
 
     // Give the watcher a moment to register before mutating the tree.
     std::thread::sleep(Duration::from_millis(250));

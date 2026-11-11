@@ -144,8 +144,9 @@ fn p7_builder_exposes_poll_interval() {
 #[test]
 fn i3_watch_error_exposes_underlying_source() {
     let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("missing");
     let db = DirSQL::new(
-        dir.path(),
+        &missing,
         vec![Table::new(
             "t",
             "CREATE TABLE t (id TEXT)",
@@ -154,12 +155,9 @@ fn i3_watch_error_exposes_underlying_source() {
         )],
     )
     .unwrap();
-    // Delete the directory out from under the watcher so `start_watching`
-    // fails attaching `notify` to a missing path.
-    drop(dir);
     let err = db
-        .start_watching()
-        .expect_err("start_watching against vanished root must fail");
+        .poll_events(std::time::Duration::ZERO)
+        .expect_err("watching a missing root must fail");
     match &err {
         DirSqlError::Watch { .. } => {}
         other => panic!("expected DirSqlError::Watch, got: {other:?}"),

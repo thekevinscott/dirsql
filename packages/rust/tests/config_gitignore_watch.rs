@@ -32,7 +32,6 @@ fn a_gitignored_file_created_while_watching_is_not_indexed() {
         vec![HashMap::from([("name".into(), Value::Text(name))])]
     });
     let db = DirSQL::new(dir.path(), vec![table]).unwrap();
-    db.start_watching().unwrap();
     thread::sleep(Duration::from_millis(250));
 
     fs::write(dir.path().join("skip.md"), "x").unwrap();
