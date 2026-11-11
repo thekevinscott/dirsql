@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794367812,
+  "exit_code": 0,
+  "commit": "0f3b4a8f6fdcf619c2cd41ac32ad4a331c399e69",
+  "branch": "bot/1701-oneshot-watch-1110"
+}
