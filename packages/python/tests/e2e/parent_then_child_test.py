@@ -80,7 +80,7 @@ def describe_a_writer_creating_parents_then_children():
                 queries += 1
                 try:
                     await db.query("SELECT count(*) AS n FROM turn")
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     failures.append(str(e))
         finally:
             stop.set()
