@@ -1,0 +1,1 @@
+**Changed** `watch()` no longer starts the file watcher: the watcher runs from the moment the instance is built, and `watch()` attaches to it. An instance with no named tables now raises from the stream's first iteration rather than from the `watch()` call made after the scan.

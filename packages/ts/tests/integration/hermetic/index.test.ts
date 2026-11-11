@@ -259,7 +259,7 @@ describe("DirSQL watch", () => {
     }
   });
 
-  it("starts the watcher and yields events across poll batches", async () => {
+  it("yields events across poll batches without starting the watcher", async () => {
     const batches: RowEvent[][] = [
       [
         { table: "t", action: "insert", row: { n: 1 } },
@@ -280,7 +280,7 @@ describe("DirSQL watch", () => {
         break;
       }
     }
-    expect(inner.startWatcher).toHaveBeenCalledOnce();
+    expect(inner.startWatcher).not.toHaveBeenCalled();
     expect(seen.map((e) => e.action)).toEqual(["insert", "insert", "delete"]);
   });
 });

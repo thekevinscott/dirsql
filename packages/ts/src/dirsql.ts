@@ -238,14 +238,6 @@ export class DirSQL {
       })
       .then((inner) => {
         this._inner = inner;
-        if (this._watchStreams.size > 0) {
-          try {
-            this._ensureWatcher();
-          } catch {
-            // A watcher that cannot start is the stream's error, not init's:
-            // the stream's first next() retries the start and throws there.
-          }
-        }
       });
     this._ready.catch(() => {});
   }
@@ -253,8 +245,8 @@ export class DirSQL {
   /**
    * Execute a SQL query and return results as an array of row objects.
    *
-   * Awaits the initial scan if it has not yet finished, then reads the
-   * files that changed since the last query, so the rows match the disk.
+   * Awaits the initial scan if it has not yet finished, then applies the
+   * events the file watcher has queued.
    * The query itself runs on the libuv threadpool, so the JS event loop
    * stays responsive even for large result sets or long-running queries.
    *
@@ -305,18 +297,12 @@ export class DirSQL {
   }
 
   /**
-   * Start the file watcher. Must be called before {@link pollEvents}.
-   * Idempotent — safe to call multiple times.
-   *
-   * Awaits the initial scan if it has not yet finished, then registers the
-   * watcher on the JS thread; the watcher is live once this resolves.
+   * Attach to the file watcher the instance started when it was built,
+   * starting it if the build could not. Idempotent. {@link pollEvents} and
+   * {@link watch} attach on their own, so calling this first is optional.
    */
   async startWatcher(): Promise<void> {
     await this.ready;
-    this._ensureWatcher();
-  }
-
-  private _ensureWatcher(): void {
     if (!this._watcherStarted) {
       this._inner.startWatcher();
       this._watcherStarted = true;
@@ -343,11 +329,10 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * The watcher is live once both `watch()` and {@link ready} have
-   * returned, in either order: a file written after that point produces an
-   * event and reaches the index. Called after the scan, `watch()` starts the
-   * watcher before returning; called before it, the watcher starts before
-   * `ready` resolves. Writes made while the scan is still running may be
+   * The file watcher runs from the moment the instance is built; `watch()`
+   * attaches to it and starts nothing. Once both `watch()` and {@link ready}
+   * have returned, in either order, a file written produces an event and
+   * reaches the index. Writes made while the scan is still running may be
    * missed.
    *
    * The stream awaits `ready` on first iteration, then awaits a bounded
@@ -357,9 +342,6 @@ export class DirSQL {
    * while another stream is consuming events on the same instance.
    */
   watch(): AsyncGenerator<RowEvent, void, unknown> {
-    if (this._inner !== undefined) {
-      this._ensureWatcher();
-    }
     const buffer: RowEvent[] = [];
     const reference = new WeakRef(buffer);
     this._watchStreams.add(reference);
@@ -367,7 +349,6 @@ export class DirSQL {
     return (async function* () {
       try {
         await owner.ready;
-        owner._ensureWatcher();
         while (true) {
           while (buffer.length === 0) {
             owner._watchPoll ??= owner._inner

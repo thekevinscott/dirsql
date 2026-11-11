@@ -390,8 +390,9 @@ Returns a stream of [`RowEvent`](#rowevent)s reflecting filesystem changes
 under the root. The stream never terminates on its own; stop consuming it
 to stop.
 
-The watcher is live once both `watch()` and [`ready`](#ready) have returned,
-in either order (a Rust `DirSQL` is ready when `build()` returns); a file
+The file watcher runs from the moment the instance is built; `watch()`
+attaches to it and starts nothing. The watcher is live once both `watch()`
+and [`ready`](#ready) have returned, in either order (a Rust `DirSQL` is ready when `build()` returns); a file
 written after that point produces an event and reaches the index. A write
 made while the initial scan is still running may be missed by the stream, but
 never by a query (see [`query`](#query)). A change a query read first still
@@ -414,7 +415,7 @@ the same underlying filesystem watcher.
 ::: code-group
 
 ```typescript [TypeScript]
-await db.startWatcher()               // idempotent; must precede pollEvents
+await db.startWatcher()               // optional, idempotent; pollEvents attaches on its own
 await db.pollEvents(timeoutMs) -> RowEvent[]
 ```
 

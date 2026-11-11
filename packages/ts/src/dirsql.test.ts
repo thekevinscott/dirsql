@@ -397,46 +397,18 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
-    it("starts the watcher before returning once ready", async () => {
-      const inner = makeInner();
-      installFakeCore(inner);
-      const db = new DirSQL({});
-      await db.ready;
-      db.watch();
-      expect(inner.startWatcher).toHaveBeenCalledOnce();
-    });
-
-    it("starts the watcher before ready resolves when called early", async () => {
-      const inner = makeInner();
-      installFakeCore(inner);
-      const db = new DirSQL({});
-      const stream = db.watch();
-      expect(inner.startWatcher).not.toHaveBeenCalled();
-      await db.ready;
-      expect(inner.startWatcher).toHaveBeenCalledOnce();
-      await stream.return();
-    });
-
-    it("leaves the watcher stopped without a stream", async () => {
-      const inner = makeInner();
-      installFakeCore(inner);
-      const db = new DirSQL({});
-      await db.ready;
-      expect(inner.startWatcher).not.toHaveBeenCalled();
-    });
-
-    it("leaves an early start failure to the stream", async () => {
+    it("attaches without starting the watcher", async () => {
+      const event = { table: "t", action: "insert" as const, row: { n: 1 } };
       const inner = makeInner({
-        startWatcher: vi.fn(() => {
-          throw new Error("no named tables");
-        }),
+        pollEvents: vi.fn().mockResolvedValue([event]),
       });
       installFakeCore(inner);
       const db = new DirSQL({});
       const stream = db.watch();
-      await db.ready;
-      await expect(stream.next()).rejects.toThrow("no named tables");
-      expect(inner.startWatcher).toHaveBeenCalledTimes(2);
+      await stream.next();
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+      expect(inner.pollEvents).toHaveBeenCalledWith(200);
+      await stream.return();
     });
 
     it("buffers each batch for every stream from creation", async () => {
@@ -599,7 +571,6 @@ describe("DirSQL", () => {
           break;
         }
       }
-      expect(inner.startWatcher).toHaveBeenCalledOnce();
       expect(seen).toEqual([
         { table: "t", action: "insert", row: { n: 1 } },
         { table: "t", action: "insert", row: { n: 2 } },

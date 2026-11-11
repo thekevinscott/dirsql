@@ -319,8 +319,8 @@ impl DirSQL {
 
     /// Execute a SQL query and return results as an array of objects.
     ///
-    /// Reads changed files on the JS thread, then runs the SQL on the libuv
-    /// threadpool so the event loop stays free while it runs.
+    /// Applies the watcher's queued events on the JS thread, then runs the
+    /// SQL on the libuv threadpool so the event loop stays free while it runs.
     /// Returns a `Promise` in JS. `params` binds to the statement's
     /// placeholders: an array fills `?`, a plain object fills `:name` /
     /// `@name` / `$name`.
@@ -366,10 +366,8 @@ impl DirSQL {
         Ok(inner)
     }
 
-    /// Start the file watcher. Must be called before pollEvents. Idempotent.
-    ///
-    /// Synchronous, so the watcher is live when the call returns: a stream
-    /// handed out right after it sees every later write.
+    /// Attach to the watcher the build started, starting it if the build
+    /// could not. Idempotent; pollEvents attaches on its own.
     #[napi(js_name = "startWatcher")]
     pub fn start_watcher(&self) -> Result<()> {
         let inner = self.inner.borrow();

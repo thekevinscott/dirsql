@@ -14,7 +14,6 @@ import type { TableDef } from "./table.js";
 export interface NativeDirSQL {
   query(sql: string, params?: QueryParams): Promise<Record<string, unknown>[]>;
   queryOrdered(sql: string, params?: QueryParams): Promise<QueryResult>;
-  // Synchronous so that `watch()` can return a stream whose watcher is live.
   startWatcher(): void;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
   // Synchronous: reads a list the scan already produced, no threadpool hop.
