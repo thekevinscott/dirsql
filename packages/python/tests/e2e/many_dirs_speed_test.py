@@ -53,10 +53,7 @@ def build_folders(root, lo, hi):
         path = root / "notes" / f"group-{i // 1000}" / f"note-{i}" / "note.md"
         path.parent.mkdir(parents=True)
         path.write_text(
-            "---\n"
-            f"status: {STATUSES[(i * 7) % len(STATUSES)]}\n"
-            f"words: {i % 500}\n"
-            "---\n"
+            f"---\nstatus: {STATUSES[(i * 7) % len(STATUSES)]}\nwords: {i % 500}\n---\n"
         )
 
 
