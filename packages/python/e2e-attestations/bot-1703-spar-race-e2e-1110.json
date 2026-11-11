@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/parent_then_child_server_test.py tests/e2e/parent_then_child_test.py tests/e2e/orphan_query_test.py -x -q",
+  "ran_at": 1794367888,
+  "exit_code": 0,
+  "commit": "f29eb3dadaf93e520fc48133ff92872c75934bb8",
+  "branch": "bot/1703-spar-race-e2e-1110"
+}
