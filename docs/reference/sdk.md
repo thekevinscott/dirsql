@@ -169,6 +169,13 @@ and the other methods transparently await [readiness](#ready). In Rust,
 `.build()` scans synchronously; use `.build_async()` → [`AsyncDirSQL`](#asyncdirsql-rust)
 for the non-blocking equivalent.
 
+The scan is the only walk of the tree. A file watcher over the named tables
+starts before it and runs for the life of the instance; changes it sees
+during the scan are applied before the build finishes, and each
+[`query`](#query) applies the changes queued since. See
+[The file watcher](./cli.md#the-file-watcher) for what a query sees on each
+platform.
+
 ::: details Rust builder extras
 - `Table` appears in the builder via `.table(t)` (append) or `.tables(v)`
   (replace).
@@ -202,6 +209,12 @@ db.ready().await -> Result<()>
 :::
 
 Waits for the initial scan to complete, re-raising any construction error.
+On Linux, a tree with more directories than inotify's watch limit fails
+construction with the OS error `ENOSPC` and the message
+`inotify watch limit reached`: Python raises `OSError` with
+`errno.ENOSPC`, TypeScript rejects with an `Error` whose `code` is
+`"ENOSPC"`, and Rust returns `DirSqlError::Io` whose `os_error()` is errno
+28. To raise the limit, see [The watch limit](./cli.md#the-watch-limit-linux).
 Safe to call multiple times. In Python and TypeScript every other method
 awaits readiness internally, so an explicit `ready` is only needed to
 observe construction errors before issuing a query.
@@ -494,10 +507,9 @@ Maps files to table rows.
   that raises, or returns a row the table rejects (a `strict` key mismatch,
   `NOT NULL`, `UNIQUE`, `CHECK`), fails [`ready`](#ready) and every query
   with an error naming the table, the file and the original error; no file
-  is skipped. A query re-reads a file changed since the last read, so a file
-  read while half-written fails that query. Have writers write to a
-  temporary file in the same directory and rename it into place, so a reader
-  sees only the old content or the new.
+  is skipped. Have writers write to a temporary file in the same directory
+  and rename it into place, so a reader sees only the old content or the
+  new.
 - `strict` — Default off: extra row keys are dropped and missing declared
   columns become `NULL`. When on, any extra or missing key is an error
   (see [`strict`](./config.md#table)).
