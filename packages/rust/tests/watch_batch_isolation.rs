@@ -101,13 +101,18 @@ fn tree(dirs: &[&str]) -> (TempDir, PathBuf) {
 
 /// Apply `event` on another thread and, once the batch is under way, ask
 /// `sql` from this one.
-fn query_mid_batch(db: &DirSQL, started: &Receiver<()>, event: FileEvent, sql: &str) -> Vec<Row> {
+fn query_mid_batch(
+    db: &DirSQL,
+    started: &Receiver<()>,
+    event: FileEvent,
+    sql: &str,
+) -> dirsql::Result<Vec<Row>> {
     let batch = {
         let db = db.clone();
         thread::spawn(move || db.apply_file_events(vec![event]))
     };
     started.recv_timeout(Duration::from_secs(30)).unwrap();
-    let rows = db.query(sql).unwrap();
+    let rows = db.query(sql);
     batch.join().unwrap();
     rows
 }
@@ -134,7 +139,8 @@ fn a_query_during_a_batch_sees_every_table_before_it_or_after_it() {
         &started,
         FileEvent::Created(added),
         "SELECT (SELECT count(*) FROM a) AS na, (SELECT count(*) FROM b) AS nb",
-    );
+    )
+    .unwrap();
 
     assert_eq!(rows[0]["na"], rows[0]["nb"], "torn read: {rows:?}");
 }
@@ -175,6 +181,8 @@ fn a_query_during_a_batch_never_sees_rows_the_batch_rolls_back() {
         "SELECT id FROM child ORDER BY id",
     );
 
-    let after = db.query("SELECT id FROM child ORDER BY id").unwrap();
-    assert_eq!(after, during, "read rows the batch rolled back");
+    let message = during
+        .expect_err("a query after a rejected batch raises")
+        .to_string();
+    assert!(message.contains("foreign key violation"), "{message}");
 }
