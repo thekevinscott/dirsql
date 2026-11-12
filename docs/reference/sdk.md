@@ -298,7 +298,8 @@ db.query_with(
   every file event the watcher has queued, and checks foreign keys only once
   that queue is empty, so a writer creating a parent file and then its child
   never fails a query. While a batch a foreign key rejected waits to be
-  retried, the query raises its violation instead: see
+  retried, the query raises its violation instead, unless a file's
+  `on_file` is failing, whose error is raised first: see
   [Foreign keys](./config.md#foreign-keys). A file is read when it is closed
   after writing or renamed into place. On Linux the query first drains the kernel's queue, so a
   write that returned before the call is reflected in its rows; on macOS and

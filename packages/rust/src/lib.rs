@@ -761,13 +761,14 @@ impl DirSQL {
     /// Hold the index still until the returned guard drops, first applying
     /// the events the watcher has queued. A watch batch releases the database
     /// between statements inside its transaction, so a query that took only
-    /// the database could read it half applied. Raises the violation of a
-    /// held batch while one stands, and a failing file's error.
+    /// the database could read it half applied. Raises a failing file's
+    /// error while one stands, else the violation of a held batch.
     fn refresh(&self) -> Result<MutexGuard<'_, FreshState>> {
         let mut state = self.unlocked_fresh()?;
         if self.inner.query_applies_events.load(Ordering::SeqCst) {
             self.apply_queued(&mut state);
         }
+        self.raise_failed_file()?;
         if let Some(violation) = self
             .inner
             .held
@@ -778,7 +779,6 @@ impl DirSQL {
         {
             return Err(DirSqlError::Core(DbError::ForeignKey(violation)));
         }
-        self.raise_failed_file()?;
         Ok(state)
     }
 
