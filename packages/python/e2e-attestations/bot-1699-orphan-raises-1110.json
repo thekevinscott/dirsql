@@ -1,7 +1,7 @@
 {
-  "command": "uv run python -m pytest tests/e2e/orphan_query_test.py tests/e2e/parent_then_child_test.py tests/e2e/written_during_build_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_failure_test.py tests/e2e/on_file_query_test.py tests/e2e/server_speed_test.py tests/e2e/watch_speed_test.py -x -q",
-  "ran_at": 1794367277,
+  "command": "uv run python -m pytest tests/e2e/orphan_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/on_file_query_test.py tests/e2e/parent_then_child_test.py tests/e2e/fresh_declared_repros_test.py -x -q",
+  "ran_at": 1794484320,
   "exit_code": 0,
-  "commit": "06c74e43809e5c78c89696146c20c89ab65298fd",
+  "commit": "742f543ab86ddb3648ce0395e14b09cfa0eb302e",
   "branch": "bot/1699-orphan-raises-1110"
 }
