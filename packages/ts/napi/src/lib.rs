@@ -20,8 +20,8 @@
 
 use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
-    DirSQL as CoreDirSQL, Extension, Params, PreparedBuild, QueryResult as CoreQueryResult,
-    RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
+    DirSQL as CoreDirSQL, Extension, Params, PreparedBuild, QueryResult as CoreQueryResult, Row,
+    RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -335,7 +335,7 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.read_changes()?;
+        let inner = self.apply_queued_events()?;
         Ok(AsyncTask::new(QueryTask { inner, sql, params }))
     }
 
@@ -352,17 +352,16 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryOrderedTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.read_changes()?;
+        let inner = self.apply_queued_events()?;
         Ok(AsyncTask::new(QueryOrderedTask { inner, sql, params }))
     }
 
-    /// Reads the files changed since the last query here, on the JS thread,
-    /// because `onFile` can only be called there; the SQL then runs on the
-    /// threadpool.
-    fn read_changes(&self) -> Result<Option<CoreDirSQL>> {
+    /// Applies the watcher's queued events here, on the JS thread, because
+    /// `onFile` can only be called there; the SQL then runs on the threadpool.
+    fn apply_queued_events(&self) -> Result<Option<CoreDirSQL>> {
         let inner = self.inner.borrow().as_ref().cloned();
         if let Some(db) = &inner {
-            db.read_changes().map_err(to_napi_err)?;
+            db.apply_queued_events().map_err(to_napi_err)?;
         }
         Ok(inner)
     }
@@ -481,7 +480,7 @@ impl Task for OpenTask {
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
         // A query runs on a worker thread, where `on_file` cannot be called.
-        inner.set_fresh_reads(false);
+        inner.set_query_applies_events(false);
         Ok(DirSQL {
             inner: RefCell::new(Some(inner)),
         })
@@ -582,25 +581,27 @@ pub struct PollEventsTask {
 }
 
 impl Task for PollEventsTask {
-    type Output = Vec<RawFileEvent>;
+    type Output = ();
     type JsValue = Vec<RowEvent>;
 
+    /// Waits without taking the events, so a query issued meanwhile on the
+    /// JS thread still applies them.
     fn compute(&mut self) -> Result<Self::Output> {
         let inner = self
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner
-            .wait_file_events(Duration::from_millis(u64::from(self.timeout_ms)))
+            .wait_for_events(Duration::from_millis(u64::from(self.timeout_ms)))
             .map_err(to_napi_err)
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
         let inner = self
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        let row_events = inner.apply_file_events(output);
+        let row_events = inner.poll_events(Duration::ZERO).map_err(to_napi_err)?;
         row_events.iter().map(row_event_to_js).collect()
     }
 }

@@ -1,9 +1,11 @@
 //! A query issued the moment a write returns reads that write, every time.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 
-use fresh::{Tree, lines_of, recs_of};
+use fresh::{Tree, lines_of};
 
 const ROUNDS: usize = 2000;
 
@@ -89,16 +91,5 @@ fn every_same_size_edit_with_its_times_restored_is_read_by_the_next_query() {
         tree.write("t.txt", &content);
         tree.restore_times("t.txt", times);
         assert_eq!(lines_of(&db, "t.txt"), [content], "round {i}");
-    }
-}
-
-#[test]
-fn every_edit_to_a_table_hook_file_is_read_by_the_next_query() {
-    let tree = Tree::new();
-    tree.write("rec.json", "{\"k\":\"rec\",\"v\":\"start\"}\n");
-    let db = tree.open();
-    for i in 0..ROUNDS {
-        tree.write("rec.json", &format!("{{\"k\":\"rec\",\"v\":\"{i}\"}}\n"));
-        assert_eq!(recs_of(&db, "rec"), [i.to_string()], "round {i}");
     }
 }

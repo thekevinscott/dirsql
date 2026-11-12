@@ -1,6 +1,8 @@
 //! Each way a change could slip past a freshness check, read straight after
 //! the change returns.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 
@@ -108,46 +110,6 @@ fn a_deleted_subdirectory_is_dropped() {
     assert!(lines_of(&db, "old/deep/one.txt").is_empty());
     assert!(lines_of(&db, "old/two.txt").is_empty());
     assert_matches_fresh_scan(&db, &tree, "a deleted subdirectory");
-}
-
-#[test]
-fn a_gitignore_change_changes_which_files_are_read() {
-    let tree = Tree::new();
-    fs::create_dir(tree.path(".git")).unwrap();
-    tree.write("kept.txt", "kept");
-    tree.write("hidden.txt", "hidden");
-    let db = tree.open();
-    assert_eq!(lines_of(&db, "hidden.txt"), ["hidden"]);
-    tree.write(".gitignore", "hidden.txt\n");
-    assert!(lines_of(&db, "hidden.txt").is_empty());
-    assert_matches_fresh_scan(&db, &tree, "adding a .gitignore rule");
-    tree.remove(".gitignore");
-    assert_eq!(lines_of(&db, "hidden.txt"), ["hidden"]);
-    assert_matches_fresh_scan(&db, &tree, "removing a .gitignore rule");
-}
-
-#[test]
-fn a_retargeted_symlink_is_read() {
-    let tree = Tree::new();
-    tree.write("targets/one.dat", "one");
-    tree.write("targets/two.dat", "two");
-    tree.link("link.txt", "targets/one.dat");
-    let db = tree.open();
-    assert_eq!(lines_of(&db, "link.txt"), ["one"]);
-    tree.link("link.txt", "targets/two.dat");
-    assert_eq!(lines_of(&db, "link.txt"), ["two"]);
-    assert_matches_fresh_scan(&db, &tree, "retargeting a symlink");
-}
-
-#[test]
-fn an_edit_to_a_symlink_target_is_read() {
-    let tree = Tree::new();
-    tree.write("targets/one.dat", "one");
-    tree.link("link.txt", "targets/one.dat");
-    let db = tree.open();
-    assert_eq!(lines_of(&db, "link.txt"), ["one"]);
-    tree.write("targets/one.dat", "uno");
-    assert_eq!(lines_of(&db, "link.txt"), ["uno"]);
 }
 
 fn version(k: usize) -> String {

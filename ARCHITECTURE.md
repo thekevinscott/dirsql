@@ -271,8 +271,9 @@ columns. There are two hook kinds:
   receives one matched file's absolute path and returns that file's rows,
   tracked per file in `_dirsql_internal_rows` so the watcher can diff and
   replace them file by file. A callback that fails, or returns a row the
-  table rejects, fails the build, and a query that re-reads such a file
-  fails; the error names the table, the file and the callback's error.
+  table rejects, fails the build, and when the watcher re-reads such a file
+  the error reaches `watch()` consumers; it names the table, the file and the
+  callback's error.
 
 Neither kind has dirsql read file contents on its behalf. A hook that needs
 the file body, path parts, or stat metadata computes them from the paths and
@@ -339,7 +340,8 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 ### Query execution
 
 1. Python calls `db.query(sql)`
-2. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
-3. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
-4. Rust executes the prepared statement
-5. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)
+2. The watcher's queued file events are applied, foreign keys checked only once the queue is empty; on Linux the inotify queue is drained first, so a write that returned before the call is read. While a file's `on_file` hook is failing, the query raises the first such file's error (by table, then path); otherwise, while a batch a foreign key rejected is held, it raises that violation
+3. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
+4. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
+5. Rust executes the prepared statement
+6. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)

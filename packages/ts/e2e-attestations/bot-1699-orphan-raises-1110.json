@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts tests/e2e/fanout.test.ts tests/e2e/sigint-interrupt.test.ts",
+  "ran_at": 1794484365,
+  "exit_code": 0,
+  "commit": "48af4cba48166c5a36197ae0fc0ffcd8e5845dd1",
+  "branch": "bot/1699-orphan-raises-1110"
+}

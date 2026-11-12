@@ -173,7 +173,7 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 #[test]
 fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
-    db.set_fresh_reads(false);
+    db.set_query_applies_events(false);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
 
@@ -193,10 +193,6 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
         1,
         "a rolled-back batch reports no row changes: {events:?}"
     );
-    assert_eq!(
-        names(&db, "SELECT name FROM parent ORDER BY id"),
-        vec!["alpha", "beta"]
-    );
 
     let other = root.join("parents").join("2.txt");
     fs::write(&other, "beta renamed").unwrap();
@@ -206,24 +202,31 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
         reported,
         "the held deletion is still rejected"
     );
+
+    let kid = root.join("children").join("kid.txt");
+    fs::remove_file(&kid).unwrap();
+    let events = db.apply_file_events(vec![FileEvent::Deleted(kid)]);
+    assert_eq!(errors(&events), Vec::<String>::new());
     assert_eq!(
         names(&db, "SELECT name FROM parent ORDER BY id"),
-        vec!["alpha", "beta renamed"]
+        vec!["beta renamed"]
     );
 }
 
 #[test]
-fn a_query_over_an_orphaned_child_fails_as_the_build_would() {
+#[cfg(target_os = "linux")]
+fn every_query_over_an_orphaned_child_raises_until_its_parent_returns() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
 
-    let message = db.query("SELECT name FROM parent").unwrap_err().to_string();
-
-    for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
-        assert!(
-            message.contains(needle),
-            "{needle:?} missing from: {message}"
-        );
+    for _ in 0..2 {
+        let message = query_error(&db, "SELECT name FROM parent");
+        for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
+            assert!(
+                message.contains(needle),
+                "{needle:?} missing from: {message}"
+            );
+        }
     }
     fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();
     assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha again"]);
@@ -292,4 +295,134 @@ fn editing_a_parent_keeps_the_children_its_delete_would_cascade_to() {
         ),
         vec!["renamed"]
     );
+}
+
+fn query_error(db: &DirSQL, sql: &str) -> String {
+    match db.query(sql) {
+        Ok(rows) => panic!("expected the query to raise, got {rows:?}"),
+        Err(err) => err.to_string(),
+    }
+}
+
+/// A built `family` whose queries apply no events of their own, plus an
+/// orphaned child `children/lost.txt` applied through one watch batch.
+fn with_orphan() -> (TempDir, PathBuf, DirSQL, PathBuf) {
+    let (dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
+    db.set_query_applies_events(false);
+    let lost = root.join("children").join("lost.txt");
+    fs::write(&lost, "9").unwrap();
+    let events = db.apply_file_events(vec![FileEvent::Created(lost.clone())]);
+    assert_eq!(errors(&events).len(), 1, "{events:?}");
+    (dir, root, db, lost)
+}
+
+#[test]
+fn every_query_raises_while_a_child_has_no_parent() {
+    let (_dir, _root, db, _lost) = with_orphan();
+
+    for _ in 0..2 {
+        let message = query_error(&db, "SELECT name FROM child");
+        for needle in [
+            "foreign key violation",
+            "children/lost.txt",
+            "parent_id = 9",
+        ] {
+            assert!(
+                message.contains(needle),
+                "{needle:?} missing from: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn writing_the_missing_parent_clears_the_error() {
+    let (_dir, root, db, _lost) = with_orphan();
+    query_error(&db, "SELECT name FROM child");
+
+    let parent = root.join("parents").join("9.txt");
+    fs::write(&parent, "nine").unwrap();
+    let events = db.apply_file_events(vec![FileEvent::Created(parent)]);
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(
+        names(
+            &db,
+            "SELECT c.name FROM child c JOIN parent p ON p.id = c.parent_id ORDER BY c.name"
+        ),
+        vec!["kid", "lost"]
+    );
+    assert_eq!(
+        names(&db, "SELECT name FROM parent WHERE id = 9"),
+        vec!["nine"]
+    );
+}
+
+#[test]
+fn deleting_the_orphaned_child_clears_the_error() {
+    let (_dir, _root, db, lost) = with_orphan();
+    query_error(&db, "SELECT name FROM child");
+
+    fs::remove_file(&lost).unwrap();
+    let events = db.apply_file_events(vec![FileEvent::Deleted(lost)]);
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(names(&db, "SELECT name FROM child"), vec!["kid"]);
+}
+
+#[test]
+fn a_failing_file_is_raised_ahead_of_an_orphaned_child() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for sub in ["parents", "children", "notes"] {
+        fs::create_dir(root.join(sub)).unwrap();
+    }
+    let note = root.join("notes").join("a.txt");
+    fs::write(&note, "1").unwrap();
+    let notes = Table::try_new(
+        "notes",
+        "CREATE TABLE notes (n INTEGER)",
+        "notes/*.txt",
+        |path| -> Result<Vec<Row>, Box<dyn std::error::Error + Send + Sync>> {
+            let n: i64 = contents(path).parse()?;
+            Ok(vec![HashMap::from([("n".into(), Value::Integer(n))])])
+        },
+    );
+    let db = DirSQL::new(
+        &root,
+        vec![
+            child_table("children/*.txt"),
+            parent_table("parents/*.txt"),
+            notes,
+        ],
+    )
+    .unwrap();
+    db.set_query_applies_events(false);
+
+    fs::write(&note, "half-writ").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note.clone())]);
+    let lost = root.join("children").join("lost.txt");
+    fs::write(&lost, "9").unwrap();
+    db.apply_file_events(vec![FileEvent::Created(lost)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    assert!(
+        message.starts_with("table `notes`, file `notes/a.txt`: "),
+        "{message}"
+    );
+
+    fs::write(&note, "2").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    for needle in [
+        "foreign key violation",
+        "children/lost.txt",
+        "parent_id = 9",
+    ] {
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from: {message}"
+        );
+    }
 }

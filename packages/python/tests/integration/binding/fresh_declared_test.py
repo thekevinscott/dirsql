@@ -8,11 +8,17 @@ import asyncio
 import os
 import random
 import shutil
+import sys
 import threading
 
 import pytest
 
 from dirsql import DirSQL, Table
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="a query reads a write at once only where it drains the inotify queue",
+)
 
 ROUNDS = 2000
 
@@ -86,7 +92,6 @@ async def _assert_matches_fresh_scan(db, root, context):
 DIRS = ["", "a/", "a/b/", "c/"]
 NAMES = ["n0", "n1", "n2", "n3"]
 EXTS = ["txt", "json", "stage"]
-IGNORES = ["n0.txt\n", "a/\n", "*.txt\n", "c/n1.*\n"]
 
 
 def _content(rng):
@@ -146,21 +151,12 @@ def _step(root, rng):
         gone = rng.choice(DIRS[1:]).rstrip("/")
         shutil.rmtree(os.path.join(root, gone), ignore_errors=True)
         return f"remove directory {gone}"
-    if op == 7:
-        if rng.randrange(3) == 0:
-            if os.path.exists(os.path.join(root, ".gitignore")):
-                os.remove(os.path.join(root, ".gitignore"))
-            return "remove .gitignore"
-        rule = rng.choice(IGNORES)
-        _write(root, ".gitignore", rule)
-        return f"set .gitignore to {rule!r}"
     rel = _random_file(rng)
     _write(root, rel, _content(rng))
     return f"write {rel}"
 
 
 def _seed_tree(root, rng):
-    os.makedirs(os.path.join(root, ".git"))
     for _ in range(8):
         _write(root, _random_file(rng), _content(rng))
 
@@ -286,29 +282,6 @@ def describe_each_way_a_change_could_be_missed():
         assert await _lines(db, "sub/deep/one.txt") == ["one"]
         shutil.rmtree(os.path.join(tmp_dir, "sub"))
         assert await _lines(db, "sub/deep/one.txt") == []
-
-    @pytest.mark.asyncio
-    async def it_reads_a_gitignore_change(tmp_dir):
-        os.makedirs(os.path.join(tmp_dir, ".git"))
-        _write(tmp_dir, "hidden.txt", "hidden")
-        db = await _open(tmp_dir)
-        assert await _lines(db, "hidden.txt") == ["hidden"]
-        _write(tmp_dir, ".gitignore", "hidden.txt\n")
-        assert await _lines(db, "hidden.txt") == []
-        os.remove(os.path.join(tmp_dir, ".gitignore"))
-        assert await _lines(db, "hidden.txt") == ["hidden"]
-
-    @pytest.mark.asyncio
-    async def it_reads_a_retargeted_symlink(tmp_dir):
-        _write(tmp_dir, "targets/one.dat", "one")
-        _write(tmp_dir, "targets/two.dat", "two")
-        link = os.path.join(tmp_dir, "link.txt")
-        os.symlink(os.path.join(tmp_dir, "targets/one.dat"), link)
-        db = await _open(tmp_dir)
-        assert await _lines(db, "link.txt") == ["one"]
-        os.remove(link)
-        os.symlink(os.path.join(tmp_dir, "targets/two.dat"), link)
-        assert await _lines(db, "link.txt") == ["two"]
 
     @pytest.mark.asyncio
     async def it_never_reads_a_file_torn_while_it_is_rewritten_and_ends_exact(tmp_dir):

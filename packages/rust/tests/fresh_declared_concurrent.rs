@@ -2,6 +2,8 @@
 //! thread consumes the instance's events, and a change read before `watch()`
 //! starts still reaches the stream, once.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 
