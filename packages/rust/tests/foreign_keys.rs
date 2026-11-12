@@ -369,3 +369,60 @@ fn deleting_the_orphaned_child_clears_the_error() {
     assert_eq!(errors(&events), Vec::<String>::new());
     assert_eq!(names(&db, "SELECT name FROM child"), vec!["kid"]);
 }
+
+#[test]
+fn a_failing_file_is_raised_ahead_of_an_orphaned_child() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for sub in ["parents", "children", "notes"] {
+        fs::create_dir(root.join(sub)).unwrap();
+    }
+    let note = root.join("notes").join("a.txt");
+    fs::write(&note, "1").unwrap();
+    let notes = Table::try_new(
+        "notes",
+        "CREATE TABLE notes (n INTEGER)",
+        "notes/*.txt",
+        |path| -> Result<Vec<Row>, Box<dyn std::error::Error + Send + Sync>> {
+            let n: i64 = contents(path).parse()?;
+            Ok(vec![HashMap::from([("n".into(), Value::Integer(n))])])
+        },
+    );
+    let db = DirSQL::new(
+        &root,
+        vec![
+            child_table("children/*.txt"),
+            parent_table("parents/*.txt"),
+            notes,
+        ],
+    )
+    .unwrap();
+    db.set_query_applies_events(false);
+
+    fs::write(&note, "half-writ").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note.clone())]);
+    let lost = root.join("children").join("lost.txt");
+    fs::write(&lost, "9").unwrap();
+    db.apply_file_events(vec![FileEvent::Created(lost)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    assert!(
+        message.starts_with("table `notes`, file `notes/a.txt`: "),
+        "{message}"
+    );
+
+    fs::write(&note, "2").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    for needle in [
+        "foreign key violation",
+        "children/lost.txt",
+        "parent_id = 9",
+    ] {
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from: {message}"
+        );
+    }
+}
