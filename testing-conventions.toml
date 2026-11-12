@@ -134,7 +134,7 @@ reason = "the notify watcher's poison-tolerant lock is compiled out on the Linux
 [[rust.exempt]]
 path = "src/notify_watch.rs"
 rules = ["mutation"]
-lines = [159, 162, 175]
+lines = [159, 162, 170, 175, 187]
 reason = "the notify watcher's forward loop is compiled out on the Linux mutation runner; the Windows tests job runs this file's forward_* unit tests and tests/watcher.rs (scoped_watcher_reports_files_in_a_new_directory)"
 
 [[rust.exempt]]
