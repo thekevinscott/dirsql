@@ -36,6 +36,8 @@ mod listing;
 mod long_path;
 #[doc(hidden)]
 pub mod matcher;
+#[cfg(not(target_os = "linux"))]
+mod notify_watch;
 mod on_file;
 mod params;
 #[doc(hidden)]
