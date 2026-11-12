@@ -1,5 +1,6 @@
 //! A watch refresh updates a keyed row in place, so its generated id holds.
 
+#[cfg(target_os = "linux")]
 use dirsql::watcher::FileEvent;
 use dirsql::{DirSQL, RowEvent, Value};
 use std::fs;
@@ -92,6 +93,7 @@ fn renaming_an_experiment_keeps_its_id_and_emits_one_update() {
     assert_eq!(id_of(&db, "a"), alpha);
 }
 
+#[cfg(target_os = "linux")]
 fn per_file_experiments() -> dirsql::Table {
     dirsql::Table::new(
         "experiments",
@@ -110,6 +112,7 @@ fn per_file_experiments() -> dirsql::Table {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn renaming_a_per_file_experiment_keeps_its_id_and_emits_one_update() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().canonicalize().unwrap();

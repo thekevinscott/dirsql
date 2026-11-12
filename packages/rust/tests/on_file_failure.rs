@@ -90,3 +90,53 @@ fn a_parent_hook_failure_is_reported_ahead_of_the_orphaned_child() {
         "table `parent`, file `b.txt`: rejected-xyzzy"
     );
 }
+
+#[cfg(target_os = "linux")]
+fn counted_notes(root: &TempDir) -> DirSQL {
+    DirSQL::new(
+        root.path(),
+        vec![Table::try_new(
+            "notes",
+            "CREATE TABLE notes (n INTEGER)",
+            "*.txt",
+            |path| -> Result<Vec<Row>, Box<dyn std::error::Error + Send + Sync>> {
+                let text = fs::read_to_string(path)?;
+                let n: i64 = text.trim().parse()?;
+                Ok(vec![row(&[("n", Value::Integer(n))])])
+            },
+        )],
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn notes_n(db: &DirSQL) -> Result<Vec<Value>, DirSqlError> {
+    Ok(db
+        .query("SELECT n FROM notes")?
+        .into_iter()
+        .map(|row| row["n"].clone())
+        .collect())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_query_raises_a_changed_files_failure_until_the_file_is_fixed() {
+    let root = tree(&[]);
+    fs::write(root.path().join("a.txt"), "1").unwrap();
+    let db = counted_notes(&root);
+    assert_eq!(notes_n(&db).unwrap(), [Value::Integer(1)]);
+
+    fs::write(root.path().join("a.txt"), "half-writ").unwrap();
+    for query in 0..3 {
+        let err = notes_n(&db).expect_err("a query while the file fails must raise");
+        assert!(
+            matches!(&err, DirSqlError::OnFile { table, path, message }
+                if table == "notes" && path == "a.txt" && message.contains("invalid digit")),
+            "query {query}: {err:?}"
+        );
+    }
+
+    fs::write(root.path().join("a.txt"), "22").unwrap();
+    assert_eq!(notes_n(&db).unwrap(), [Value::Integer(22)]);
+    assert_eq!(notes_n(&db).unwrap(), [Value::Integer(22)]);
+}

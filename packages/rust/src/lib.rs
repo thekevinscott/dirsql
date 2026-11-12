@@ -36,6 +36,8 @@ mod listing;
 mod long_path;
 #[doc(hidden)]
 pub mod matcher;
+#[cfg(not(target_os = "linux"))]
+mod notify_watch;
 mod on_file;
 mod params;
 #[doc(hidden)]
@@ -81,7 +83,7 @@ use crate::progress::Progress;
 use crate::scanner::{Found, scan_directory_reporting};
 use crate::watcher::{FileEvent, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -481,6 +483,9 @@ struct DirSqlInner {
     /// The symlinked directories the index reaches files through. The watcher
     /// reports a change only at the link's target, so each is restated here.
     links: Mutex<Vec<Link>>,
+    /// The error of each file, by table and path, whose hook or rows failed
+    /// after the build. Every query raises the first while any stands.
+    failed_files: Mutex<BTreeMap<(String, String), String>>,
 }
 
 /// A symlinked directory at `path`, under a watch anchor, resolving to
@@ -753,7 +758,48 @@ impl DirSQL {
         if self.inner.query_applies_events.load(Ordering::SeqCst) {
             self.apply_queued(&mut state);
         }
+        self.raise_failed_file()?;
         Ok(state)
+    }
+
+    /// The first file failing since the build, as the error the build would
+    /// have raised for it.
+    fn raise_failed_file(&self) -> Result<()> {
+        let failed = self.inner.failed_files.lock().map_err(DirSqlError::lock)?;
+        match failed.iter().next() {
+            Some(((table, path), message)) => Err(DirSqlError::OnFile {
+                table: table.clone(),
+                path: path.clone(),
+                message: message.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Record `table`'s read of `rel_path`: a failure stands until a later
+    /// read of the file succeeds or the file leaves.
+    fn record_read(&self, table: &str, rel_path: &str, failure: Option<&str>) {
+        let Ok(mut failed) = self.inner.failed_files.lock() else {
+            return;
+        };
+        let key = (table.to_string(), rel_path.to_string());
+        match failure {
+            Some(message) => {
+                failed.insert(key, message.to_string());
+            }
+            None => {
+                failed.remove(&key);
+            }
+        }
+    }
+
+    /// Forget the failures of `table`'s files at or beneath `rel_path`.
+    fn forget_failures_under(&self, table: &str, rel_path: &str) {
+        let Ok(mut failed) = self.inner.failed_files.lock() else {
+            return;
+        };
+        let below = format!("{rel_path}/");
+        failed.retain(|(t, path), _| t != table || (path != rel_path && !path.starts_with(&below)));
     }
 
     /// Apply the watcher's queued events until none are left, then check
@@ -1411,6 +1457,9 @@ impl DirSQL {
     ) -> Vec<RowEvent> {
         let prefix = format!("{rel_dir}/");
         let in_group = |table: &str| group.tables.iter().any(|name| name == table);
+        for table in &group.tables {
+            self.forget_failures_under(table, rel_dir);
+        }
         if let Ok(mut batch_files) = self.inner.batch_files.lock() {
             for (table, files) in batch_files.iter_mut() {
                 if in_group(table) && files.iter().any(|file| file.starts_with(&prefix)) {
@@ -1443,6 +1492,9 @@ impl DirSQL {
     /// each group's root again, drop the rows of files that are gone, re-read
     /// the files that are there, and rebuild each per-table hook's file list.
     fn rescan(&self, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+        if let Ok(mut failed) = self.inner.failed_files.lock() {
+            failed.clear();
+        }
         let owned = match self.inner.db.lock() {
             Ok(db) => db.owned_files(),
             Err(e) => return vec![error_event(None, "", e.to_string())],
@@ -1526,6 +1578,7 @@ impl DirSQL {
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
+        self.forget_failures_under(table, rel_path);
         // Snapshot the file's rows before deleting them — the Delete events
         // carry the old-row payloads. Read and delete under one lock
         // acquisition so a concurrent event for the same file can't
@@ -1563,25 +1616,46 @@ impl DirSQL {
         rel_path: &str,
         report_parse_error: bool,
     ) -> Vec<RowEvent> {
+        match self.read_file_rows(table, abs_path, rel_path, report_parse_error) {
+            Ok(events) => {
+                self.record_read(table, rel_path, None);
+                events
+            }
+            Err(message) => {
+                self.record_read(table, rel_path, Some(&message));
+                vec![error_event(Some(table), rel_path, message)]
+            }
+        }
+    }
+
+    /// Run `table`'s hook over the file and write the rows it returns,
+    /// failing with the message of whatever went wrong.
+    fn read_file_rows(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        report_parse_error: bool,
+    ) -> std::result::Result<Vec<RowEvent>, String> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
         // non-files.
         match self.inner.fs.is_file(abs_path) {
             Ok(true) => {}
-            Ok(false) => return Vec::new(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Ok(false) => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
         }
 
         let Some(Hook::PerFile(on_file)) = self.inner.on_file_map.get(table) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
         let raw_rows = match on_file(&abs_path.to_string_lossy()) {
             Ok(r) => r,
-            Err(_) if !report_parse_error => return Vec::new(),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(_) if !report_parse_error => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
         };
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
@@ -1591,11 +1665,11 @@ impl DirSQL {
         // interleave between the read and the write.
         let db = match self.inner.db.lock() {
             Ok(g) => g,
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(e) => return Err(e.to_string()),
         };
         let new_rows = match db.shape_value_rows(table, raw_rows, strict) {
             Ok(rows) => rows,
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(e) => return Err(e.to_string()),
         };
         let applied = foreign_key::atomically(db.conn(), || -> db::Result<_> {
             if let Some(changes) = db.reconcile_file_rows(table, rel_path, &new_rows)? {
@@ -1620,7 +1694,7 @@ impl DirSQL {
                 rel_path,
             ))
         });
-        applied.unwrap_or_else(|e| vec![error_event(Some(table), rel_path, e.to_string())])
+        applied.map_err(|e| e.to_string())
     }
 
     pub(crate) fn build_from_resolved(resolved: ResolvedBuild) -> Result<Self> {
@@ -2181,6 +2255,7 @@ impl DirSQL {
                 fresh: Mutex::new(FreshState::default()),
                 unlocked: Condvar::new(),
                 links: Mutex::new(links),
+                failed_files: Mutex::new(BTreeMap::new()),
             }),
         };
         built.apply_queued_at_build()?;
@@ -4675,6 +4750,22 @@ mod internal_tests {
         db.delete_subtree(group, "moved", &mut pending);
 
         assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+    }
+
+    #[test]
+    fn delete_subtree_forgets_the_failures_of_this_groups_tables_beneath_it() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        let tables = vec![anchored_table("held", "*.txt", "/one")];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        db.record_read("held", "moved/x", Some("broken"));
+        db.record_read("foreign", "moved/z", Some("broken"));
+
+        db.delete_subtree(&groups[0], "moved", &mut PendingRefresh::default());
+
+        assert_eq!(
+            failing_paths(&db),
+            vec![("foreign".to_string(), "moved/z".to_string())]
+        );
     }
 
     fn found_at(root: &Path, path: &Path, table: &str) -> Found {
@@ -7522,6 +7613,16 @@ mod internal_tests {
     }
 
     #[test]
+    fn a_rescan_forgets_the_failures_it_reads_again() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+        db.record_read("items", "gone.txt", Some("broken"));
+
+        db.apply_file_events(vec![FileEvent::Rescan]);
+
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
+    #[test]
     fn a_rescan_reconciles_a_per_file_table_with_the_tree() {
         let (_dir, root, db, _) = rescan_fixture(false);
         drift(&root);
@@ -7923,6 +8024,149 @@ mod internal_tests {
         (table, reads)
     }
 
+    fn stored_names(db: &DirSQL) -> Vec<String> {
+        let guard = db.inner.db.lock().unwrap();
+        let mut stmt = guard.conn().prepare("SELECT name FROM items").unwrap();
+        let mut names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|name| name.unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn failing_paths(db: &DirSQL) -> Vec<(String, String)> {
+        db.inner
+            .failed_files
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn failing_fixture(failing: &[(&str, &str)]) -> DirSQL {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::default()),
+        )
+        .unwrap();
+        for (table, path) in failing {
+            db.record_read(table, path, Some("broken"));
+        }
+        db
+    }
+
+    #[test]
+    fn a_query_raises_the_first_failing_file_by_table_and_path() {
+        let db = failing_fixture(&[("t", "b.txt"), ("t", "a.txt")]);
+        match db.query("SELECT 1") {
+            Err(DirSqlError::OnFile {
+                table,
+                path,
+                message,
+            }) => {
+                assert_eq!(
+                    (table.as_str(), path.as_str(), message.as_str()),
+                    ("t", "a.txt", "broken")
+                );
+            }
+            other => panic!("expected the hook failure, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_query_succeeds_when_no_file_fails() {
+        let db = failing_fixture(&[]);
+        assert_eq!(db.query("SELECT 1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_successful_read_clears_only_its_own_failure() {
+        let db = failing_fixture(&[("t", "a.txt"), ("t", "b.txt"), ("u", "a.txt")]);
+        db.record_read("t", "a.txt", None);
+        assert_eq!(
+            failing_paths(&db),
+            vec![("t".into(), "b.txt".into()), ("u".into(), "a.txt".into())]
+        );
+    }
+
+    #[test]
+    fn forgetting_failures_under_a_path_keeps_siblings_and_other_tables() {
+        let db = failing_fixture(&[
+            ("t", "d"),
+            ("t", "d/a.txt"),
+            ("t", "d/e/b.txt"),
+            ("t", "dx/c.txt"),
+            ("u", "d/a.txt"),
+        ]);
+        db.forget_failures_under("t", "d");
+        assert_eq!(
+            failing_paths(&db),
+            vec![
+                ("t".into(), "dx/c.txt".into()),
+                ("u".into(), "d/a.txt".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn handle_upsert_records_its_failure_and_a_later_success_clears_it() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let fails = Arc::new(AtomicBool::new(true));
+        let hook_fails = Arc::clone(&fails);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::try_new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                move |_| {
+                    if hook_fails.load(Ordering::SeqCst) {
+                        Err("boom".into())
+                    } else {
+                        Ok(vec![])
+                    }
+                },
+            )],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::with_stat(abs.clone(), fake_stat())),
+        )
+        .unwrap();
+        db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(failing_paths(&db), vec![("items".into(), "a.txt".into())]);
+        fails.store(false, Ordering::SeqCst);
+        db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_file_that_cannot_be_statted_fails_rather_than_reading_as_gone() {
+        let (_dir, root, db, _) = fresh_fixture(&[("f.txt", "one")]);
+        let events = db.handle_upsert("items", &root.join("f.txt/a.txt"), "f.txt/a.txt");
+        assert!(
+            matches!(events.as_slice(), [RowEvent::Error { .. }]),
+            "got: {events:?}"
+        );
+        assert_eq!(
+            failing_paths(&db),
+            vec![("items".to_string(), "f.txt/a.txt".to_string())]
+        );
+    }
+
+    #[test]
+    fn deleting_a_failing_file_clears_its_failure() {
+        let db = failing_fixture(&[("items", "a.txt")]);
+        db.handle_delete("items", "a.txt");
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
     fn fresh_fixture(files: &[(&str, &str)]) -> (TempDir, PathBuf, DirSQL, Reads) {
         let dir = TempDir::new().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -8029,11 +8273,22 @@ mod internal_tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn a_file_whose_hook_fails_as_a_query_applies_it_keeps_its_rows_and_reports_the_error() {
+    fn a_file_whose_hook_fails_as_a_query_applies_it_keeps_its_rows_and_fails_the_query() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
         std::fs::write(root.join("a.txt"), "uno").unwrap();
         std::fs::write(root.join("b.txt"), "bad").unwrap();
-        assert_eq!(row_names(&db), vec!["two", "uno"]);
+        match db.query("SELECT name FROM items") {
+            Err(DirSqlError::OnFile {
+                table,
+                path,
+                message,
+            }) => {
+                assert_eq!((table.as_str(), message.as_str()), ("items", "bad content"));
+                assert!(path.ends_with("b.txt"), "got: {path}");
+            }
+            other => panic!("expected the hook failure, got: {other:?}"),
+        }
+        assert_eq!(stored_names(&db), vec!["two", "uno"]);
         assert!(
             db.apply_file_events(Vec::new()).iter().any(|event| matches!(
                 event,

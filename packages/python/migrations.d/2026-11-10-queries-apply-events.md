@@ -14,7 +14,7 @@ _None._
 
 #### Behavior changes without code changes
 
-A file is read when it is closed after writing or renamed into place, not while a handle to it is still open. On macOS and Windows a query issued the moment a write returns may read the previous rows; wait for the change on `watch()` before querying. A query no longer raises the error of a file whose `on_file` fails or that breaks a foreign key; that error reaches `watch()` consumers.
+A file is read when it is closed after writing or renamed into place, not while a handle to it is still open. On macOS and Windows a query issued the moment a write returns may read the previous rows; wait for the change on `watch()` before querying. A file whose `on_file` fails after the build fails every query with that error until the file is fixed or removed; the index keeps the file's last rows meanwhile, and `watch()` consumers still receive the error. A query no longer raises the error of a file that breaks a foreign key; that error reaches `watch()` consumers. An edit to a `.gitignore` after the build is not picked up, nor is a symlink pointed at a new target or an edit to the file a symlink points at; build a new `DirSQL` to read them.
 
 #### Verification
 

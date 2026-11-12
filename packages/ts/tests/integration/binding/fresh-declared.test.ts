@@ -7,7 +7,6 @@ import {
   renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -116,7 +115,6 @@ function rng(seed: number): (n: number) => number {
 const DIRS = ["", "a/", "a/b/", "c/"];
 const NAMES = ["n0", "n1", "n2", "n3"];
 const EXTS = ["txt", "json", "stage"];
-const IGNORES = ["n0.txt\n", "a/\n", "*.txt\n", "c/n1.*\n"];
 
 function pick<T>(below: (n: number) => number, items: T[]): T {
   return items[Math.floor(below(items.length))];
@@ -195,22 +193,12 @@ function step(root: string, below: (n: number) => number): string {
     rmSync(join(root, dir), { recursive: true, force: true });
     return `remove directory ${dir}`;
   }
-  if (op === 7) {
-    if (Math.floor(below(3)) === 0) {
-      rmSync(join(root, ".gitignore"), { force: true });
-      return "remove .gitignore";
-    }
-    const rule = pick(below, IGNORES);
-    write(root, ".gitignore", rule);
-    return `set .gitignore to ${JSON.stringify(rule)}`;
-  }
   const rel = randomFile(below);
   write(root, rel, content(below));
   return `write ${rel}`;
 }
 
 function seedTree(root: string, below: (n: number) => number): void {
-  mkdirSync(join(root, ".git"));
   for (let i = 0; i < 8; i++) {
     write(root, randomFile(below), content(below));
   }
@@ -409,29 +397,6 @@ describe.runIf(process.platform === "linux")(
         expect(await lines(db, "sub/deep/one.txt")).toEqual(["one"]);
         rmSync(join(dir, "sub"), { recursive: true });
         expect(await lines(db, "sub/deep/one.txt")).toEqual([]);
-      });
-
-      it("reads a .gitignore change", async () => {
-        mkdirSync(join(dir, ".git"));
-        write(dir, "hidden.txt", "hidden");
-        db = await open(dir);
-        expect(await lines(db, "hidden.txt")).toEqual(["hidden"]);
-        write(dir, ".gitignore", "hidden.txt\n");
-        expect(await lines(db, "hidden.txt")).toEqual([]);
-        unlinkSync(join(dir, ".gitignore"));
-        expect(await lines(db, "hidden.txt")).toEqual(["hidden"]);
-      });
-
-      it("reads a retargeted symlink", async () => {
-        write(dir, "targets/one.dat", "one");
-        write(dir, "targets/two.dat", "two");
-        const link = join(dir, "link.txt");
-        symlinkSync(join(dir, "targets/one.dat"), link);
-        db = await open(dir);
-        expect(await lines(db, "link.txt")).toEqual(["one"]);
-        unlinkSync(link);
-        symlinkSync(join(dir, "targets/two.dat"), link);
-        expect(await lines(db, "link.txt")).toEqual(["two"]);
       });
 
       it(
