@@ -2,12 +2,13 @@ use crate::watcher::{
     FileEvent, WatchScope, tolerate_missing, walk_scope, watch_tree, watch_tree_quietly,
 };
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::hash::Hash;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const ENOSPC: i32 = 28;
@@ -25,13 +26,18 @@ const MASK: WatchMask = WatchMask::CLOSE_WRITE
 /// Reads inotify itself, one non-recursive watch per directory the scan
 /// enters, so [`drain`](Self::drain) can empty the kernel's queue on demand.
 pub struct Watcher {
-    source: RefCell<Box<dyn Source + Send>>,
-    queued: RefCell<VecDeque<FileEvent>>,
+    source: Mutex<Box<dyn Source + Send>>,
+    queued: Mutex<VecDeque<FileEvent>>,
+    /// Waited on without holding `source`, so a query can drain meanwhile.
+    ready: Box<dyn Ready + Send + Sync>,
 }
 
 trait Source {
     /// Queue everything readable now, without blocking.
     fn read(&mut self, queued: &mut VecDeque<FileEvent>);
+}
+
+trait Ready {
     /// Block until more may be readable, or `left` runs out.
     fn wait(&self, left: Option<Duration>) -> io::Result<()>;
 }
@@ -42,6 +48,9 @@ struct Reader {
     scopes: Vec<WatchScope>,
     buffer: Vec<u8>,
 }
+
+/// The inotify fd again, to poll while the [`Reader`] is free to read.
+struct Readable(OwnedFd);
 
 impl Watcher {
     pub fn new(path: &Path) -> Result<Self, notify::Error> {
@@ -82,18 +91,26 @@ impl Watcher {
                 &mut |dir| tolerate_missing(add(dir)),
             )?;
         }
-        Ok(Self::reading(Reader {
-            inotify,
-            dirs,
-            scopes,
-            buffer: vec![0; 64 * 1024],
-        }))
+        let fd = rustix::io::dup(&inotify).map_err(|e| notify::Error::io(e.into()))?;
+        Ok(Self::reading(
+            Reader {
+                inotify,
+                dirs,
+                scopes,
+                buffer: vec![0; 64 * 1024],
+            },
+            Readable(fd),
+        ))
     }
 
-    fn reading(source: impl Source + Send + 'static) -> Self {
+    fn reading(
+        source: impl Source + Send + 'static,
+        ready: impl Ready + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            source: RefCell::new(Box::new(source)),
-            queued: RefCell::new(VecDeque::new()),
+            source: Mutex::new(Box::new(source)),
+            queued: Mutex::new(VecDeque::new()),
+            ready: Box::new(ready),
         }
     }
 
@@ -109,9 +126,16 @@ impl Watcher {
     /// `rename` returns only once its event is queued, so every write
     /// finished before this call is in the result.
     pub fn drain(&self) -> Vec<FileEvent> {
-        let mut queued = self.queued.borrow_mut();
-        self.source.borrow_mut().read(&mut queued);
+        let mut queued = lock(&self.queued);
+        lock(&self.source).read(&mut queued);
         queued.drain(..).collect()
+    }
+
+    /// Block until an event may be queued or `timeout` runs out, taking none.
+    pub fn wait(&self, timeout: Duration) {
+        if lock(&self.queued).is_empty() {
+            let _ = self.ready.wait(Some(timeout));
+        }
     }
 
     pub fn try_recv_all(&self) -> Vec<FileEvent> {
@@ -119,20 +143,27 @@ impl Watcher {
     }
 
     fn next(&self, deadline: Option<Instant>) -> Option<FileEvent> {
-        let mut source = self.source.borrow_mut();
-        let mut queued = self.queued.borrow_mut();
         loop {
-            source.read(&mut queued);
-            if let Some(event) = queued.pop_front() {
-                return Some(event);
+            {
+                let mut queued = lock(&self.queued);
+                lock(&self.source).read(&mut queued);
+                if let Some(event) = queued.pop_front() {
+                    return Some(event);
+                }
             }
             let left = match deadline {
                 Some(deadline) => Some(deadline.checked_duration_since(Instant::now())?),
                 None => None,
             };
-            source.wait(left).ok()?;
+            self.ready.wait(left).ok()?;
         }
     }
+}
+
+fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Source for Reader {
@@ -165,14 +196,16 @@ impl Source for Reader {
             }
         }
     }
+}
 
+impl Ready for Readable {
     fn wait(&self, left: Option<Duration>) -> io::Result<()> {
         let timeout = left
             .map(rustix::event::Timespec::try_from)
             .transpose()
             .map_err(|_| io::ErrorKind::InvalidInput)?;
         let mut fds = [rustix::event::PollFd::new(
-            &self.inotify,
+            &self.0,
             rustix::event::PollFlags::IN,
         )];
         match rustix::event::poll(&mut fds, timeout.as_ref()) {
@@ -585,19 +618,28 @@ mod tests {
         assert!(dirs.paths.is_empty());
     }
 
-    /// Hands out one batch per read; a wait only fails once `fail_wait` is set.
+    /// Hands out one batch per read.
     struct Script {
         reads: VecDeque<Vec<FileEvent>>,
-        fail_wait: bool,
     }
 
     impl Source for Script {
         fn read(&mut self, queued: &mut VecDeque<FileEvent>) {
             queued.extend(self.reads.pop_front().unwrap_or_default());
         }
+    }
 
+    /// Counts its waits, each failing once `fail` is set.
+    #[derive(Clone, Default)]
+    struct Waits {
+        fail: bool,
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Ready for Waits {
         fn wait(&self, _left: Option<Duration>) -> io::Result<()> {
-            if self.fail_wait {
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail {
                 Err(io::ErrorKind::Other.into())
             } else {
                 Ok(())
@@ -606,10 +648,22 @@ mod tests {
     }
 
     fn scripted(reads: Vec<Vec<FileEvent>>, fail_wait: bool) -> Watcher {
-        Watcher::reading(Script {
-            reads: reads.into(),
-            fail_wait,
-        })
+        waited_on(
+            reads,
+            Waits {
+                fail: fail_wait,
+                ..Waits::default()
+            },
+        )
+    }
+
+    fn waited_on(reads: Vec<Vec<FileEvent>>, waits: Waits) -> Watcher {
+        Watcher::reading(
+            Script {
+                reads: reads.into(),
+            },
+            waits,
+        )
     }
 
     fn created(path: &str) -> FileEvent {
@@ -661,6 +715,18 @@ mod tests {
     fn drain_hands_over_what_an_earlier_read_left_queued() {
         let watcher = scripted(vec![vec![created("/r/a"), created("/r/b")]], false);
         assert_eq!(watcher.recv(), Some(created("/r/a")));
+        assert_eq!(watcher.try_recv_all(), vec![created("/r/b")]);
+    }
+
+    #[test]
+    fn wait_blocks_only_while_nothing_is_queued() {
+        let waits = Waits::default();
+        let watcher = waited_on(vec![vec![created("/r/a"), created("/r/b")]], waits.clone());
+        watcher.wait(Duration::ZERO);
+        assert_eq!(waits.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(watcher.recv(), Some(created("/r/a")));
+        watcher.wait(Duration::ZERO);
+        assert_eq!(waits.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(watcher.try_recv_all(), vec![created("/r/b")]);
     }
 }

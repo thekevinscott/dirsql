@@ -1,0 +1,1 @@
+**Changed** While a watch batch is held because it left a row whose foreign key matches nothing, every query raises that foreign-key violation. The index keeps its last consistent state, and queries succeed again once a later change lands the batch: the missing parent appears or the orphaned child is removed. The error still reaches `watch()` consumers as before.

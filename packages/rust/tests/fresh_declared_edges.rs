@@ -1,6 +1,8 @@
 //! Each way a change could slip past a freshness check, read straight after
 //! the change returns.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 

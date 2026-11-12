@@ -1,6 +1,8 @@
 //! A change a query reads first still reaches `watch()` and `poll_events()`
 //! consumers, exactly once.
 
+#![cfg(target_os = "linux")]
+
 #[path = "common/fresh.rs"]
 mod fresh;
 

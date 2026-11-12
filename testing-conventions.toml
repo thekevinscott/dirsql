@@ -114,22 +114,16 @@ lines = [513, 520]
 reason = "set_terminated_text writes through a raw sqlite3_context, which only a real Connection supplies and unit-lint isolation forbids; tests/vtab.rs (stat_columns_carry_real_values) asserts the full path, basename and ext text"
 
 [[rust.exempt]]
-path = "src/freshness.rs"
-rules = ["mutation"]
-lines = [101, 115, 121, 127, 128, 130, 137, 144]
-reason = "the cfg(windows) and non-unix fingerprint bodies are compiled out on the Linux mutation runner, so no Linux test can reach them; the Windows CI job runs tests/fresh_declared_*.rs, whose t+0 asserts fail if the Windows fingerprint misses a change"
-
-[[rust.exempt]]
 path = "src/watcher.rs"
 rules = ["mutation"]
-lines = [139]
+lines = [151]
 reason = "the notify-backed Watcher::drain is compiled out on the Linux mutation runner; Linux reads inotify through src/inotify_watch.rs, whose drain the unit tests cover"
 
 [[rust.exempt]]
 path = "src/inotify_watch.rs"
 rules = ["mutation"]
-lines = [170]
-reason = "Reader::wait is a real poll(2) on the inotify fd, which unit-lint isolation keeps out of unit tests; replacing it with Ok(()) only turns the blocking wait into a busy loop that returns the same events, so no test can observe it"
+lines = [203]
+reason = "Readable::wait is a real poll(2) on the inotify fd, which unit-lint isolation keeps out of unit tests; replacing it with Ok(()) only turns the blocking wait into a busy loop that returns the same events, so no test can observe it"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out

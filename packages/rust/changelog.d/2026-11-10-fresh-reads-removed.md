@@ -1,0 +1,1 @@
+**Removed** The hidden `DirSQL::set_fresh_reads` and `DirSQL::read_changes`. Queries no longer walk the tables' globs, so there is no per-query read to switch off or run ahead of time; a query applies the file watcher's queued events instead.

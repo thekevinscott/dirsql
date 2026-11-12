@@ -216,7 +216,7 @@ reinvent what SQLite expresses natively*. `validate_identifier` remains: `name`
 is spliced into `format!()`-built INSERT/DELETE SQL, so it is still the
 injection guard.
 
-**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://dirsql.dev/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
+**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://dirsql.dev/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
 
 ### `scanner` -- Directory traversal
 
@@ -228,7 +228,10 @@ Maps glob patterns to table names and handles ignore patterns. A file is matched
 
 ### `watcher` -- Filesystem monitoring
 
-Wraps the `notify` crate to watch for filesystem changes. Emits `FileEvent` variants: `Created`, `Modified`, `Deleted`. Uses a channel-based architecture where events are sent from a background thread and received via `recv_timeout` and `try_recv_all`.
+Watches the named tables' directories for the life of a `DirSQL` and queues `FileEvent` variants: `Created`, `Modified`, `Deleted`. `drain` returns every queued event, in order, without blocking.
+
+- **Linux** reads inotify itself through the `inotify` crate, one watch per directory the scan enters. A file is reported when its writer closes it or it is renamed into place, never when it is created or while it is being written. A new directory gets a watch and a listing. `drain` reads the inotify fd until the kernel's queue is empty, so it returns every write finished before the call.
+- **macOS and Windows** wrap the `notify` crate, whose events arrive from a background thread over a channel. `drain` returns what has been delivered so far, so a write that has just returned may not be in it.
 
 ### `differ` -- Row diffing
 
@@ -271,8 +274,9 @@ columns. There are two hook kinds:
   receives one matched file's absolute path and returns that file's rows,
   tracked per file in `_dirsql_internal_rows` so the watcher can diff and
   replace them file by file. A callback that fails, or returns a row the
-  table rejects, fails the build, and a query that re-reads such a file
-  fails; the error names the table, the file and the callback's error.
+  table rejects, fails the build, and when the watcher re-reads such a file
+  the error reaches `watch()` consumers; it names the table, the file and the
+  callback's error.
 
 Neither kind has dirsql read file contents on its behalf. A hook that needs
 the file body, path parts, or stat metadata computes them from the paths and
@@ -311,18 +315,24 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. Python creates `DirSQL` with root path and table definitions
 2. Rust executes DDL to create SQLite tables
-3. `scanner` walks the directory and matches files to tables
-4. For a programmatic table, Python `on_file` is called via PyO3 for each
+3. The `watcher` starts over the named tables' directories, before anything is
+   read, and runs for the life of the handle; `watch()` attaches to it
+4. `scanner` walks the directory and matches files to tables. This is the
+   only walk: no query walks the tree again
+5. For a programmatic table, Python `on_file` is called via PyO3 for each
    matched file; for a config-declared table, the `on-file` command runs once
    with every matched path as an argument
-5. The returned rows are filtered to the DDL's declared columns (no columns are
+6. The returned rows are filtered to the DDL's declared columns (no columns are
    injected); rows are the hook's output alone
-6. Rows are inserted into SQLite with tracking metadata
-7. File-to-rows mapping is stored for later diffing
+7. Rows are inserted into SQLite with tracking metadata
+8. File-to-rows mapping is stored for later diffing
+9. The events the watcher queued during the walk are applied, and foreign keys
+   are checked once, as the build commits. A row whose foreign key matches
+   nothing fails the build
 
 ### File change processing
 
-1. `notify` detects a filesystem event (create/modify/delete)
+1. The `watcher` queues a filesystem event (create/modify/delete); a query, or a `watch()` / `poll_events()` batch, takes the queue
 2. The matcher checks if the file belongs to a table
 3. For create/modify on a programmatic table: `on_file` is called with the
    file's absolute path (reading the file itself if it needs the body); its
@@ -339,7 +349,35 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 ### Query execution
 
 1. Python calls `db.query(sql)`
-2. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
-3. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
-4. Rust executes the prepared statement
-5. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)
+2. The watcher's queued file events are applied, foreign keys checked only once the queue is empty; on Linux the inotify queue is drained first, so a write that returned before the call is read. While a batch a foreign key rejected is held, the query raises its violation
+3. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
+4. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
+5. Rust executes the prepared statement
+6. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)
+
+### What a query sees
+
+Each query applies the watcher's queue before it reads, so the index costs one
+walk, at build, however many queries follow. Foreign keys are checked only
+when the queue is empty: a writer that creates a parent file and then its
+child leaves an orphan only between the two events, and no query checks in
+between.
+
+- **Linux.** Every query drains the inotify queue first, so it sees every
+  write that finished before it, and the empty-queue rule holds exactly.
+- **macOS and Windows.** The same design on `notify`, with no empty-queue
+  guarantee: a query applies only what `notify` has delivered. A query right
+  after a write may return old rows, and a parent whose event has not
+  arrived yet can make its child a false orphan that raises. Both are
+  accepted.
+
+A real orphan, one still there with the queue empty, does not land: the index
+keeps its last consistent state and every query raises the violation until
+the parent appears or the child is removed.
+
+Each directory a Linux watch covers costs one inotify watch. A build that runs
+out fails with the error watchdog raises, `ENOSPC` "inotify watch limit
+reached", and a directory that cannot be watched after the build makes every
+query raise until the handle is rebuilt, since the index can no longer see
+every change. `sudo sysctl fs.inotify.max_user_watches=524288` raises the
+limit.

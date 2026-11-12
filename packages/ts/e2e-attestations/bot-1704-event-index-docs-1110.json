@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts",
+  "ran_at": 1794368612,
+  "exit_code": 0,
+  "commit": "a75892cc32a9b15b566895da4bed47e16d83f8d7",
+  "branch": "bot/1704-event-index-docs-1110"
+}

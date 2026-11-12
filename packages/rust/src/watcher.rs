@@ -8,6 +8,8 @@ use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
 };
 use std::collections::HashSet;
+#[cfg(not(target_os = "linux"))]
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 #[cfg(not(target_os = "linux"))]
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -48,7 +50,9 @@ const PER_DIRECTORY: bool = !cfg!(any(target_os = "macos", target_os = "windows"
 /// Wraps notify::RecommendedWatcher and translates raw events into FileEvent values.
 pub struct Watcher {
     _watcher: Arc<Mutex<RecommendedWatcher>>,
-    rx: mpsc::Receiver<FileEvent>,
+    rx: Mutex<mpsc::Receiver<FileEvent>>,
+    /// Events [`wait`](Self::wait) took off the channel, served first.
+    waited: Mutex<VecDeque<FileEvent>>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -120,33 +124,57 @@ impl Watcher {
 
         Ok(Self {
             _watcher: watcher,
-            rx,
+            rx: Mutex::new(rx),
+            waited: Mutex::new(VecDeque::new()),
         })
     }
 
     /// Receive the next event, blocking until one is available.
     pub fn recv(&self) -> Option<FileEvent> {
-        self.rx.recv().ok()
+        if let Some(event) = lock(&self.waited).pop_front() {
+            return Some(event);
+        }
+        lock(&self.rx).recv().ok()
     }
 
     /// Try to receive an event with a timeout.
     pub fn recv_timeout(&self, timeout: Duration) -> Option<FileEvent> {
-        self.rx.recv_timeout(timeout).ok()
+        if let Some(event) = lock(&self.waited).pop_front() {
+            return Some(event);
+        }
+        lock(&self.rx).recv_timeout(timeout).ok()
     }
 
-    /// Every event queued so far, in order, without blocking.
+    /// Every event queued so far, in order, without blocking. One a
+    /// [`wait`](Self::wait) in progress is receiving is left to it.
     pub fn drain(&self) -> Vec<FileEvent> {
-        self.try_recv_all()
+        let mut events: Vec<FileEvent> = lock(&self.waited).drain(..).collect();
+        if let Ok(rx) = self.rx.try_lock() {
+            events.extend(rx.try_iter());
+        }
+        events
     }
 
     /// Drain all currently pending events without blocking.
     pub fn try_recv_all(&self) -> Vec<FileEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.rx.try_recv() {
-            events.push(event);
-        }
-        events
+        self.drain()
     }
+
+    /// Block until an event is queued or `timeout` runs out, taking none.
+    pub fn wait(&self, timeout: Duration) {
+        if lock(&self.waited).is_empty() {
+            if let Ok(event) = lock(&self.rx).recv_timeout(timeout) {
+                lock(&self.waited).push_back(event);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(not(target_os = "linux"))]

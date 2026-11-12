@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/orphan_query_test.py tests/e2e/written_during_build_test.py tests/e2e/parent_then_child_server_test.py -x -q",
+  "ran_at": 1794368541,
+  "exit_code": 0,
+  "commit": "c5b0f537f5aa23ea6b021b3f452db21b0376ae37",
+  "branch": "bot/1704-event-index-docs-1110"
+}
