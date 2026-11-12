@@ -8144,6 +8144,21 @@ mod internal_tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn a_file_that_cannot_be_statted_fails_rather_than_reading_as_gone() {
+        let (_dir, root, db, _) = fresh_fixture(&[("f.txt", "one")]);
+        let events = db.handle_upsert("items", &root.join("f.txt/a.txt"), "f.txt/a.txt");
+        assert!(
+            matches!(events.as_slice(), [RowEvent::Error { .. }]),
+            "got: {events:?}"
+        );
+        assert_eq!(
+            failing_paths(&db),
+            vec![("items".to_string(), "f.txt/a.txt".to_string())]
+        );
+    }
+
+    #[test]
     fn deleting_a_failing_file_clears_its_failure() {
         let db = failing_fixture(&[("items", "a.txt")]);
         db.handle_delete("items", "a.txt");
