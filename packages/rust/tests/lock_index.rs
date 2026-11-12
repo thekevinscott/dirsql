@@ -1,4 +1,4 @@
-//! While `lock_index` holds the index, queries, `read_changes` and watch
+//! While `lock_index` holds the index, queries, `apply_queued_events` and watch
 //! batches wait for `unlock_index`; taking the lock waits for a read already
 //! in progress and for another holder.
 
@@ -47,11 +47,11 @@ fn a_query_waits_for_unlock_and_then_reads_the_disk() {
 }
 
 #[test]
-fn read_changes_waits_for_unlock() {
+fn apply_queued_events_waits_for_unlock() {
     let tree = Tree::new();
     let db = tree.open();
     db.lock_index().unwrap();
-    let (waited, read) = waits_for(|| db.read_changes(), || db.unlock_index().unwrap());
+    let (waited, read) = waits_for(|| db.apply_queued_events(), || db.unlock_index().unwrap());
     assert!(waited);
     read.unwrap();
 }
