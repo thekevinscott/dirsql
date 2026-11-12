@@ -1,7 +1,7 @@
 {
-  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts",
-  "ran_at": 1794366833,
+  "command": "pnpm exec vitest run --dir tests/e2e tests/e2e/fresh-declared-repros.test.ts tests/e2e/query-contract.test.ts tests/e2e/root-at-construction.test.ts",
+  "ran_at": 1794483868,
   "exit_code": 0,
-  "commit": "425f6f1bc18bf401dd94137f25b7c6cfd725c13d",
+  "commit": "435409b3eab14f9064436780db1ede4c48545287",
   "branch": "bot/1702-watch-attaches-1110"
 }
