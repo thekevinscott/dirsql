@@ -9,6 +9,8 @@ real binding, real filesystem.
 import subprocess
 import sys
 
+import pytest
+
 _SCRIPT = """
 import asyncio, json
 from dirsql import DirSQL, Table
@@ -34,9 +36,45 @@ asyncio.run(main())
 """
 
 
-def _run(cwd):
+_CHANGED_SCRIPT = """
+import asyncio, json
+from dirsql import DirSQL, Table
+
+def rows(path):
+    with open(path) as f:
+        return [{"id": path, "n": json.load(f)["n"]}]
+
+def write(text):
+    with open("d/a.json", "w") as f:
+        f.write(text)
+
+async def query(db):
+    try:
+        print(await db.query("SELECT n FROM notes"))
+    except RuntimeError as e:
+        print("ERROR", e)
+
+async def main():
+    db = DirSQL(".", tables=[Table(
+        name="notes",
+        ddl="CREATE TABLE notes (id TEXT PRIMARY KEY, n INTEGER NOT NULL)",
+        glob="d/*.json",
+        on_file=rows,
+    )])
+    await query(db)
+    write('{"m": 2}')
+    await query(db)
+    await query(db)
+    write('{"n": 5}')
+    await query(db)
+
+asyncio.run(main())
+"""
+
+
+def _run(cwd, script=_SCRIPT):
     result = subprocess.run(
-        [sys.executable, "-c", _SCRIPT],
+        [sys.executable, "-c", script],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -69,3 +107,16 @@ def describe_on_file_failure():
     def it_fails_when_the_table_rejects_the_row(tmp_path):
         _tree(tmp_path, '{"n": null}')
         _assert_fails(_run(tmp_path), "d/b.json", "notes", "NOT NULL")
+
+    @pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="a query reads a write at once only where it drains the inotify queue",
+    )
+    def it_fails_every_query_while_a_changed_file_fails(tmp_path):
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "a.json").write_text('{"n": 1}')
+        lines = _run(tmp_path, _CHANGED_SCRIPT)
+        assert len(lines) == 4, lines
+        assert lines[0] == "[{'n': 1}]", lines
+        _assert_fails(lines[1:3], "d/a.json", "notes", "KeyError")
+        assert lines[3] == "[{'n': 5}]", lines

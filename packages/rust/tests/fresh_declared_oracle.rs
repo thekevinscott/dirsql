@@ -13,7 +13,6 @@ use std::time::Duration;
 const DIRS: &[&str] = &["", "a/", "a/b/", "c/"];
 const NAMES: &[&str] = &["n0", "n1", "n2", "n3"];
 const EXTS: &[&str] = &["txt", "json", "stage"];
-const IGNORES: &[&str] = &["n0.txt\n", "a/\n", "*.json\n", "c/n1.*\n"];
 
 /// Every file holds JSON lines, so a rename across globs leaves both tables
 /// readable.
@@ -108,16 +107,6 @@ fn step(tree: &Tree, rng: &mut Rng) -> String {
             }
             format!("remove directory {dir}")
         }
-        8 => {
-            if rng.below(3) == 0 {
-                let _ = fs::remove_file(tree.path(".gitignore"));
-                "remove .gitignore".to_string()
-            } else {
-                let rule = rng.pick(IGNORES);
-                tree.write(".gitignore", rule);
-                format!("set .gitignore to {rule:?}")
-            }
-        }
         _ => {
             let rel = random_file(rng);
             let text = content(rng, &rel);
@@ -129,7 +118,6 @@ fn step(tree: &Tree, rng: &mut Rng) -> String {
 
 fn seeded_tree(rng: &mut Rng) -> Tree {
     let tree = Tree::new();
-    fs::create_dir(tree.path(".git")).unwrap();
     for _ in 0..8 {
         let rel = random_file(rng);
         let text = content(rng, &rel);

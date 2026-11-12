@@ -6,7 +6,9 @@
 mod fresh;
 
 use dirsql::{DirSQL, Table, Value};
-use fresh::{Tree, lines_of};
+use fresh::Tree;
+#[cfg(target_os = "linux")]
+use fresh::lines_of;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -30,6 +32,7 @@ fn waits_for<T: Send>(work: impl FnOnce() -> T + Send, release: impl FnOnce()) -
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_query_waits_for_unlock_and_then_reads_the_disk() {
     let tree = Tree::new();
     tree.write("a.txt", "one");
