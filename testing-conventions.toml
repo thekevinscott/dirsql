@@ -122,13 +122,19 @@ reason = "the notify-backed Watcher (new, over, scoped, recv, recv_timeout, drai
 [[rust.exempt]]
 path = "src/notify_watch.rs"
 rules = ["mutation"]
+lines = [18]
+reason = "PER_DIRECTORY picks the notify watcher's watch mode and is compiled out on the Linux mutation runner; the Windows tests job reaches it through every Watcher::scoped call in tests/watcher.rs"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
 lines = [143]
 reason = "the notify watcher's poison-tolerant lock is compiled out on the Linux mutation runner; the Windows tests job reaches it through every Watcher call in tests/watcher.rs"
 
 [[rust.exempt]]
 path = "src/notify_watch.rs"
 rules = ["mutation"]
-lines = [157, 170]
+lines = [157, 160, 170]
 reason = "the notify watcher's forward loop is compiled out on the Linux mutation runner; the Windows tests job runs this file's forward_* unit tests and tests/watcher.rs (scoped_watcher_reports_files_in_a_new_directory)"
 
 [[rust.exempt]]
