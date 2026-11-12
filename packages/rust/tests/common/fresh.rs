@@ -97,25 +97,6 @@ impl Tree {
         )
         .unwrap();
     }
-
-    /// Point the symlink `rel` at `target`, replacing any link already there.
-    pub fn link(&self, rel: &str, target: &str) {
-        let link = self.path(rel);
-        if fs::symlink_metadata(&link).is_ok() {
-            fs::remove_file(&link).unwrap();
-        }
-        symlink_file(&self.path(target), &link);
-    }
-}
-
-#[cfg(unix)]
-fn symlink_file(target: &Path, link: &Path) {
-    std::os::unix::fs::symlink(target, link).unwrap();
-}
-
-#[cfg(windows)]
-fn symlink_file(target: &Path, link: &Path) {
-    std::os::windows::fs::symlink_file(target, link).unwrap();
 }
 
 /// One row per non-empty line, keyed by the file's root-relative path.

@@ -4,6 +4,7 @@ that raises and a row the table rejects follow the same rule.
 """
 
 import os
+import sys
 
 import pytest
 
@@ -83,7 +84,11 @@ def describe_on_file_failure():
         _assert_names(err, "d/a.txt", "notes", "nope-xyzzy")
 
     @pytest.mark.asyncio
-    async def it_fails_the_query_when_a_changed_file_fails(tmp_dir):
+    @pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="a query reads a write at once only where it drains the inotify queue",
+    )
+    async def it_fails_every_query_while_a_changed_file_fails(tmp_dir):
         _write(tmp_dir, "d/a.txt", "1")
 
         def on_file(path):
@@ -94,9 +99,11 @@ def describe_on_file_failure():
         assert await db.query("SELECT n FROM notes") == [{"n": 1}]
 
         _write(tmp_dir, "d/a.txt", "half-writ")
-        with pytest.raises(RuntimeError) as err:
-            await db.query("SELECT n FROM notes")
-        _assert_names(err, "d/a.txt", "notes", "half-writ")
+        for _ in range(3):
+            with pytest.raises(RuntimeError) as err:
+                await db.query("SELECT n FROM notes")
+            _assert_names(err, "d/a.txt", "notes", "half-writ")
 
         _write(tmp_dir, "d/a.txt", "22")
+        assert await db.query("SELECT n FROM notes") == [{"n": 22}]
         assert await db.query("SELECT n FROM notes") == [{"n": 22}]

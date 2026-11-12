@@ -1,6 +1,6 @@
 // Binding-tier tests: any per-file `onFile` failure fails `ready` and the
 // query, with an error naming the file, the table and the original error.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,4 +64,35 @@ describe("DirSQL onFile failure", () => {
     expect(err?.message).toContain("notes");
     expect(err?.message).toContain("NOT NULL");
   });
+
+  // A query reads a write at once only where it drains the inotify queue.
+  it.runIf(process.platform === "linux")(
+    "fails every query while a changed file fails, until it is fixed",
+    async () => {
+      writeFileSync(join(dir, "d", "a.txt"), "1");
+      const db = mkdb((filePath) => {
+        const text = readFileSync(filePath, "utf8");
+        if (!/^\d+$/.test(text)) {
+          throw new Error(`not a number: ${text}`);
+        }
+        return [{ n: Number(text) }];
+      }, "CREATE TABLE notes (n INTEGER)");
+      expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 1 }]);
+
+      writeFileSync(join(dir, "d", "a.txt"), "half-writ");
+      for (let i = 0; i < 3; i++) {
+        const err = await db.query("SELECT n FROM notes").then(
+          () => null,
+          (e: Error) => e,
+        );
+        expect(err?.message).toContain("d/a.txt");
+        expect(err?.message).toContain("notes");
+        expect(err?.message).toContain("half-writ");
+      }
+
+      writeFileSync(join(dir, "d", "a.txt"), "22");
+      expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 22 }]);
+      expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 22 }]);
+    },
+  );
 });

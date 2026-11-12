@@ -114,15 +114,45 @@ lines = [513, 520]
 reason = "set_terminated_text writes through a raw sqlite3_context, which only a real Connection supplies and unit-lint isolation forbids; tests/vtab.rs (stat_columns_carry_real_values) asserts the full path, basename and ext text"
 
 [[rust.exempt]]
-path = "src/watcher.rs"
+path = "src/notify_watch.rs"
 rules = ["mutation"]
-lines = [151]
-reason = "the notify-backed Watcher::drain is compiled out on the Linux mutation runner; Linux reads inotify through src/inotify_watch.rs, whose drain the unit tests cover"
+lines = [31, 37, 55, 105, 113, 122, 131, 136]
+reason = "the notify-backed Watcher (new, over, scoped, recv, recv_timeout, drain, try_recv_all, wait) is compiled out on the Linux mutation runner, which reads inotify through src/inotify_watch.rs; the Windows tests job exercises it through tests/watcher.rs"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
+lines = [18]
+reason = "PER_DIRECTORY picks the notify watcher's watch mode and is compiled out on the Linux mutation runner; the Windows tests job reaches it through every Watcher::scoped call in tests/watcher.rs"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
+lines = [145]
+reason = "the notify watcher's poison-tolerant lock is compiled out on the Linux mutation runner; the Windows tests job reaches it through every Watcher call in tests/watcher.rs"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
+lines = [159, 162, 175]
+reason = "the notify watcher's forward loop is compiled out on the Linux mutation runner; the Windows tests job runs this file's forward_* unit tests and tests/watcher.rs (scoped_watcher_reports_files_in_a_new_directory)"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
+lines = [203]
+reason = "is_real_dir is compiled out on the Linux mutation runner; the Windows tests job runs this file's is_real_dir_is_true_only_for_a_directory"
+
+[[rust.exempt]]
+path = "src/notify_watch.rs"
+rules = ["mutation"]
+lines = [208, 212, 216, 221, 225, 226, 227]
+reason = "translate_event maps notify events and is compiled out on the Linux mutation runner, which translates inotify masks in src/inotify_watch.rs; the Windows tests job runs this file's translate_event_* unit tests"
 
 [[rust.exempt]]
 path = "src/inotify_watch.rs"
 rules = ["mutation"]
-lines = [203]
+lines = [205]
 reason = "Readable::wait is a real poll(2) on the inotify fd, which unit-lint isolation keeps out of unit tests; replacing it with Ok(()) only turns the blocking wait into a busy loop that returns the same events, so no test can observe it"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
