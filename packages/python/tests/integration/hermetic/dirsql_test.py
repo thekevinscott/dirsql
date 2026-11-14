@@ -58,7 +58,6 @@ class _FakeRustDirSQL:
         self.query_results: list = (
             [{"from_config": config}] if config is not None else [{"ok": 1}]
         )
-        self.started = False
         self.poll_calls: list[int] = []
         # Scripted event batches; each poll returns the next batch.
         self.poll_batches: list[list] = []
@@ -68,9 +67,6 @@ class _FakeRustDirSQL:
         self.queries.append(sql)
         self.query_params.append(params)
         return self.query_results
-
-    def _start_watcher(self):
-        self.started = True
 
     def _poll_events(self, timeout_ms):
         self.poll_calls.append(timeout_ms)
@@ -233,18 +229,15 @@ def describe_binding_layer():
         # Feature: watch() is an async iterator of RowEvent. See
         # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
-        async def it_starts_the_watcher_before_watch_returns(mock_core):
+        async def it_yields_the_polled_events(mock_core):
             db = mock_core("/root", tables=["t"])
             await db.ready()
 
             stream = db.watch()
-            assert _FakeRustDirSQL.instances[0].started is True
-
             _FakeRustDirSQL.instances[0].poll_batches = [["evt-1"]]
 
             event = await stream.__anext__()
             assert event == "evt-1"
-            assert _FakeRustDirSQL.instances[0].started is True
 
         @pytest.mark.asyncio
         async def it_drains_buffered_events_before_polling_again(mock_core):

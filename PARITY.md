@@ -96,13 +96,23 @@ core, so all three SDKs change at once. **No drift.**
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Query carrying the projection order | `db.query(sql)`: each row dict is keyed in projection order | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | `await db.queryOrdered(sql) -> QueryResult` (`columns` + `rows`) |
 | Query with bind parameters (sequence -> `?`, mapping -> `:name`) | `await db.query(sql, params)` | `db.query_with(sql, &Params)` (also `query_ordered_with`, `query_each_with`, `AsyncDirSQL::query_with`) | `await db.query(sql, params)` (array -> `?`, plain object -> `:name`; also `queryOrdered(sql, params)`) |
-| Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
+| Start watcher              | **N** (runs from instantiation; `watch()` attaches) | **N** (runs from `build()`; `watch()` / `poll_events()` attach) | `await db.startWatcher()` (optional: attaches, starting the watcher only if the build could not) |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Hold the index still during a multi-file write | `with db.lock:` | **N** (core `lock_index` / `unlock_index` are `#[doc(hidden)]` binding plumbing) | **N** |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
 | Worker-backed SQL functions (`[[dirsql.function]]`) | Y — config entries parsed and registered by the shared core (via `config=`) | Y — `[[dirsql.function]]` config entries (name, args arities, command, deterministic, timeout, batch) | Y — config entries parsed and registered by the shared core (via `config`) |
+
+**The watcher runs from instantiation — parity, no drift.** The core starts
+the watcher when it builds the index; every SDK's `watch()` (and Rust's
+`poll_events()`, TypeScript's `pollEvents()`) attaches to it and starts
+nothing. TypeScript's `startWatcher()` remains, optional: it only attaches.
+TypeScript queries apply the watcher's queued events on the JS thread before
+the SQL runs on the threadpool, because `onFile` can only be called on the JS
+thread; the hidden core switch `set_query_applies_events(false)` stops the
+threadpool half applying events that arrive in between, which would call
+`onFile` off the JS thread.
 
 **Multiple watch streams — TypeScript restored to Python parity.** Every
 `watch()` stream on one instance receives all events observed after its
@@ -502,7 +512,7 @@ public-API binding, so no drift.
 - Table definitions may be written as `new Table({...})` or as a plain object literal (`{ name, ddl, glob, onFile, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
 - The constructor is overloaded: `new DirSQL(configPath: string)` or `new DirSQL(options: { root?, tables?, ignore?, config? })`. There is no separate `fromConfig` factory.
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
-- `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
+- `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s; `query()` applies the watcher's queued events on the JS thread, where `onFile` must run, then runs the SQL on the libuv threadpool, and `pollEvents()` waits on the threadpool so the JS event loop stays responsive (even for long poll timeouts).
 - `new DirSQL(...)` returns synchronously but the initial directory scan runs on the libuv threadpool: `ready` resolves once it completes and rejects on scan error. Every method transparently awaits `ready`, so callers can issue queries immediately.
 
 ## Test Coverage Matrix
@@ -613,7 +623,7 @@ incl. #313).
 | DB kept in sync after events | Y | Y | Y |
 | `file_path`/`filePath` is relative to root | Y | Y | Y |
 | Shrinking file ends with dropped row deleted | Y | unit (`differ.rs`) | Y |
-| Low-level start-watcher + poll primitives | integration (`dirsql_test.py`) | Y (`sdk.rs`) | Y (`index.test.ts`) |
+| Low-level poll primitives | integration (`dirsql_test.py`) | Y (`sdk.rs`) | Y (`index.test.ts`) |
 | Relative-root watching (#250) | core | Y (`watch_relative_root.rs`) | core |
 | watch/poll mutual-exclusion errors | core | Y (`sdk.rs`) | core |
 

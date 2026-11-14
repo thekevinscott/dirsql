@@ -507,7 +507,7 @@ describe("DirSQL watch events", () => {
       ],
     });
 
-    await db.startWatcher();
+    await db.ready;
 
     const relPath = join("nested", "dir", "new.json");
     await writeFile(join(dir, relPath), JSON.stringify({ name: "relative" }));
@@ -541,7 +541,7 @@ describe("DirSQL watch events", () => {
       ],
     });
 
-    await db.startWatcher();
+    await db.ready;
 
     let timerFired = false;
     setTimeout(() => {
