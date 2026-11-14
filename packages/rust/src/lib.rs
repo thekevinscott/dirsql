@@ -5502,6 +5502,15 @@ mod internal_tests {
     }
 
     #[test]
+    fn deliver_hands_no_empty_batch_to_poll_events() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(Vec::new());
+        let polled = db.inner.polled.lock().unwrap();
+        assert!(polled.as_ref().unwrap().try_recv().is_err());
+    }
+
+    #[test]
     fn deliver_detaches_a_stream_whose_receiver_is_gone() {
         let (_dir, db) = simple_db();
         drop(db.watch().unwrap());
