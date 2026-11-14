@@ -945,6 +945,7 @@ impl DirSQL {
 
     /// Attach as [`poll_events`](Self::poll_events)' first call does, without
     /// waiting: changes applied from here on reach the next `poll_events`.
+    #[doc(hidden)]
     pub fn attach_poll(&self) -> Result<()> {
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
@@ -5733,7 +5734,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
         std::fs::write(&abs, "Alpha").unwrap();
-        let db = DirSQL::new(
+        let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
                 "items",
@@ -5749,6 +5750,8 @@ mod internal_tests {
                     ])]
                 },
             )],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
         )
         .unwrap();
         std::fs::write(&abs, "Renamed").unwrap();

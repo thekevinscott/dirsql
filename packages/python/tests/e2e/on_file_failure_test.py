@@ -48,11 +48,20 @@ def write(text):
     with open("d/a.json", "w") as f:
         f.write(text)
 
-async def query(db):
+async def answer(db):
     try:
-        print(await db.query("SELECT n FROM notes"))
+        return str(await db.query("SELECT n FROM notes"))
     except RuntimeError as e:
-        print("ERROR", e)
+        return f"ERROR {e}"
+
+async def query(db):
+    print(await answer(db))
+
+async def settle(db, expected):
+    for _ in range(1000):
+        if expected in await answer(db):
+            return
+        await asyncio.sleep(0.01)
 
 async def main():
     db = DirSQL(".", tables=[Table(
@@ -63,9 +72,11 @@ async def main():
     )])
     await query(db)
     write('{"m": 2}')
+    await settle(db, "KeyError")
     await query(db)
     await query(db)
     write('{"n": 5}')
+    await settle(db, "5")
     await query(db)
 
 asyncio.run(main())
@@ -108,10 +119,7 @@ def describe_on_file_failure():
         _tree(tmp_path, '{"n": null}')
         _assert_fails(_run(tmp_path), "d/b.json", "notes", "NOT NULL")
 
-    @pytest.mark.skipif(
-        sys.platform != "linux",
-        reason="a query reads a write at once only where it drains the inotify queue",
-    )
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
     def it_fails_every_query_while_a_changed_file_fails(tmp_path):
         (tmp_path / "d").mkdir()
         (tmp_path / "d" / "a.json").write_text('{"n": 1}')
