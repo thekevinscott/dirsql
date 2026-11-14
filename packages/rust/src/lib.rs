@@ -87,7 +87,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard,
+    Arc, Condvar, Mutex, MutexGuard, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -468,6 +468,8 @@ struct DirSqlInner {
     /// Locks out [`DirSQL::poll_events`] once [`DirSQL::watch`] has spawned
     /// its background thread.
     watch_thread_started: AtomicBool,
+    /// Where [`DirSQL::watch`] receives the row events of each applied batch.
+    stream: Mutex<Option<UnboundedSender<RowEvent>>>,
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
@@ -1085,8 +1087,8 @@ impl DirSQL {
         Ok(f(&db)?)
     }
 
-    /// Channel-based watch API. Spawns a background thread that pushes
-    /// [`RowEvent`]s into the returned stream. Intended for long-running Rust
+    /// Channel-based watch API. The returned stream receives the [`RowEvent`]s
+    /// of every change applied from now on. Intended for long-running Rust
     /// consumers (e.g. a CLI `watch` command). Can only be called once per
     /// `DirSQL` instance.
     ///
@@ -1104,9 +1106,39 @@ impl DirSQL {
         self.attach_watcher()?;
 
         let (tx, rx) = unbounded();
-        let this = self.clone();
-        thread::spawn(move || run_channel_loop(this, tx));
+        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(tx);
         Ok(rx)
+    }
+
+    /// Wait for the watcher to hold an event, apply what it holds, and hand
+    /// the row events to the stream. Without a watcher yet, waits only.
+    fn apply_arrived(&self) -> Result<()> {
+        let watcher = self.inner.watcher.lock().map_err(DirSqlError::lock)?.clone();
+        let Some(watcher) = watcher else {
+            thread::sleep(self.inner.poll_interval);
+            return Ok(());
+        };
+        watcher.wait(self.inner.poll_interval);
+        let events = self.apply_file_events_taken(|| self.queued_file_events());
+        self.deliver(events);
+        Ok(())
+    }
+
+    /// Hand `events` to the stream [`watch`](Self::watch) attached. Changes
+    /// applied before it attached reach no stream.
+    fn deliver(&self, events: Vec<RowEvent>) {
+        let Ok(mut stream) = self.inner.stream.lock() else {
+            return;
+        };
+        let Some(tx) = stream.as_ref() else {
+            return;
+        };
+        if events
+            .into_iter()
+            .any(|event| tx.unbounded_send(event).is_err())
+        {
+            *stream = None;
+        }
     }
 
     /// Wait for the watcher to hold an event, then take and apply them under
@@ -1887,7 +1919,19 @@ impl DirSQL {
     /// run. For the napi-rs binding that is the JS main thread.
     #[doc(hidden)]
     pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
-        Self::finish_build_with_fs(prepared, Arc::new(RealFs), Progress::indexing())
+        let built = Self::finish_build_with_fs(prepared, Arc::new(RealFs), Progress::indexing())?;
+        built.start_applier();
+        Ok(built)
+    }
+
+    /// Apply the watcher's events on a thread of the instance's own, from now
+    /// until it is dropped.
+    fn start_applier(&self) {
+        if self.inner.groups.is_empty() {
+            return;
+        }
+        let inner = Arc::downgrade(&self.inner);
+        thread::spawn(move || run_applier(inner));
     }
 
     /// Variant of [`finish_build`] taking the [`FileSystem`] to store on the
@@ -2188,6 +2232,7 @@ impl DirSQL {
                 watcher: Mutex::new(watcher.map(Arc::new)),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
+                stream: Mutex::new(None),
                 poll_interval,
                 fs,
                 fresh: Mutex::new(FreshState::default()),
@@ -3259,25 +3304,18 @@ fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     }
 }
 
-fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
-    let interval = db.inner.poll_interval;
-    loop {
-        match db.poll_once(interval) {
-            Ok(events) => {
-                for event in events {
-                    if tx.unbounded_send(event).is_err() {
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = tx.unbounded_send(RowEvent::Error {
-                    table: None,
-                    file_path: db.inner.root.clone(),
-                    error: e.to_string(),
-                });
-                return;
-            }
+/// Apply the watcher's events as they arrive, for as long as the instance
+/// lives.
+fn run_applier(inner: Weak<DirSqlInner>) {
+    while let Some(inner) = inner.upgrade() {
+        let db = DirSQL { inner };
+        if let Err(e) = db.apply_arrived() {
+            db.deliver(vec![RowEvent::Error {
+                table: None,
+                file_path: db.inner.root.clone(),
+                error: e.to_string(),
+            }]);
+            return;
         }
     }
 }
@@ -5374,18 +5412,40 @@ mod internal_tests {
     }
 
     #[test]
-    fn run_channel_loop_emits_error_event_on_poll_failure() {
+    fn run_applier_reports_a_failure_to_the_stream_and_stops() {
         let (_dir, db) = simple_db();
+        let mut rx = db.watch().unwrap();
         poison(&db.inner.watcher);
 
-        let (tx, mut rx) = unbounded();
-        run_channel_loop(db, tx);
+        run_applier(Arc::downgrade(&db.inner));
 
         let event = rx.try_recv().expect("expected an error event");
         let dbg = format!("{event:?}");
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
         assert!(dbg.contains("failed to lock"), "expected lock text: {dbg}");
-        assert!(rx.try_recv().is_err(), "loop should have ended");
+    }
+
+    #[test]
+    fn run_applier_ends_once_the_instance_is_dropped() {
+        let (_dir, db) = simple_db();
+        let inner = Arc::downgrade(&db.inner);
+        drop(db);
+        run_applier(inner);
+    }
+
+    #[test]
+    fn deliver_without_a_stream_drops_the_events() {
+        let (_dir, db) = simple_db();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+        assert!(db.inner.stream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn deliver_detaches_a_stream_whose_receiver_is_gone() {
+        let (_dir, db) = simple_db();
+        drop(db.watch().unwrap());
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+        assert!(db.inner.stream.lock().unwrap().is_none());
     }
 
     #[test]
@@ -8105,6 +8165,7 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn a_query_reads_a_file_written_after_the_build() {
         let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "one").unwrap();
         await_row_names(&db, &["one"]);
     }
@@ -8113,6 +8174,7 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn a_query_reads_an_edit_to_a_file_the_build_indexed() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "two").unwrap();
         await_row_names(&db, &["two"]);
     }
@@ -8121,6 +8183,7 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn a_query_drops_the_rows_of_a_deleted_file() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        db.start_applier();
         std::fs::remove_file(root.join("a.txt")).unwrap();
         await_row_names(&db, &["two"]);
     }
@@ -8154,6 +8217,7 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn query_ordered_and_query_each_read_fresh_rows_too() {
         let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "one").unwrap();
         await_row_names(&db, &["one"]);
         assert_eq!(
@@ -8175,6 +8239,7 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn a_file_whose_hook_fails_after_the_build_keeps_its_rows_and_fails_the_query() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "uno").unwrap();
         std::fs::write(root.join("b.txt"), "bad").unwrap();
         for _ in 0..1000 {
@@ -8207,6 +8272,7 @@ mod internal_tests {
         let db =
             DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
                 .unwrap();
+        db.start_applier();
         std::fs::write(root.join("b.txt"), "x").unwrap();
         await_row_names(&db, &["a.txt", "b.txt"]);
         assert_eq!(
