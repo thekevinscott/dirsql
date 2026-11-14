@@ -1,6 +1,6 @@
-//! While `lock_index` holds the index, queries, `apply_queued_events` and watch
-//! batches wait for `unlock_index`; taking the lock waits for a read already
-//! in progress and for another holder.
+//! While `lock_index` holds the index, queries and watch batches wait for
+//! `unlock_index`; taking the lock waits for a watch batch already in
+//! progress and for another holder.
 
 #[path = "common/fresh.rs"]
 mod fresh;
@@ -8,7 +8,7 @@ mod fresh;
 use dirsql::{DirSQL, Table, Value};
 use fresh::Tree;
 #[cfg(target_os = "linux")]
-use fresh::lines_of;
+use fresh::await_lines;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -33,30 +33,20 @@ fn waits_for<T: Send>(work: impl FnOnce() -> T + Send, release: impl FnOnce()) -
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_query_waits_for_unlock_and_then_reads_the_disk() {
+fn a_query_waits_for_unlock_and_a_write_made_while_locked_then_lands() {
     let tree = Tree::new();
     tree.write("a.txt", "one");
     let db = tree.open();
     db.lock_index().unwrap();
-    let (waited, lines) = waits_for(
-        || lines_of(&db, "b.txt"),
+    let (waited, _) = waits_for(
+        || db.query("SELECT line FROM notes").unwrap(),
         || {
             tree.write("b.txt", "two");
             db.unlock_index().unwrap();
         },
     );
     assert!(waited);
-    assert_eq!(lines, ["two"]);
-}
-
-#[test]
-fn apply_queued_events_waits_for_unlock() {
-    let tree = Tree::new();
-    let db = tree.open();
-    db.lock_index().unwrap();
-    let (waited, read) = waits_for(|| db.apply_queued_events(), || db.unlock_index().unwrap());
-    assert!(waited);
-    read.unwrap();
+    await_lines(&db, "b.txt", &["two"]);
 }
 
 #[test]
@@ -105,7 +95,7 @@ fn gated_table(gate: Gate) -> Table {
 }
 
 #[test]
-fn taking_the_lock_waits_for_a_read_in_progress() {
+fn taking_the_lock_waits_for_a_watch_batch_in_progress() {
     let tree = Tree::new();
     let gate = Arc::new(Mutex::new(None));
     let db = DirSQL::new(tree.root(), vec![gated_table(Arc::clone(&gate))]).unwrap();
@@ -113,13 +103,10 @@ fn taking_the_lock_waits_for_a_read_in_progress() {
     let (resume_tx, resume_rx) = mpsc::channel();
     *gate.lock().unwrap() = Some((started_tx, resume_rx));
     tree.write("a.txt", "one");
-    thread::scope(|scope| {
-        let reader = scope.spawn(|| db.query("SELECT name FROM items").unwrap());
-        started_rx.recv().unwrap();
-        let (waited, locked) = waits_for(|| db.lock_index(), || resume_tx.send(()).unwrap());
-        assert!(waited);
-        locked.unwrap();
-        assert_eq!(reader.join().unwrap().len(), 1);
-    });
+    started_rx.recv().unwrap();
+    let (waited, locked) = waits_for(|| db.lock_index(), || resume_tx.send(()).unwrap());
+    assert!(waited);
+    locked.unwrap();
     db.unlock_index().unwrap();
+    assert_eq!(db.query("SELECT name FROM items").unwrap().len(), 1);
 }

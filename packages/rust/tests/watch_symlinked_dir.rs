@@ -40,6 +40,7 @@ fn body_table() -> Table {
 
 fn watching(root: &Path, table: Table) -> DirSQL {
     let db = DirSQL::builder().root(root).table(table).build().unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     db
 }
@@ -143,6 +144,7 @@ fn a_per_table_hook_is_not_handed_a_path_whose_target_left_the_tree() {
     .unwrap();
     let away = TempDir::new().unwrap();
     let db = DirSQL::from_config_path(root.path().join(".dirsql.toml")).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
     fs::rename(root.path().join("real"), away.path().join("real")).unwrap();

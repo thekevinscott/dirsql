@@ -6,6 +6,7 @@ use dirsql::{DirSQL, RowEvent, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const ROW: &str = "{\"k\":\"a\",\"x\":1,\"s\":5,\"i\":\"7\",\"z\":-0.0}\n";
@@ -53,12 +54,11 @@ fn an_update_event_reports_the_row_as_stored() {
         &root,
         "CREATE TABLE t (k TEXT PRIMARY KEY, x REAL, s TEXT, i INTEGER, z REAL)",
     );
-    fs::write(
-        root.join("d/a.jsonl"),
+    let events = changes_from_write(
+        &db,
+        &root.join("d/a.jsonl"),
         "{\"k\":\"a\",\"x\":2,\"s\":6,\"i\":\"8\",\"z\":-0.0}\n",
-    )
-    .unwrap();
-    let events = db.apply_file_events(vec![FileEvent::Modified(root.join("d/a.jsonl"))]);
+    );
     let stored = &db.query("SELECT * FROM t").unwrap()[0];
     match events.as_slice() {
         [RowEvent::Update { new_row, .. }] => assert_same(new_row, stored),
@@ -74,20 +74,31 @@ fn an_insert_event_reports_the_row_as_stored() {
         &root,
         "CREATE TABLE t (k TEXT PRIMARY KEY, x REAL, s TEXT, i INTEGER, z REAL)",
     );
-    fs::write(
-        root.join("d/a.jsonl"),
-        format!(
+    let events = changes_from_write(
+        &db,
+        &root.join("d/a.jsonl"),
+        &format!(
             "{ROW}{}",
             "{\"k\":\"b\",\"x\":2,\"s\":6,\"i\":\"8\",\"z\":-0.0}\n"
         ),
-    )
-    .unwrap();
-    let events = db.apply_file_events(vec![FileEvent::Modified(root.join("d/a.jsonl"))]);
+    );
     let stored = &db.query("SELECT * FROM t WHERE k = 'b'").unwrap()[0];
     match events.as_slice() {
         [RowEvent::Insert { row, .. }] => assert_same(row, stored),
         other => panic!("expected one insert, got: {other:?}"),
     }
+}
+
+/// The row events the watcher reports for writing `content` to `path`.
+fn changes_from_write(db: &DirSQL, path: &Path, content: &str) -> Vec<RowEvent> {
+    db.poll_events(Duration::ZERO).unwrap();
+    fs::write(path, content).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seen = Vec::new();
+    while seen.is_empty() && Instant::now() < deadline {
+        seen.extend(db.poll_events(Duration::from_millis(200)).unwrap());
+    }
+    seen
 }
 
 /// Compared by `Debug`, which tells `-0.0` from `0.0` where `==` does not.

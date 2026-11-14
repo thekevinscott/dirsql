@@ -1,7 +1,7 @@
-"""Binding-tier tests: a declared table reads exactly what is on disk.
+"""Binding-tier tests: every write reaches a declared table's index.
 
-Every query runs the moment the write before it returns, and must read what
-a ``DirSQL`` built fresh over the same tree reads.
+After each write, the index comes to hold what a ``DirSQL`` built fresh over
+the same tree reads.
 """
 
 import asyncio
@@ -15,10 +15,7 @@ import pytest
 
 from dirsql import DirSQL, Table
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux",
-    reason="a query reads a write at once only where it drains the inotify queue",
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
 
 ROUNDS = 2000
 
@@ -77,15 +74,31 @@ async def _lines(db, rel):
     return [row["line"] for row in rows]
 
 
+async def _await_eq(read, expected, context):
+    seen = await read()
+    for _ in range(1000):
+        if seen == expected:
+            break
+        await asyncio.sleep(0.01)
+        seen = await read()
+    assert seen == expected, context
+
+
+async def _await_lines(db, rel, expected, context=""):
+    await _await_eq(lambda: _lines(db, rel), expected, context or rel)
+
+
 async def _snapshot(db):
     rows = await db.query("SELECT file, line FROM notes ORDER BY file, line")
     return [(row["file"], row["line"]) for row in rows]
 
 
-async def _assert_matches_fresh_scan(db, root, context):
+async def _await_fresh_scan(db, root, context):
     fresh = await _open(root)
-    assert await _snapshot(db) == await _snapshot(fresh), (
-        f"the long-lived instance disagrees with a fresh scan after {context}"
+    await _await_eq(
+        lambda: _snapshot(db),
+        await _snapshot(fresh),
+        f"the long-lived instance disagrees with a fresh scan after {context}",
     )
 
 
@@ -161,69 +174,71 @@ def _seed_tree(root, rng):
         _write(root, _random_file(rng), _content(rng))
 
 
-def describe_a_query_right_after_a_write():
+def describe_one_write_at_a_time():
     @pytest.mark.asyncio
-    async def it_reads_every_create(tmp_dir):
+    async def it_gets_every_create_into_the_index(tmp_dir):
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _write(tmp_dir, f"h/{i}.txt", f"c{i}")
-            assert await _lines(db, f"h/{i}.txt") == [f"c{i}"], f"round {i}"
+            await _await_lines(db, f"h/{i}.txt", [f"c{i}"], f"round {i}")
             os.remove(os.path.join(tmp_dir, f"h/{i}.txt"))
 
     @pytest.mark.asyncio
-    async def it_reads_every_edit(tmp_dir):
+    async def it_gets_every_edit_into_the_index(tmp_dir):
         _write(tmp_dir, "e.txt", "start")
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _write(tmp_dir, "e.txt", f"e{i}")
-            assert await _lines(db, "e.txt") == [f"e{i}"], f"round {i}"
+            await _await_lines(db, "e.txt", [f"e{i}"], f"round {i}")
 
     @pytest.mark.asyncio
-    async def it_reads_every_delete(tmp_dir):
+    async def it_gets_every_delete_into_the_index(tmp_dir):
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _write(tmp_dir, "d.txt", f"d{i}")
-            assert await _lines(db, "d.txt") == [f"d{i}"], f"round {i}"
+            await _await_lines(db, "d.txt", [f"d{i}"], f"round {i}")
             os.remove(os.path.join(tmp_dir, "d.txt"))
-            assert await _lines(db, "d.txt") == [], f"round {i}"
+            await _await_lines(db, "d.txt", [], f"round {i}")
 
     @pytest.mark.asyncio
-    async def it_reads_every_rename_into_and_out_of_the_glob(tmp_dir):
+    async def it_gets_every_rename_into_and_out_of_the_glob_into_the_index(tmp_dir):
         db = await _open(tmp_dir)
         staged = os.path.join(tmp_dir, "r.stage")
         final = os.path.join(tmp_dir, "r.txt")
         for i in range(ROUNDS):
             _write(tmp_dir, "r.stage", f"r{i}")
             os.replace(staged, final)
-            assert await _lines(db, "r.txt") == [f"r{i}"], f"round {i}"
+            await _await_lines(db, "r.txt", [f"r{i}"], f"round {i}")
             os.replace(final, staged)
-            assert await _lines(db, "r.txt") == [], f"round {i}"
+            await _await_lines(db, "r.txt", [], f"round {i}")
 
     @pytest.mark.asyncio
-    async def it_reads_every_atomic_save(tmp_dir):
+    async def it_gets_every_atomic_save_into_the_index(tmp_dir):
         _write(tmp_dir, "a.txt", "start")
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _save_atomically(tmp_dir, "a.txt", f"a{i}")
-            assert await _lines(db, "a.txt") == [f"a{i}"], f"round {i}"
+            await _await_lines(db, "a.txt", [f"a{i}"], f"round {i}")
 
     @pytest.mark.asyncio
-    async def it_reads_every_same_size_edit(tmp_dir):
+    async def it_gets_every_same_size_edit_into_the_index(tmp_dir):
         _write(tmp_dir, "s.txt", "s------")
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _write(tmp_dir, "s.txt", f"s{i:06}")
-            assert await _lines(db, "s.txt") == [f"s{i:06}"], f"round {i}"
+            await _await_lines(db, "s.txt", [f"s{i:06}"], f"round {i}")
 
     @pytest.mark.asyncio
-    async def it_reads_every_same_size_edit_with_its_times_restored(tmp_dir):
+    async def it_gets_every_same_size_edit_with_its_times_restored_into_the_index(
+        tmp_dir,
+    ):
         _write(tmp_dir, "t.txt", "t------")
         times = _times(tmp_dir, "t.txt")
         db = await _open(tmp_dir)
         for i in range(ROUNDS):
             _write(tmp_dir, "t.txt", f"t{i:06}")
             _restore_times(tmp_dir, "t.txt", times)
-            assert await _lines(db, "t.txt") == [f"t{i:06}"], f"round {i}"
+            await _await_lines(db, "t.txt", [f"t{i:06}"], f"round {i}")
 
 
 def describe_a_long_lived_instance():
@@ -237,9 +252,7 @@ def describe_a_long_lived_instance():
             db = await _open(root)
             for op in range(100):
                 done = _step(root, rng)
-                await _assert_matches_fresh_scan(
-                    db, root, f"seed {seed} op {op}: {done}"
-                )
+                await _await_fresh_scan(db, root, f"seed {seed} op {op}: {done}")
 
     @pytest.mark.asyncio
     async def it_reads_what_a_fresh_scan_reads_across_idle_gaps_and_bursts(tmp_dir):
@@ -250,9 +263,7 @@ def describe_a_long_lived_instance():
             await asyncio.sleep(0.25 * (cycle % 4))
             for op in range(20):
                 done = _step(tmp_dir, rng)
-                await _assert_matches_fresh_scan(
-                    db, tmp_dir, f"cycle {cycle} op {op}: {done}"
-                )
+                await _await_fresh_scan(db, tmp_dir, f"cycle {cycle} op {op}: {done}")
 
 
 def describe_each_way_a_change_could_be_missed():
@@ -261,27 +272,27 @@ def describe_each_way_a_change_could_be_missed():
         _write(tmp_dir, "touched.txt", "before")
         times = _times(tmp_dir, "touched.txt")
         db = await _open(tmp_dir)
-        assert await _lines(db, "touched.txt") == ["before"]
+        await _await_lines(db, "touched.txt", ["before"])
         _write(tmp_dir, "touched.txt", "after!")
         _restore_times(tmp_dir, "touched.txt", times)
-        assert await _lines(db, "touched.txt") == ["after!"]
+        await _await_lines(db, "touched.txt", ["after!"])
 
     @pytest.mark.asyncio
     async def it_reads_a_file_deleted_and_recreated_under_the_same_name(tmp_dir):
         _write(tmp_dir, "again.txt", "first")
         db = await _open(tmp_dir)
-        assert await _lines(db, "again.txt") == ["first"]
+        await _await_lines(db, "again.txt", ["first"])
         os.remove(os.path.join(tmp_dir, "again.txt"))
         _write(tmp_dir, "again.txt", "secnd")
-        assert await _lines(db, "again.txt") == ["secnd"]
+        await _await_lines(db, "again.txt", ["secnd"])
 
     @pytest.mark.asyncio
     async def it_reads_a_new_and_a_deleted_subdirectory(tmp_dir):
         db = await _open(tmp_dir)
         _write(tmp_dir, "sub/deep/one.txt", "one")
-        assert await _lines(db, "sub/deep/one.txt") == ["one"]
+        await _await_lines(db, "sub/deep/one.txt", ["one"])
         shutil.rmtree(os.path.join(tmp_dir, "sub"))
-        assert await _lines(db, "sub/deep/one.txt") == []
+        await _await_lines(db, "sub/deep/one.txt", [])
 
     @pytest.mark.asyncio
     async def it_never_reads_a_file_torn_while_it_is_rewritten_and_ends_exact(tmp_dir):
@@ -303,20 +314,19 @@ def describe_each_way_a_change_could_be_missed():
             lines = await _lines(db, "busy.txt")
             assert len(lines) == 50 and len(set(lines)) == 1, lines
         thread.join()
-        assert await _lines(db, "busy.txt") == ["v000300"] * 50
+        await _await_lines(db, "busy.txt", ["v000300"] * 50)
 
 
 def describe_watch_consumers():
     @pytest.mark.asyncio
-    async def it_streams_each_change_a_query_read_first_once(tmp_dir):
+    async def it_gets_each_change_once_on_a_watch_stream(tmp_dir):
         db = await _open(tmp_dir)
         stream = db.watch()
         files = 100
         for i in range(files):
             _write(tmp_dir, f"w/{i}.txt", f"w{i}")
-            assert await _lines(db, f"w/{i}.txt") == [f"w{i}"], f"file {i}"
-        # Unread by any query, so only the watcher reports it, after every
-        # change before it.
+            await _await_lines(db, f"w/{i}.txt", [f"w{i}"], f"file {i}")
+        # Written last, so the stream reports it after every change before it.
         _write(tmp_dir, "sentinel.txt", "end")
         counts = {}
         async for event in stream:

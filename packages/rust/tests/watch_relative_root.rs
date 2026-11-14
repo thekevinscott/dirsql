@@ -79,6 +79,7 @@ fn watch_with_relative_root_emits_events() {
     let _cwd = CwdGuard::enter(&canonical_dir);
 
     let db = DirSQL::new(".", vec![items_table()]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
 
     // Give the watcher a moment to register before mutating the tree.
     std::thread::sleep(Duration::from_millis(250));

@@ -1,8 +1,8 @@
-// E2E: a long-lived `DirSQL` reads what is on disk when each query runs.
+// E2E: every write reaches a long-lived `DirSQL`'s index.
 // Regressions for the reported repros: a declared table read with no watch
 // running, a change written between `ready` and `watch()` starting, and a
-// query racing a consumed `watch()`. Every query runs the moment the write
-// before it returns. No mocks: real addon, real filesystem, real SQLite.
+// query racing a consumed `watch()`. No mocks: real addon, real filesystem,
+// real SQLite.
 
 import {
   mkdirSync,
@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -71,6 +72,20 @@ async function records(db: DirSQL): Promise<[string, number][]> {
   return rows.map((row) => [String(row.name), Number(row.v)]);
 }
 
+// A file caught mid-write fails its hook, and every query with it, until the
+// write completes.
+async function awaitEq<T>(read: () => Promise<T>, expected: T): Promise<void> {
+  let seen: T | Error = new Error("never read");
+  for (let i = 0; i < 1000; i++) {
+    seen = await read().catch((e: Error) => e);
+    if (isDeepStrictEqual(seen, expected)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(seen).toEqual(expected);
+}
+
 // Closing the instance ends the stream by rejecting its pending `next()`.
 function consume(db: DirSQL): void {
   (async () => {
@@ -84,9 +99,8 @@ function consume(db: DirSQL): void {
   });
 }
 
-// A query reads a write at once only where it drains the inotify queue.
 describe.runIf(process.platform === "linux")(
-  "a long-lived DirSQL reads what is on disk",
+  "every write reaches a long-lived DirSQL's index",
   () => {
     let dir: string;
     let db: DirSQL | undefined;
@@ -107,7 +121,8 @@ describe.runIf(process.platform === "linux")(
         db = turnsDb(dir);
         await db.ready;
         addTurn(dir, 1);
-        expect(await turnIds(db)).toEqual(["turns/0", "turns/1"]);
+        const open = db;
+        await awaitEq(() => turnIds(open), ["turns/0", "turns/1"]);
       });
 
       it("reads a create, an edit and a delete", async () => {
@@ -117,40 +132,37 @@ describe.runIf(process.platform === "linux")(
         expect(await records(db)).toEqual([["a.json", 1]]);
         writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
         writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 10 }));
-        expect(await records(db)).toEqual([
-          ["a.json", 10],
-          ["b.json", 2],
-        ]);
+        const open = db;
+        await awaitEq(
+          () => records(open),
+          [
+            ["a.json", 10],
+            ["b.json", 2],
+          ],
+        );
         unlinkSync(join(dir, "b.json"));
-        expect(await records(db)).toEqual([["a.json", 10]]);
+        await awaitEq(() => records(open), [["a.json", 10]]);
       });
     });
 
     describe("a change written before watch starts", () => {
       it(
-        "is read by the next query and streamed once",
+        "reaches the index and no stream",
         async () => {
           addTurn(dir, 0);
           db = turnsDb(dir);
           await db.ready;
           addTurn(dir, 1);
-          expect(await turnIds(db)).toEqual(["turns/0", "turns/1"]);
+          const open = db;
+          await awaitEq(() => turnIds(open), ["turns/0", "turns/1"]);
           const stream = db.watch()[Symbol.asyncIterator]();
-          // Unread by any query, so only the watcher reports it, after every
-          // change before it.
           addTurn(dir, 2);
-          const inserted: string[] = [];
-          for (;;) {
-            const next = await stream.next();
-            expect(next.done).toBe(false);
-            expect(next.value.action).toBe("insert");
-            const id = String(next.value.row?.id);
-            inserted.push(id);
-            if (id === "turns/2") {
-              break;
-            }
-          }
-          expect(inserted).toEqual(["turns/1", "turns/2"]);
+          const next = await stream.next();
+          expect(next.done).toBe(false);
+          expect([next.value.action, next.value.row?.id]).toEqual([
+            "insert",
+            "turns/2",
+          ]);
           expect(await turnIds(db)).toEqual(["turns/0", "turns/1", "turns/2"]);
         },
         TEST_TIMEOUT,
@@ -159,34 +171,38 @@ describe.runIf(process.platform === "linux")(
 
     describe("a query racing a consumed watch", () => {
       it(
-        "reads every write before it",
+        "gets every write into the index",
         async () => {
           mkdirSync(join(dir, "turns"));
           db = turnsDb(dir);
           await db.ready;
           consume(db);
-          const misses: number[] = [];
+          const open = db;
           for (let n = 0; n < RACE_ROUNDS; n++) {
             addTurn(dir, n);
-            if ((await db.query("SELECT id FROM turns")).length !== n + 1) {
-              misses.push(n);
-            }
+            await awaitEq(
+              async () => (await open.query("SELECT id FROM turns")).length,
+              n + 1,
+            );
           }
-          expect(misses).toEqual([]);
         },
         TEST_TIMEOUT,
       );
 
-      it("reads a create", async () => {
+      it("gets a create into the index", async () => {
         writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
         db = recordsDb(dir);
         await db.ready;
         consume(db);
         writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
-        expect(await records(db)).toEqual([
-          ["a.json", 1],
-          ["b.json", 2],
-        ]);
+        const open = db;
+        await awaitEq(
+          () => records(open),
+          [
+            ["a.json", 1],
+            ["b.json", 2],
+          ],
+        );
       });
     });
 

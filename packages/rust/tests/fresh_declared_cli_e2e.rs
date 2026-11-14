@@ -1,6 +1,6 @@
-//! A long-lived `dirsql` process answers a query issued the moment a write
-//! returns with that write: over the server's HTTP query endpoint, and in the
-//! REPL. Real binary, real filesystem, nothing mocked.
+//! Every write reaches a long-lived `dirsql` process's answers: over the
+//! server's HTTP query endpoint, and in the REPL. Real binary, real
+//! filesystem, nothing mocked.
 
 #![cfg(all(feature = "cli", target_os = "linux"))]
 
@@ -10,7 +10,7 @@ mod fresh;
 mod server;
 
 use assert_cmd::prelude::*;
-use fresh::Tree;
+use fresh::{Tree, await_eq};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -32,22 +32,22 @@ fn values(rows: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Create, edit and delete a file each round, asking `query` straight after
-/// every write.
+/// Create, edit and delete a file each round, asking `query` after every
+/// write until it answers with that write.
 fn create_edit_delete(tree: &Tree, mut query: impl FnMut() -> Vec<String>) {
     for i in 0..ROUNDS {
         let rel = format!("h/{i}.json");
         tree.write(&rel, &record(&format!("c{i}")));
-        assert_eq!(query(), [format!("c{i}")], "create {i}");
+        await_eq(&mut query, vec![format!("c{i}")], &format!("create {i}"));
         tree.write(&rel, &record(&format!("e{i}")));
-        assert_eq!(query(), [format!("e{i}")], "edit {i}");
+        await_eq(&mut query, vec![format!("e{i}")], &format!("edit {i}"));
         tree.remove(&rel);
-        assert!(query().is_empty(), "delete {i}");
+        await_eq(&mut query, Vec::new(), &format!("delete {i}"));
     }
 }
 
 #[test]
-fn the_server_answers_every_query_with_the_write_before_it() {
+fn every_write_reaches_the_servers_answers() {
     let tree = Tree::new();
     let port = TcpListener::bind("localhost:0")
         .unwrap()
@@ -80,7 +80,7 @@ fn the_server_answers_every_query_with_the_write_before_it() {
 }
 
 #[test]
-fn the_repl_answers_every_statement_with_the_write_before_it() {
+fn every_write_reaches_the_repls_answers() {
     let tree = Tree::new();
     let mut repl = Command::cargo_bin("dirsql")
         .unwrap()

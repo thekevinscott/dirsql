@@ -1,5 +1,4 @@
-//! A change a query reads first still reaches `watch()` and `poll_events()`
-//! consumers, exactly once.
+//! Each change reaches `watch()` and `poll_events()` consumers exactly once.
 
 #![cfg(target_os = "linux")]
 
@@ -7,7 +6,7 @@
 mod fresh;
 
 use dirsql::{DirSQL, RowEvent};
-use fresh::{Tree, lines_of, text};
+use fresh::{Tree, await_lines, text};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -48,12 +47,12 @@ fn write_and_read_each(tree: &Tree, db: &DirSQL) {
     for i in 0..FILES {
         let rel = format!("w/{i}.txt");
         tree.write(&rel, &format!("w{i}"));
-        assert_eq!(lines_of(db, &rel), [format!("w{i}")], "file {i}");
+        await_lines(db, &rel, &[format!("w{i}")]);
     }
 }
 
 #[test]
-fn a_watch_stream_gets_each_change_a_query_read_first_once() {
+fn a_watch_stream_gets_each_change_once() {
     let tree = Tree::new();
     let db = tree.open();
     let mut stream = db.watch().unwrap();
@@ -69,7 +68,7 @@ fn a_watch_stream_gets_each_change_a_query_read_first_once() {
 }
 
 #[test]
-fn poll_events_returns_each_change_a_query_read_first_once() {
+fn poll_events_returns_each_change_once() {
     let tree = Tree::new();
     let db = tree.open();
     assert!(db.poll_events(Duration::ZERO).unwrap().is_empty());

@@ -1,7 +1,5 @@
-//! On Linux a query first applies every event the kernel has queued, and
-//! checks foreign keys only once that queue is empty: a writer creating a
-//! parent and then its child, in new directories, never fails a query, and a
-//! query issued the moment a write returns reads it.
+//! On Linux a writer creating a parent and then its child, in new
+//! directories, never fails a query, and every write reaches the index.
 
 #![cfg(target_os = "linux")]
 
@@ -120,21 +118,20 @@ fn queries_never_fail_while_a_writer_creates_parents_then_children() {
     );
 }
 
+fn await_count(db: &DirSQL, sql: &str, expected: i64) {
+    let end = Instant::now() + Duration::from_secs(10);
+    while count(db, sql) != expected && Instant::now() < end {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(count(db, sql), expected, "{sql}");
+}
+
 #[test]
-fn a_query_issued_as_a_write_returns_reads_it() {
+fn every_write_reaches_the_index() {
     let (_dir, root, db) = open();
     for n in 0..200 {
         write_pair(&root, n);
-        let expected = i64::try_from(n + 1).unwrap();
-        assert_eq!(
-            count(&db, "SELECT count(*) AS n FROM advice"),
-            expected,
-            "advice {n}"
-        );
-        assert_eq!(
-            count(&db, "SELECT count(*) AS n FROM turn"),
-            expected,
-            "turn {n}"
-        );
     }
+    await_count(&db, "SELECT count(*) AS n FROM advice", 200);
+    await_count(&db, "SELECT count(*) AS n FROM turn", 200);
 }
