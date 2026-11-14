@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use dirsql::watcher::FileEvent;
 use dirsql::{DirSQL, Row, RowEvent, Table, Value};
@@ -213,13 +214,20 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_query_over_an_orphaned_child_keeps_the_previous_state_and_reports_it() {
+fn an_orphaned_child_keeps_the_previous_state_and_reports_it() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
+    db.poll_events(Duration::ZERO).unwrap();
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
 
-    assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha"]);
-    let reported = errors(&db.apply_file_events(Vec::new()));
+    let mut reported = Vec::new();
+    for _ in 0..50 {
+        reported.extend(errors(&db.poll_events(Duration::from_millis(200)).unwrap()));
+        if !reported.is_empty() {
+            break;
+        }
+    }
     assert_eq!(reported.len(), 1, "expected one error, got {reported:?}");
+    assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha"]);
     for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
         assert!(
             reported[0].contains(needle),
@@ -228,6 +236,12 @@ fn a_query_over_an_orphaned_child_keeps_the_previous_state_and_reports_it() {
         );
     }
     fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();
+    for _ in 0..1000 {
+        if names(&db, "SELECT name FROM parent") == ["alpha again"] {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha again"]);
 }
 

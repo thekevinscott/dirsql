@@ -4,8 +4,24 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+// The watcher's events reach the index after the write returns.
+async function awaitQuery(
+  db: DirSQL,
+  done: (result: unknown) => boolean,
+): Promise<void> {
+  for (let i = 0; i < 1000; i++) {
+    const result = await db.query("SELECT n FROM notes").catch((e: Error) => e);
+    if (done(result)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("the query never answered as expected");
+}
 
 describe("DirSQL onFile failure", () => {
   let dir: string;
@@ -65,7 +81,6 @@ describe("DirSQL onFile failure", () => {
     expect(err?.message).toContain("NOT NULL");
   });
 
-  // A query reads a write at once only where it drains the inotify queue.
   it.runIf(process.platform === "linux")(
     "fails every query while a changed file fails, until it is fixed",
     async () => {
@@ -80,6 +95,10 @@ describe("DirSQL onFile failure", () => {
       expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 1 }]);
 
       writeFileSync(join(dir, "d", "a.txt"), "half-writ");
+      await awaitQuery(
+        db,
+        (r) => r instanceof Error && r.message.includes("half-writ"),
+      );
       for (let i = 0; i < 3; i++) {
         const err = await db.query("SELECT n FROM notes").then(
           () => null,
@@ -91,6 +110,7 @@ describe("DirSQL onFile failure", () => {
       }
 
       writeFileSync(join(dir, "d", "a.txt"), "22");
+      await awaitQuery(db, (r) => isDeepStrictEqual(r, [{ n: 22 }]));
       expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 22 }]);
       expect(await db.query("SELECT n FROM notes")).toEqual([{ n: 22 }]);
     },

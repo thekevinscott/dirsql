@@ -1,4 +1,4 @@
-use dirsql::{DirSQL, RawFileEvent, Row, Table, Value};
+use dirsql::{DirSQL, Row, Table, Value};
 use futures_executor::block_on;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -487,42 +487,6 @@ fn it_streams_watch_error_events() {
     }
 }
 
-// The split-phase wait/apply API exists for async bindings (TypeScript) that
-// cannot safely invoke the `extract` callback off the host thread.
-#[test]
-fn it_splits_wait_and_apply_for_async_bindings() {
-    let root = TempDir::new().unwrap();
-    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
-
-    // Empty wait returns no events and apply on empty returns no row events.
-    let empty = db.wait_file_events(Duration::from_millis(50)).unwrap();
-    assert!(empty.is_empty());
-    assert!(db.apply_file_events(Vec::new()).is_empty());
-
-    // Write a file, then drain raw FileEvents without running extract.
-    fs::write(root.path().join("new.txt"), "hello").unwrap();
-    let mut raw = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while raw.is_empty() && std::time::Instant::now() < deadline {
-        raw.extend(db.wait_file_events(Duration::from_millis(250)).unwrap());
-    }
-    assert!(!raw.is_empty(), "expected at least one raw file event");
-    assert!(
-        raw.iter()
-            .any(|e| matches!(e, RawFileEvent::Created(_) | RawFileEvent::Modified(_)))
-    );
-
-    // Apply runs extract and mutates the DB.
-    let row_events = db.apply_file_events(raw);
-    assert!(!row_events.is_empty());
-
-    let rows = db.query("SELECT name FROM items").unwrap();
-    assert!(rows.iter().any(|r| matches!(
-        r.get("name"),
-        Some(Value::Text(name)) if name == "hello"
-    )));
-}
-
 // The split-phase prepare/finish build API exists for async bindings
 // (TypeScript) that cannot safely invoke the `extract` callback off the host
 // thread: `prepare_build` walks the directory on the worker thread;
@@ -730,6 +694,7 @@ on-file = "printf '{}'"
 fn poll_events_returns_row_events_for_new_file() {
     let root = TempDir::new().unwrap();
     let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
 
     std::thread::sleep(Duration::from_millis(250));
     fs::write(root.path().join("apple.txt"), "apple").unwrap();
@@ -781,15 +746,6 @@ fn watch_twice_errors_with_already_started() {
         result,
         Err(dirsql::DirSqlError::WatchAlreadyStarted)
     ));
-}
-
-#[test]
-fn wait_file_events_after_watch_errors() {
-    let root = TempDir::new().unwrap();
-    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
-    let _stream = db.watch().unwrap();
-    let result = db.wait_file_events(Duration::from_millis(50));
-    assert!(result.is_err());
 }
 
 #[test]

@@ -461,6 +461,12 @@ impl Table {
     }
 }
 
+/// Where the applier hands each applied batch's row events.
+enum Sink {
+    Stream(UnboundedSender<RowEvent>),
+    Poll(std::sync::mpsc::Sender<Vec<RowEvent>>),
+}
+
 struct DirSqlInner {
     db: Mutex<Db>,
     root: PathBuf,
@@ -488,8 +494,11 @@ struct DirSqlInner {
     /// Locks out [`DirSQL::poll_events`] once [`DirSQL::watch`] has spawned
     /// its background thread.
     watch_thread_started: AtomicBool,
-    /// Where [`DirSQL::watch`] receives the row events of each applied batch.
-    stream: Mutex<Option<UnboundedSender<RowEvent>>>,
+    /// Where the row events of each applied batch go: to [`DirSQL::watch`]'s
+    /// stream or to [`DirSQL::poll_events`], whichever attached.
+    stream: Mutex<Option<Sink>>,
+    /// The batches delivered for [`DirSQL::poll_events`] to return.
+    polled: Mutex<Option<std::sync::mpsc::Receiver<Vec<RowEvent>>>>,
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
@@ -913,55 +922,30 @@ impl DirSQL {
         watch_scopes(&self.inner.groups)
     }
 
-    /// Poll-based watch API. Blocks up to `timeout` waiting for the next
-    /// filesystem event, then drains any additional events that arrived during
-    /// processing, applying all of them to the ephemeral database. Returns the
-    /// batch of [`RowEvent`]s produced (possibly empty). Safe to call in a
-    /// loop.
+    /// Poll-based watch API. The first call attaches, as [`watch`](Self::watch)
+    /// does; each call returns the [`RowEvent`]s of every change applied since
+    /// the previous one, blocking up to `timeout` while there are none.
+    /// Returns an empty batch if none arrive in time. Safe to call in a loop.
     ///
     /// Mutually exclusive with [`watch`](Self::watch): calling `watch` after
-    /// `poll_events` (or vice versa) returns an error, because both would
-    /// drain the same underlying filesystem watcher.
+    /// `poll_events` (or vice versa) returns an error, because each would
+    /// take the other's changes.
     pub fn poll_events(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
-        if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::watch_msg(
-                "watch() is active; cannot mix with poll_events()",
-            ));
-        }
-        self.inner.poll_used.store(true, Ordering::SeqCst);
-        self.attach_watcher()?;
-        self.poll_once(timeout)
-    }
-
-    /// Split-phase wait helper used by async bindings that cannot safely
-    /// invoke the `on_file` callback off the host thread (e.g. the napi-rs
-    /// TypeScript binding, where JS callbacks must run on the main JS
-    /// thread). Blocks up to `timeout` for raw file events and returns them
-    /// unprocessed. Pair with [`apply_file_events`](Self::apply_file_events)
-    /// to finish the pipeline on the correct thread.
-    #[doc(hidden)]
-    pub fn wait_file_events(&self, timeout: Duration) -> Result<Vec<FileEvent>> {
-        if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::watch_msg(
-                "watch() is active; cannot mix with poll_events()",
-            ));
-        }
-        self.inner.poll_used.store(true, Ordering::SeqCst);
-        self.attach_watcher()?;
-        let watcher = self.live_watcher()?;
-        let mut events = Vec::new();
-        if let Some(first) = watcher.recv_timeout(timeout) {
-            events.push(first);
-            events.extend(watcher.try_recv_all());
-        }
+        self.attach_poll()?;
+        let polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        let Some(rx) = polled.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let Ok(mut events) = rx.recv_timeout(timeout) else {
+            return Ok(Vec::new());
+        };
+        events.extend(rx.try_iter().flatten());
         Ok(events)
     }
 
-    /// Block up to `timeout` until the watcher holds an event, taking none:
-    /// [`poll_events`](Self::poll_events) with a zero timeout then applies
-    /// them, on a thread where `on_file` can be called.
-    #[doc(hidden)]
-    pub fn wait_for_events(&self, timeout: Duration) -> Result<()> {
+    /// Attach as [`poll_events`](Self::poll_events)' first call does, without
+    /// waiting: changes applied from here on reach the next `poll_events`.
+    pub fn attach_poll(&self) -> Result<()> {
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "watch() is active; cannot mix with poll_events()",
@@ -969,24 +953,17 @@ impl DirSQL {
         }
         self.inner.poll_used.store(true, Ordering::SeqCst);
         self.attach_watcher()?;
-        self.live_watcher()?.wait(timeout);
+        let mut polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        if polled.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Poll(tx));
+            *polled = Some(rx);
+        }
         Ok(())
     }
 
-    fn live_watcher(&self) -> Result<Arc<Watcher>> {
-        self.inner
-            .watcher
-            .lock()
-            .map_err(DirSqlError::lock)?
-            .clone()
-            .ok_or_else(|| DirSqlError::watch_msg("watcher not started"))
-    }
-
     /// Apply a batch of raw file events through the on_file/DB update
-    /// pipeline. Counterpart to [`wait_file_events`](Self::wait_file_events).
-    /// Runs the `on_file` callback inline, so the caller must invoke this on
-    /// a thread where that callback is safe to call (the JS main thread for
-    /// the TypeScript binding).
+    /// pipeline.
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
         self.apply_file_events_taken(|| events)
@@ -1175,22 +1152,8 @@ impl DirSQL {
         self.attach_watcher()?;
 
         let (tx, rx) = unbounded();
-        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(tx);
+        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Stream(tx));
         Ok(rx)
-    }
-
-    /// Wait for the watcher to hold an event, apply what it holds, and hand
-    /// the row events to the stream. Without a watcher yet, waits only.
-    fn apply_arrived(&self) -> Result<()> {
-        let watcher = self.inner.watcher.lock().map_err(DirSqlError::lock)?.clone();
-        let Some(watcher) = watcher else {
-            thread::sleep(self.inner.poll_interval);
-            return Ok(());
-        };
-        watcher.wait(self.inner.poll_interval);
-        let events = self.apply_file_events_taken(|| self.queued_file_events());
-        self.deliver(events);
-        Ok(())
     }
 
     /// Hand `events` to the stream [`watch`](Self::watch) attached. Changes
@@ -1199,23 +1162,17 @@ impl DirSQL {
         let Ok(mut stream) = self.inner.stream.lock() else {
             return;
         };
-        let Some(tx) = stream.as_ref() else {
-            return;
+        let delivered = match stream.as_ref() {
+            None => return,
+            Some(_) if events.is_empty() => return,
+            Some(Sink::Stream(tx)) => events
+                .into_iter()
+                .all(|event| tx.unbounded_send(event).is_ok()),
+            Some(Sink::Poll(tx)) => tx.send(events).is_ok(),
         };
-        if events
-            .into_iter()
-            .any(|event| tx.unbounded_send(event).is_err())
-        {
+        if !delivered {
             *stream = None;
         }
-    }
-
-    /// Wait for the watcher to hold an event, then take and apply them under
-    /// the index lock, so a query never runs while events this poll took are
-    /// still unapplied.
-    fn poll_once(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
-        self.live_watcher()?.wait(timeout);
-        Ok(self.apply_file_events_taken(|| self.queued_file_events()))
     }
 
     /// The events the watcher already holds, without waiting for more.
@@ -2303,6 +2260,7 @@ impl DirSQL {
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
                 stream: Mutex::new(None),
+                polled: Mutex::new(None),
                 poll_interval,
                 fs,
                 fresh: Mutex::new(FreshState::default()),
@@ -3377,16 +3335,33 @@ fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
 /// Apply the watcher's events as they arrive, for as long as the instance
 /// lives.
 fn run_applier(inner: Weak<DirSqlInner>) {
-    while let Some(inner) = inner.upgrade() {
-        let db = DirSQL { inner };
-        if let Err(e) = db.apply_arrived() {
-            db.deliver(vec![RowEvent::Error {
-                table: None,
-                file_path: db.inner.root.clone(),
-                error: e.to_string(),
-            }]);
+    loop {
+        let Some(db) = inner.upgrade().map(|inner| DirSQL { inner }) else {
             return;
+        };
+        let watcher = match db.inner.watcher.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                db.deliver(vec![RowEvent::Error {
+                    table: None,
+                    file_path: db.inner.root.clone(),
+                    error: DirSqlError::lock(e).to_string(),
+                }]);
+                return;
+            }
+        };
+        let interval = db.inner.poll_interval;
+        // Held through the wait, the instance would outlive its last handle,
+        // and dropping that handle would not close the database.
+        drop(db);
+        match watcher {
+            Some(watcher) => watcher.wait(interval),
+            None => thread::sleep(interval),
         }
+        let Some(db) = inner.upgrade().map(|inner| DirSQL { inner }) else {
+            return;
+        };
+        db.deliver(db.apply_file_events_taken(|| db.queued_file_events()));
     }
 }
 
@@ -5318,10 +5293,10 @@ mod internal_tests {
     }
 
     #[test]
-    fn poll_once_surfaces_lock_poison() {
+    fn poll_events_surfaces_lock_poison() {
         let (_dir, db) = simple_db();
-        poison(&db.inner.watcher);
-        let err = db.poll_once(Duration::from_millis(0)).unwrap_err();
+        poison(&db.inner.polled);
+        let err = db.poll_events(Duration::from_millis(0)).unwrap_err();
         assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
@@ -5661,30 +5636,24 @@ mod internal_tests {
     }
 
     #[test]
-    fn wait_file_events_returns_empty_batch_without_activity() {
-        let (_dir, db) = simple_db();
-        assert!(
-            db.wait_file_events(Duration::from_millis(0))
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn watch_locks_out_the_poll_apis() {
+    fn watch_locks_out_poll_events() {
         let (_dir, db) = simple_db();
         let _stream = db.watch().unwrap();
         let e1 = db.poll_events(Duration::from_millis(0)).unwrap_err();
         assert!(e1.to_string().contains("watch() is active"), "got: {e1}");
-        let e2 = db.wait_file_events(Duration::from_millis(0)).unwrap_err();
-        assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
-        let e3 = db.wait_for_events(Duration::from_millis(0)).unwrap_err();
-        assert!(e3.to_string().contains("watch() is active"), "got: {e3}");
     }
 
     #[test]
     fn queued_file_events_hands_over_what_the_watcher_holds_without_waiting() {
-        let (dir, db) = simple_db();
+        let dir = TempDir::new().unwrap();
+        let table = Table::new("t", "CREATE TABLE t (x TEXT)", "*.none", |_| vec![]);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![table],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
+        )
+        .unwrap();
         std::fs::write(dir.path().join("a.none"), "x").unwrap();
         let mut held = Vec::new();
         while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {

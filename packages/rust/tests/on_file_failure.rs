@@ -118,6 +118,19 @@ fn notes_n(db: &DirSQL) -> Result<Vec<Value>, DirSqlError> {
         .collect())
 }
 
+/// Wait for a query to answer as `done` holds: the watcher's events reach
+/// the index after the write returns.
+#[cfg(target_os = "linux")]
+fn await_query(db: &DirSQL, done: fn(&Result<Vec<Value>, DirSqlError>) -> bool) {
+    for _ in 0..1000 {
+        if done(&notes_n(db)) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the query never answered as expected: {:?}", notes_n(db));
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn every_query_raises_a_changed_files_failure_until_the_file_is_fixed() {
@@ -127,6 +140,7 @@ fn every_query_raises_a_changed_files_failure_until_the_file_is_fixed() {
     assert_eq!(notes_n(&db).unwrap(), [Value::Integer(1)]);
 
     fs::write(root.path().join("a.txt"), "half-writ").unwrap();
+    await_query(&db, Result::is_err);
     for query in 0..3 {
         let err = notes_n(&db).expect_err("a query while the file fails must raise");
         assert!(
@@ -137,6 +151,7 @@ fn every_query_raises_a_changed_files_failure_until_the_file_is_fixed() {
     }
 
     fs::write(root.path().join("a.txt"), "22").unwrap();
+    await_query(&db, Result::is_ok);
     assert_eq!(notes_n(&db).unwrap(), [Value::Integer(22)]);
     assert_eq!(notes_n(&db).unwrap(), [Value::Integer(22)]);
 }

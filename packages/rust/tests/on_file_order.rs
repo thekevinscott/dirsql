@@ -114,13 +114,11 @@ fn a_watch_refresh_over_several_tables_runs_commands_in_declaration_order() {
         .unwrap();
     fs::write(&log, "").unwrap();
 
-    let alpha_file = dir.path().join("data/alpha/one.txt");
-    let zeta_file = dir.path().join("data/zeta/one.txt");
-    fs::write(&alpha_file, "y\n").unwrap();
-    fs::write(&zeta_file, "y\n").unwrap();
+    // Changes nothing on disk, so the watcher reports nothing to race this
+    // batch.
     db.apply_file_events(vec![
-        FileEvent::Modified(alpha_file),
-        FileEvent::Modified(zeta_file),
+        FileEvent::Modified(dir.path().join("data/alpha/one.txt")),
+        FileEvent::Modified(dir.path().join("data/zeta/one.txt")),
     ]);
 
     assert_eq!(runs(&log), in_order(&["zeta", "alpha"]));

@@ -320,8 +320,8 @@ impl DirSQL {
 
     /// Execute a SQL query and return results as an array of objects.
     ///
-    /// Reads changed files on the JS thread, then runs the SQL on the libuv
-    /// threadpool so the event loop stays free while it runs.
+    /// Runs the SQL on the libuv threadpool so the event loop stays free
+    /// while it runs.
     /// Returns a `Promise` in JS. `params` binds to the statement's
     /// placeholders: an array fills `?`, a plain object fills `:name` /
     /// `@name` / `$name`.
@@ -377,7 +377,7 @@ impl DirSQL {
         let inner = inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        inner.attach_watcher().map_err(to_napi_err)
+        inner.attach_poll().map_err(to_napi_err)
     }
 
     /// Poll for file events with a timeout (in milliseconds).
@@ -582,22 +582,15 @@ impl Task for QueryOrderedTask {
     }
 }
 
-/// Splits polling across the libuv threadpool and the JS main thread.
-///
-/// The blocking wait for raw file events runs in `compute()` on the
-/// threadpool (parking a worker thread, not the JS thread). Processing
-/// those events into [`RowEvent`]s — which invokes the JS `onFile`
-/// callback for created / modified files — runs in `resolve()` on the
-/// JS main thread, where napi handles are valid. Without this split,
-/// `compute()` would call into JS from a worker thread and crash V8
-/// with "Cannot create a handle without a HandleScope".
+/// Runs `DirSQL::poll_events` on the libuv threadpool, so the JS event loop
+/// stays free while it waits.
 pub struct PollEventsTask {
     inner: Option<CoreDirSQL>,
     timeout_ms: u32,
 }
 
 impl Task for PollEventsTask {
-    type Output = ();
+    type Output = Vec<CoreRowEvent>;
     type JsValue = Vec<RowEvent>;
 
     fn compute(&mut self) -> Result<Self::Output> {
@@ -606,17 +599,12 @@ impl Task for PollEventsTask {
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner
-            .wait_for_events(Duration::from_millis(u64::from(self.timeout_ms)))
+            .poll_events(Duration::from_millis(u64::from(self.timeout_ms)))
             .map_err(to_napi_err)
     }
 
-    fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
-        let inner = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        let row_events = inner.poll_events(Duration::ZERO).map_err(to_napi_err)?;
-        row_events.iter().map(row_event_to_js).collect()
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.iter().map(row_event_to_js).collect()
     }
 }
 
@@ -658,13 +646,24 @@ fn required<V: FromNapiValue>(def: &Object<'_>, name: &str) -> Result<V> {
 
 /// A persistent reference to a JS function, safe to store across calls.
 ///
-/// SAFETY: All access happens on the JS main thread via `#[napi]` methods.
-/// `DirSQL::new`, `query`, `queryOrdered`, and `pollEvents`'s resolve run on
-/// that thread, and the onFile closure is only invoked synchronously within
-/// them.
+/// SAFETY: The reference is only read and deleted on the JS thread that made
+/// it: a call from any other thread, such as the core's applier, is queued
+/// through `tsfn` and waits for that thread to run it.
 struct FnRef {
     raw_env: napi::sys::napi_env,
     raw_ref: napi::sys::napi_ref,
+    tsfn: napi::sys::napi_threadsafe_function,
+    js_thread: std::thread::ThreadId,
+}
+
+/// Work queued through [`FnRef::tsfn`] for the JS thread.
+enum JsJob {
+    OnFile {
+        fn_ref: *const FnRef,
+        path: String,
+        reply: std::sync::mpsc::Sender<Result<Vec<Row>>>,
+    },
+    Delete(napi::sys::napi_ref),
 }
 
 #[expect(
@@ -689,10 +688,85 @@ impl FnRef {
                 "Failed to create reference",
             ));
         }
+        let name = "dirsql onFile";
+        let mut js_name = std::ptr::null_mut();
+        napi::sys::napi_create_string_utf8(
+            env,
+            name.as_ptr().cast(),
+            len_isize(name),
+            &mut js_name,
+        );
+        let mut tsfn = std::ptr::null_mut();
+        let status = napi::sys::napi_create_threadsafe_function(
+            env,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            js_name,
+            0,
+            1,
+            std::ptr::null_mut(),
+            None,
+            std::ptr::null_mut(),
+            Some(run_js_job),
+            &mut tsfn,
+        );
+        if status != napi::sys::Status::napi_ok {
+            napi::sys::napi_delete_reference(env, raw_ref);
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to create threadsafe function",
+            ));
+        }
+        // A queued onFile must not keep the process alive on its own.
+        napi::sys::napi_unref_threadsafe_function(env, tsfn);
         Ok(FnRef {
             raw_env: env,
             raw_ref,
+            tsfn,
+            js_thread: std::thread::current().id(),
         })
+    }
+
+    /// Call onFile on the JS thread: directly when already there, otherwise
+    /// queued for when that thread is next free, waiting for its result.
+    #[expect(
+        unsafe_code,
+        reason = "queues onFile through the raw threadsafe function"
+    )]
+    unsafe fn on_file(&self, abs_path: &str) -> Result<Vec<Row>> {
+        if std::thread::current().id() == self.js_thread {
+            return self.call_on_file(abs_path);
+        }
+        let (reply, result) = std::sync::mpsc::channel();
+        self.queue(JsJob::OnFile {
+            fn_ref: self,
+            path: abs_path.to_string(),
+            reply,
+        })?;
+        result.recv().unwrap_or_else(|_| {
+            Err(Error::new(
+                Status::GenericFailure,
+                "the JS thread ended before onFile ran",
+            ))
+        })
+    }
+
+    #[expect(unsafe_code, reason = "raw napi_sys threadsafe function call")]
+    unsafe fn queue(&self, job: JsJob) -> Result<()> {
+        let job = Box::into_raw(Box::new(job));
+        let status = napi::sys::napi_call_threadsafe_function(
+            self.tsfn,
+            job.cast(),
+            napi::sys::ThreadsafeFunctionCallMode::blocking,
+        );
+        if status != napi::sys::Status::napi_ok {
+            drop(Box::from_raw(job));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "the JS thread is no longer running",
+            ));
+        }
+        Ok(())
     }
 
     #[expect(unsafe_code, reason = "raw napi_sys reference read")]
@@ -755,11 +829,46 @@ impl FnRef {
     }
 }
 
+/// Run one [`JsJob`] on the JS thread. `env` is null while the environment
+/// shuts down, when the job is dropped instead, failing the waiting onFile.
+#[expect(unsafe_code, reason = "raw napi_sys threadsafe function callback")]
+unsafe extern "C" fn run_js_job(
+    env: napi::sys::napi_env,
+    _js_callback: napi::sys::napi_value,
+    _context: *mut std::ffi::c_void,
+    data: *mut std::ffi::c_void,
+) {
+    let job = *Box::from_raw(data.cast::<JsJob>());
+    if env.is_null() {
+        return;
+    }
+    match job {
+        JsJob::OnFile {
+            fn_ref,
+            path,
+            reply,
+        } => {
+            let _ = reply.send((*fn_ref).call_on_file(&path));
+        }
+        JsJob::Delete(raw_ref) => {
+            napi::sys::napi_delete_reference(env, raw_ref);
+        }
+    }
+}
+
 impl Drop for FnRef {
     #[expect(unsafe_code, reason = "raw napi_sys reference deletion")]
     fn drop(&mut self) {
         unsafe {
-            napi::sys::napi_delete_reference(self.raw_env, self.raw_ref);
+            if std::thread::current().id() == self.js_thread {
+                napi::sys::napi_delete_reference(self.raw_env, self.raw_ref);
+            } else {
+                let _ = self.queue(JsJob::Delete(self.raw_ref));
+            }
+            napi::sys::napi_release_threadsafe_function(
+                self.tsfn,
+                napi::sys::ThreadsafeFunctionReleaseMode::release,
+            );
         }
     }
 }
@@ -772,7 +881,7 @@ fn make_on_file_closure(
 ) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
     move |path: &str| unsafe {
         fn_ref
-            .call_on_file(path)
+            .on_file(path)
             .map_err(|e| -> BoxError { Box::new(OnFileError(e.to_string())) })
     }
 }

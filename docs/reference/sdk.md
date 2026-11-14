@@ -294,17 +294,15 @@ db.query_with(
 - Without `params`, a statement with placeholders fails the same way: a
   placeholder is never left unbound.
 
-- **Applies the watcher's queued events.** Before reading, a query applies
-  every file event the watcher has queued, and checks foreign keys only once
-  that queue is empty, so a writer creating a parent file and then its child
-  never fails a query. A file is read when it is closed after writing or
-  renamed into place. On Linux the query first drains the kernel's queue, so a
-  write that returned before the call is reflected in its rows; on macOS and
-  Windows it applies what the watcher has delivered, so a query issued the
-  moment a write returns may read the previous rows. The row events applied
-  reach [`watch`](#watch) streams and the next poll, once each. In TypeScript
-  the events are applied on the JavaScript thread, where `onFile` runs, and the
-  SQL then runs on the threadpool.
+- **Reads the index as it stands.** A query never waits on the watcher, so a
+  writer that never pauses cannot hold it. The watcher's events are applied in
+  the background as they arrive, and foreign keys are checked once per batch,
+  so a writer creating a parent file and then its child never fails a query.
+  A file is read when it is closed after writing or renamed into place; a
+  query issued the moment a write returns may read the previous rows, so wait
+  for the change on [`watch`](#watch) first. In TypeScript `onFile` runs on
+  the JavaScript thread, so a change reaches the index when that thread is
+  next free; the SQL runs on the threadpool.
 
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,
@@ -392,10 +390,10 @@ to stop.
 
 The watcher is live once both `watch()` and [`ready`](#ready) have returned,
 in either order (a Rust `DirSQL` is ready when `build()` returns); a file
-written after that point produces an event and reaches the index. A write
-made while the initial scan is still running may be missed by the stream, but
-never by a query (see [`query`](#query)). A change a query read first still
-arrives on the stream, once.
+written after that point produces an event and reaches the index. A stream
+reports the changes applied after it attaches, once each; a change applied
+before reaches no stream, and a write made while the initial scan is still
+running reaches the index but may be missed by the stream.
 
 An instance with no named tables cannot be watched: path-tables emit no
 watch events, so `watch()` (and the polling primitives) raise an error naming
@@ -406,8 +404,7 @@ on one instance receives every event observed after it was created, so
 several consumers (one per client, say) can share one instance.
 
 Rust: `watch()` may be called once per instance and is mutually exclusive
-with the polling API below — mixing them returns an error, since both drain
-the same underlying filesystem watcher.
+with the polling API below — mixing them returns an error.
 
 ### Low-level watch primitives
 
@@ -424,9 +421,9 @@ db.poll_events(timeout: Duration) -> Result<Vec<RowEvent>>
 
 :::
 
-`pollEvents` / `poll_events` blocks up to the timeout for the first event,
-then drains everything that arrived, applies it to the database, and
-returns the batch (possibly empty). Safe to call in a loop. TypeScript runs
+The first `pollEvents` / `poll_events` call attaches; each call returns the
+row events applied since the previous one, blocking up to the timeout for the
+first and returning an empty batch if none arrives. Safe to call in a loop. TypeScript runs
 the poll on the libuv threadpool. Python does not expose public polling
 primitives — use `watch()`.
 
