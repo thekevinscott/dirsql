@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/written_during_build_test.py tests/e2e/root_at_construction_test.py tests/e2e/on_file_query_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/watch_speed_test.py -x -q",
+  "ran_at": 1794625174,
+  "exit_code": 0,
+  "commit": "c694e255dc86084c8ce8984de2627f8bc3a8179b",
+  "branch": "bot/1716-startup-applies-once-1113"
+}
