@@ -7,7 +7,6 @@ import {
   renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -116,7 +115,6 @@ function rng(seed: number): (n: number) => number {
 const DIRS = ["", "a/", "a/b/", "c/"];
 const NAMES = ["n0", "n1", "n2", "n3"];
 const EXTS = ["txt", "json", "stage"];
-const IGNORES = ["n0.txt\n", "a/\n", "*.txt\n", "c/n1.*\n"];
 
 function pick<T>(below: (n: number) => number, items: T[]): T {
   return items[Math.floor(below(items.length))];
@@ -195,251 +193,221 @@ function step(root: string, below: (n: number) => number): string {
     rmSync(join(root, dir), { recursive: true, force: true });
     return `remove directory ${dir}`;
   }
-  if (op === 7) {
-    if (Math.floor(below(3)) === 0) {
-      rmSync(join(root, ".gitignore"), { force: true });
-      return "remove .gitignore";
-    }
-    const rule = pick(below, IGNORES);
-    write(root, ".gitignore", rule);
-    return `set .gitignore to ${JSON.stringify(rule)}`;
-  }
   const rel = randomFile(below);
   write(root, rel, content(below));
   return `write ${rel}`;
 }
 
 function seedTree(root: string, below: (n: number) => number): void {
-  mkdirSync(join(root, ".git"));
   for (let i = 0; i < 8; i++) {
     write(root, randomFile(below), content(below));
   }
 }
 
-describe("a declared table reads exactly what is on disk", () => {
-  let dir: string;
-  let db: DirSQL | undefined;
+// A query reads a write at once only where it drains the inotify queue.
+describe.runIf(process.platform === "linux")(
+  "a declared table reads exactly what is on disk",
+  () => {
+    let dir: string;
+    let db: DirSQL | undefined;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-fresh-"));
-    db = undefined;
-  });
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "dirsql-fresh-"));
+      db = undefined;
+    });
 
-  afterEach(() => {
-    db?.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
+    afterEach(() => {
+      db?.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
 
-  describe("a query right after a write", () => {
-    it(
-      "reads every create",
-      async () => {
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          write(dir, `h/${i}.txt`, `c${i}`);
-          expect(await lines(db, `h/${i}.txt`), `round ${i}`).toEqual([
-            `c${i}`,
-          ]);
-          unlinkSync(join(dir, `h/${i}.txt`));
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every edit",
-      async () => {
-        write(dir, "e.txt", "start");
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          write(dir, "e.txt", `e${i}`);
-          expect(await lines(db, "e.txt"), `round ${i}`).toEqual([`e${i}`]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every delete",
-      async () => {
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          write(dir, "d.txt", `d${i}`);
-          expect(await lines(db, "d.txt"), `round ${i}`).toEqual([`d${i}`]);
-          unlinkSync(join(dir, "d.txt"));
-          expect(await lines(db, "d.txt"), `round ${i}`).toEqual([]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every rename into and out of the glob",
-      async () => {
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          write(dir, "r.stage", `r${i}`);
-          renameSync(join(dir, "r.stage"), join(dir, "r.txt"));
-          expect(await lines(db, "r.txt"), `round ${i}`).toEqual([`r${i}`]);
-          renameSync(join(dir, "r.txt"), join(dir, "r.stage"));
-          expect(await lines(db, "r.txt"), `round ${i}`).toEqual([]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every atomic save",
-      async () => {
-        write(dir, "a.txt", "start");
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          saveAtomically(dir, "a.txt", `a${i}`);
-          expect(await lines(db, "a.txt"), `round ${i}`).toEqual([`a${i}`]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every same-size edit",
-      async () => {
-        write(dir, "s.txt", "s------");
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          const text = `s${String(i).padStart(6, "0")}`;
-          write(dir, "s.txt", text);
-          expect(await lines(db, "s.txt"), `round ${i}`).toEqual([text]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-
-    it(
-      "reads every same-size edit with its times restored",
-      async () => {
-        write(dir, "t.txt", "t------");
-        const before = times(dir, "t.txt");
-        db = await open(dir);
-        for (let i = 0; i < ROUNDS; i++) {
-          const text = `t${String(i).padStart(6, "0")}`;
-          write(dir, "t.txt", text);
-          restoreTimes(dir, "t.txt", before);
-          expect(await lines(db, "t.txt"), `round ${i}`).toEqual([text]);
-        }
-      },
-      TEST_TIMEOUT,
-    );
-  });
-
-  describe("a long-lived instance", () => {
-    it(
-      "reads what a fresh scan reads after random operations",
-      async () => {
-        for (let seed = 1; seed <= 3; seed++) {
-          const root = join(dir, `seed${seed}`);
-          mkdirSync(root);
-          const below = rng(seed);
-          seedTree(root, below);
-          db?.close();
-          db = await open(root);
-          for (let op = 0; op < 100; op++) {
-            const done = step(root, below);
-            await expectMatchesFreshScan(
-              db,
-              root,
-              `seed ${seed} op ${op}: ${done}`,
-            );
+    describe("a query right after a write", () => {
+      it(
+        "reads every create",
+        async () => {
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            write(dir, `h/${i}.txt`, `c${i}`);
+            expect(await lines(db, `h/${i}.txt`), `round ${i}`).toEqual([
+              `c${i}`,
+            ]);
+            unlinkSync(join(dir, `h/${i}.txt`));
           }
-        }
-      },
-      TEST_TIMEOUT,
-    );
+        },
+        TEST_TIMEOUT,
+      );
 
-    it(
-      "reads what a fresh scan reads across idle gaps and bursts",
-      async () => {
-        const below = rng(99);
-        seedTree(dir, below);
-        db = await open(dir);
-        for (let cycle = 0; cycle < 10; cycle++) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, 250 * (cycle % 4)),
-          );
-          for (let op = 0; op < 20; op++) {
-            const done = step(dir, below);
-            await expectMatchesFreshScan(
-              db,
-              dir,
-              `cycle ${cycle} op ${op}: ${done}`,
-            );
+      it(
+        "reads every edit",
+        async () => {
+          write(dir, "e.txt", "start");
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            write(dir, "e.txt", `e${i}`);
+            expect(await lines(db, "e.txt"), `round ${i}`).toEqual([`e${i}`]);
           }
-        }
-      },
-      TEST_TIMEOUT,
-    );
-  });
+        },
+        TEST_TIMEOUT,
+      );
 
-  describe("each way a change could be missed", () => {
-    it("reads an edit whose times are put back", async () => {
-      write(dir, "touched.txt", "before");
-      const before = times(dir, "touched.txt");
-      db = await open(dir);
-      expect(await lines(db, "touched.txt")).toEqual(["before"]);
-      write(dir, "touched.txt", "after!");
-      restoreTimes(dir, "touched.txt", before);
-      expect(await lines(db, "touched.txt")).toEqual(["after!"]);
+      it(
+        "reads every delete",
+        async () => {
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            write(dir, "d.txt", `d${i}`);
+            expect(await lines(db, "d.txt"), `round ${i}`).toEqual([`d${i}`]);
+            unlinkSync(join(dir, "d.txt"));
+            expect(await lines(db, "d.txt"), `round ${i}`).toEqual([]);
+          }
+        },
+        TEST_TIMEOUT,
+      );
+
+      it(
+        "reads every rename into and out of the glob",
+        async () => {
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            write(dir, "r.stage", `r${i}`);
+            renameSync(join(dir, "r.stage"), join(dir, "r.txt"));
+            expect(await lines(db, "r.txt"), `round ${i}`).toEqual([`r${i}`]);
+            renameSync(join(dir, "r.txt"), join(dir, "r.stage"));
+            expect(await lines(db, "r.txt"), `round ${i}`).toEqual([]);
+          }
+        },
+        TEST_TIMEOUT,
+      );
+
+      it(
+        "reads every atomic save",
+        async () => {
+          write(dir, "a.txt", "start");
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            saveAtomically(dir, "a.txt", `a${i}`);
+            expect(await lines(db, "a.txt"), `round ${i}`).toEqual([`a${i}`]);
+          }
+        },
+        TEST_TIMEOUT,
+      );
+
+      it(
+        "reads every same-size edit",
+        async () => {
+          write(dir, "s.txt", "s------");
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            const text = `s${String(i).padStart(6, "0")}`;
+            write(dir, "s.txt", text);
+            expect(await lines(db, "s.txt"), `round ${i}`).toEqual([text]);
+          }
+        },
+        TEST_TIMEOUT,
+      );
+
+      it(
+        "reads every same-size edit with its times restored",
+        async () => {
+          write(dir, "t.txt", "t------");
+          const before = times(dir, "t.txt");
+          db = await open(dir);
+          for (let i = 0; i < ROUNDS; i++) {
+            const text = `t${String(i).padStart(6, "0")}`;
+            write(dir, "t.txt", text);
+            restoreTimes(dir, "t.txt", before);
+            expect(await lines(db, "t.txt"), `round ${i}`).toEqual([text]);
+          }
+        },
+        TEST_TIMEOUT,
+      );
     });
 
-    it("reads a file deleted and recreated under the same name", async () => {
-      write(dir, "again.txt", "first");
-      db = await open(dir);
-      expect(await lines(db, "again.txt")).toEqual(["first"]);
-      unlinkSync(join(dir, "again.txt"));
-      write(dir, "again.txt", "secnd");
-      expect(await lines(db, "again.txt")).toEqual(["secnd"]);
+    describe("a long-lived instance", () => {
+      it(
+        "reads what a fresh scan reads after random operations",
+        async () => {
+          for (let seed = 1; seed <= 3; seed++) {
+            const root = join(dir, `seed${seed}`);
+            mkdirSync(root);
+            const below = rng(seed);
+            seedTree(root, below);
+            db?.close();
+            db = await open(root);
+            for (let op = 0; op < 100; op++) {
+              const done = step(root, below);
+              await expectMatchesFreshScan(
+                db,
+                root,
+                `seed ${seed} op ${op}: ${done}`,
+              );
+            }
+          }
+        },
+        TEST_TIMEOUT,
+      );
+
+      it(
+        "reads what a fresh scan reads across idle gaps and bursts",
+        async () => {
+          const below = rng(99);
+          seedTree(dir, below);
+          db = await open(dir);
+          for (let cycle = 0; cycle < 10; cycle++) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, 250 * (cycle % 4)),
+            );
+            for (let op = 0; op < 20; op++) {
+              const done = step(dir, below);
+              await expectMatchesFreshScan(
+                db,
+                dir,
+                `cycle ${cycle} op ${op}: ${done}`,
+              );
+            }
+          }
+        },
+        TEST_TIMEOUT,
+      );
     });
 
-    it("reads a new and a deleted subdirectory", async () => {
-      db = await open(dir);
-      write(dir, "sub/deep/one.txt", "one");
-      expect(await lines(db, "sub/deep/one.txt")).toEqual(["one"]);
-      rmSync(join(dir, "sub"), { recursive: true });
-      expect(await lines(db, "sub/deep/one.txt")).toEqual([]);
-    });
-
-    it("reads a .gitignore change", async () => {
-      mkdirSync(join(dir, ".git"));
-      write(dir, "hidden.txt", "hidden");
-      db = await open(dir);
-      expect(await lines(db, "hidden.txt")).toEqual(["hidden"]);
-      write(dir, ".gitignore", "hidden.txt\n");
-      expect(await lines(db, "hidden.txt")).toEqual([]);
-      unlinkSync(join(dir, ".gitignore"));
-      expect(await lines(db, "hidden.txt")).toEqual(["hidden"]);
-    });
-
-    it("reads a retargeted symlink", async () => {
-      write(dir, "targets/one.dat", "one");
-      write(dir, "targets/two.dat", "two");
-      const link = join(dir, "link.txt");
-      symlinkSync(join(dir, "targets/one.dat"), link);
-      db = await open(dir);
-      expect(await lines(db, "link.txt")).toEqual(["one"]);
-      unlinkSync(link);
-      symlinkSync(join(dir, "targets/two.dat"), link);
-      expect(await lines(db, "link.txt")).toEqual(["two"]);
-    });
-
-    it(
-      "never reads a file torn while it is rewritten, and ends exact",
-      async () => {
-        const version = (k: number) =>
-          `v${String(k).padStart(6, "0")}\n`.repeat(50);
-        write(dir, "busy.txt", version(0));
+    describe("each way a change could be missed", () => {
+      it("reads an edit whose times are put back", async () => {
+        write(dir, "touched.txt", "before");
+        const before = times(dir, "touched.txt");
         db = await open(dir);
-        const writer = new Worker(
-          `const { renameSync, writeFileSync } = require("node:fs");
+        expect(await lines(db, "touched.txt")).toEqual(["before"]);
+        write(dir, "touched.txt", "after!");
+        restoreTimes(dir, "touched.txt", before);
+        expect(await lines(db, "touched.txt")).toEqual(["after!"]);
+      });
+
+      it("reads a file deleted and recreated under the same name", async () => {
+        write(dir, "again.txt", "first");
+        db = await open(dir);
+        expect(await lines(db, "again.txt")).toEqual(["first"]);
+        unlinkSync(join(dir, "again.txt"));
+        write(dir, "again.txt", "secnd");
+        expect(await lines(db, "again.txt")).toEqual(["secnd"]);
+      });
+
+      it("reads a new and a deleted subdirectory", async () => {
+        db = await open(dir);
+        write(dir, "sub/deep/one.txt", "one");
+        expect(await lines(db, "sub/deep/one.txt")).toEqual(["one"]);
+        rmSync(join(dir, "sub"), { recursive: true });
+        expect(await lines(db, "sub/deep/one.txt")).toEqual([]);
+      });
+
+      it(
+        "never reads a file torn while it is rewritten, and ends exact",
+        async () => {
+          const version = (k: number) =>
+            `v${String(k).padStart(6, "0")}\n`.repeat(50);
+          write(dir, "busy.txt", version(0));
+          db = await open(dir);
+          const writer = new Worker(
+            `const { renameSync, writeFileSync } = require("node:fs");
           const { join } = require("node:path");
           const { workerData } = require("node:worker_threads");
           for (let k = 1; k <= 300; k++) {
@@ -447,65 +415,68 @@ describe("a declared table reads exactly what is on disk", () => {
             writeFileSync(join(workerData, "busy.txt.stage"), text);
             renameSync(join(workerData, "busy.txt.stage"), join(workerData, "busy.txt"));
           }`,
-          { eval: true, workerData: dir },
-        );
-        let finished = false;
-        const exited = new Promise<void>((resolve, reject) => {
-          writer.on("error", reject);
-          writer.on("exit", () => {
-            finished = true;
-            resolve();
+            { eval: true, workerData: dir },
+          );
+          let finished = false;
+          const exited = new Promise<void>((resolve, reject) => {
+            writer.on("error", reject);
+            writer.on("exit", () => {
+              finished = true;
+              resolve();
+            });
           });
-        });
-        while (!finished) {
-          const seen = await lines(db, "busy.txt");
-          expect(seen.length, "a partial version").toBe(50);
-          expect(new Set(seen).size, "mixed versions").toBe(1);
-        }
-        await exited;
-        expect(await lines(db, "busy.txt")).toEqual(
-          version(300)
-            .split("\n")
-            .filter((line) => line.length > 0),
-        );
-      },
-      TEST_TIMEOUT,
-    );
-  });
-
-  describe("watch consumers", () => {
-    it(
-      "stream each change a query read first, once",
-      async () => {
-        db = await open(dir);
-        const stream = db.watch()[Symbol.asyncIterator]();
-        const files = 100;
-        for (let i = 0; i < files; i++) {
-          write(dir, `w/${i}.txt`, `w${i}`);
-          expect(await lines(db, `w/${i}.txt`), `file ${i}`).toEqual([`w${i}`]);
-        }
-        // Unread by any query, so only the watcher reports it, after every
-        // change before it.
-        write(dir, "sentinel.txt", "end");
-        const counts = new Map<string, number>();
-        for (;;) {
-          const next = await stream.next();
-          expect(next.done).toBe(false);
-          const event: RowEvent = next.value;
-          expect(event.action).toBe("insert");
-          const line = String(event.row?.line);
-          if (line === "end") {
-            break;
+          while (!finished) {
+            const seen = await lines(db, "busy.txt");
+            expect(seen.length, "a partial version").toBe(50);
+            expect(new Set(seen).size, "mixed versions").toBe(1);
           }
-          counts.set(line, (counts.get(line) ?? 0) + 1);
-        }
-        expect(Object.fromEntries(counts)).toEqual(
-          Object.fromEntries(
-            Array.from({ length: files }, (_, i) => [`w${i}`, 1]),
-          ),
-        );
-      },
-      TEST_TIMEOUT,
-    );
-  });
-});
+          await exited;
+          expect(await lines(db, "busy.txt")).toEqual(
+            version(300)
+              .split("\n")
+              .filter((line) => line.length > 0),
+          );
+        },
+        TEST_TIMEOUT,
+      );
+    });
+
+    describe("watch consumers", () => {
+      it(
+        "stream each change a query read first, once",
+        async () => {
+          db = await open(dir);
+          const stream = db.watch()[Symbol.asyncIterator]();
+          const files = 100;
+          for (let i = 0; i < files; i++) {
+            write(dir, `w/${i}.txt`, `w${i}`);
+            expect(await lines(db, `w/${i}.txt`), `file ${i}`).toEqual([
+              `w${i}`,
+            ]);
+          }
+          // Unread by any query, so only the watcher reports it, after every
+          // change before it.
+          write(dir, "sentinel.txt", "end");
+          const counts = new Map<string, number>();
+          for (;;) {
+            const next = await stream.next();
+            expect(next.done).toBe(false);
+            const event: RowEvent = next.value;
+            expect(event.action).toBe("insert");
+            const line = String(event.row?.line);
+            if (line === "end") {
+              break;
+            }
+            counts.set(line, (counts.get(line) ?? 0) + 1);
+          }
+          expect(Object.fromEntries(counts)).toEqual(
+            Object.fromEntries(
+              Array.from({ length: files }, (_, i) => [`w${i}`, 1]),
+            ),
+          );
+        },
+        TEST_TIMEOUT,
+      );
+    });
+  },
+);

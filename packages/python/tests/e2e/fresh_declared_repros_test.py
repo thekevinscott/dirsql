@@ -11,11 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from dirsql import DirSQL, Table
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="a query reads a write at once only where it drains the inotify queue",
+)
 
 RACE_ROUNDS = 1000
 

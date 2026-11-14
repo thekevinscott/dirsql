@@ -84,126 +84,130 @@ function consume(db: DirSQL): void {
   });
 }
 
-describe("a long-lived DirSQL reads what is on disk", () => {
-  let dir: string;
-  let db: DirSQL | undefined;
+// A query reads a write at once only where it drains the inotify queue.
+describe.runIf(process.platform === "linux")(
+  "a long-lived DirSQL reads what is on disk",
+  () => {
+    let dir: string;
+    let db: DirSQL | undefined;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-fresh-repro-"));
-  });
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  describe("with no watch running", () => {
-    it("reads a file written after ready", async () => {
-      addTurn(dir, 0);
-      db = turnsDb(dir);
-      await db.ready;
-      addTurn(dir, 1);
-      expect(await turnIds(db)).toEqual(["turns/0", "turns/1"]);
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "dirsql-fresh-repro-"));
     });
 
-    it("reads a create, an edit and a delete", async () => {
-      writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
-      db = recordsDb(dir);
-      await db.ready;
-      expect(await records(db)).toEqual([["a.json", 1]]);
-      writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
-      writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 10 }));
-      expect(await records(db)).toEqual([
-        ["a.json", 10],
-        ["b.json", 2],
-      ]);
-      unlinkSync(join(dir, "b.json"));
-      expect(await records(db)).toEqual([["a.json", 10]]);
+    afterEach(() => {
+      db?.close();
+      db = undefined;
+      rmSync(dir, { recursive: true, force: true });
     });
-  });
 
-  describe("a change written before watch starts", () => {
-    it(
-      "is read by the next query and streamed once",
-      async () => {
+    describe("with no watch running", () => {
+      it("reads a file written after ready", async () => {
         addTurn(dir, 0);
         db = turnsDb(dir);
         await db.ready;
         addTurn(dir, 1);
         expect(await turnIds(db)).toEqual(["turns/0", "turns/1"]);
-        const stream = db.watch()[Symbol.asyncIterator]();
-        // Unread by any query, so only the watcher reports it, after every
-        // change before it.
-        addTurn(dir, 2);
-        const inserted: string[] = [];
-        for (;;) {
-          const next = await stream.next();
-          expect(next.done).toBe(false);
-          expect(next.value.action).toBe("insert");
-          const id = String(next.value.row?.id);
-          inserted.push(id);
-          if (id === "turns/2") {
-            break;
-          }
-        }
-        expect(inserted).toEqual(["turns/1", "turns/2"]);
-        expect(await turnIds(db)).toEqual(["turns/0", "turns/1", "turns/2"]);
-      },
-      TEST_TIMEOUT,
-    );
-  });
+      });
 
-  describe("a query racing a consumed watch", () => {
-    it(
-      "reads every write before it",
-      async () => {
-        mkdirSync(join(dir, "turns"));
-        db = turnsDb(dir);
+      it("reads a create, an edit and a delete", async () => {
+        writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
+        db = recordsDb(dir);
+        await db.ready;
+        expect(await records(db)).toEqual([["a.json", 1]]);
+        writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
+        writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 10 }));
+        expect(await records(db)).toEqual([
+          ["a.json", 10],
+          ["b.json", 2],
+        ]);
+        unlinkSync(join(dir, "b.json"));
+        expect(await records(db)).toEqual([["a.json", 10]]);
+      });
+    });
+
+    describe("a change written before watch starts", () => {
+      it(
+        "is read by the next query and streamed once",
+        async () => {
+          addTurn(dir, 0);
+          db = turnsDb(dir);
+          await db.ready;
+          addTurn(dir, 1);
+          expect(await turnIds(db)).toEqual(["turns/0", "turns/1"]);
+          const stream = db.watch()[Symbol.asyncIterator]();
+          // Unread by any query, so only the watcher reports it, after every
+          // change before it.
+          addTurn(dir, 2);
+          const inserted: string[] = [];
+          for (;;) {
+            const next = await stream.next();
+            expect(next.done).toBe(false);
+            expect(next.value.action).toBe("insert");
+            const id = String(next.value.row?.id);
+            inserted.push(id);
+            if (id === "turns/2") {
+              break;
+            }
+          }
+          expect(inserted).toEqual(["turns/1", "turns/2"]);
+          expect(await turnIds(db)).toEqual(["turns/0", "turns/1", "turns/2"]);
+        },
+        TEST_TIMEOUT,
+      );
+    });
+
+    describe("a query racing a consumed watch", () => {
+      it(
+        "reads every write before it",
+        async () => {
+          mkdirSync(join(dir, "turns"));
+          db = turnsDb(dir);
+          await db.ready;
+          consume(db);
+          const misses: number[] = [];
+          for (let n = 0; n < RACE_ROUNDS; n++) {
+            addTurn(dir, n);
+            if ((await db.query("SELECT id FROM turns")).length !== n + 1) {
+              misses.push(n);
+            }
+          }
+          expect(misses).toEqual([]);
+        },
+        TEST_TIMEOUT,
+      );
+
+      it("reads a create", async () => {
+        writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
+        db = recordsDb(dir);
         await db.ready;
         consume(db);
-        const misses: number[] = [];
-        for (let n = 0; n < RACE_ROUNDS; n++) {
-          addTurn(dir, n);
-          if ((await db.query("SELECT id FROM turns")).length !== n + 1) {
-            misses.push(n);
-          }
-        }
-        expect(misses).toEqual([]);
-      },
-      TEST_TIMEOUT,
-    );
-
-    it("reads a create", async () => {
-      writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
-      db = recordsDb(dir);
-      await db.ready;
-      consume(db);
-      writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
-      expect(await records(db)).toEqual([
-        ["a.json", 1],
-        ["b.json", 2],
-      ]);
+        writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
+        expect(await records(db)).toEqual([
+          ["a.json", 1],
+          ["b.json", 2],
+        ]);
+      });
     });
-  });
 
-  describe("a path table", () => {
-    it("reads a create, an edit and a delete", async () => {
-      writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
-      db = new DirSQL({ root: dir, noIgnore: true });
-      await db.ready;
-      const sql = "SELECT path, content FROM './*.json' ORDER BY path";
-      const read = async () =>
-        (await db?.query(sql))?.map((row) => [row.path, row.content]);
-      expect(await read()).toEqual([["a.json", '{"v":1}']]);
-      writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
-      writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 10 }));
-      expect(await read()).toEqual([
-        ["a.json", '{"v":10}'],
-        ["b.json", '{"v":2}'],
-      ]);
-      unlinkSync(join(dir, "b.json"));
-      expect(await read()).toEqual([["a.json", '{"v":10}']]);
+    describe("a path table", () => {
+      it("reads a create, an edit and a delete", async () => {
+        writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 1 }));
+        db = new DirSQL({ root: dir, noIgnore: true });
+        await db.ready;
+        const sql = "SELECT path, content FROM './*.json' ORDER BY path";
+        const read = async () =>
+          (await db?.query(sql))?.map((row) => [row.path, row.content]);
+        expect(await read()).toEqual([["a.json", '{"v":1}']]);
+        writeFileSync(join(dir, "b.json"), JSON.stringify({ v: 2 }));
+        writeFileSync(join(dir, "a.json"), JSON.stringify({ v: 10 }));
+        expect(await read()).toEqual([
+          ["a.json", '{"v":10}'],
+          ["b.json", '{"v":2}'],
+        ]);
+        unlinkSync(join(dir, "b.json"));
+        expect(await read()).toEqual([["a.json", '{"v":10}']]);
+      });
     });
-  });
-});
+  },
+);

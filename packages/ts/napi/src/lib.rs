@@ -20,8 +20,8 @@
 
 use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
-    DirSQL as CoreDirSQL, Extension, Params, PreparedBuild, QueryResult as CoreQueryResult,
-    RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
+    DirSQL as CoreDirSQL, DirSqlError, Extension, Params, PreparedBuild,
+    QueryResult as CoreQueryResult, Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -314,6 +314,7 @@ impl DirSQL {
             extensions: rust_extensions,
             suppress_config_extensions: suppress_config_extensions.unwrap_or(false),
             no_ignore: no_ignore.unwrap_or(false),
+            os_code: None,
         }))
     }
 
@@ -335,8 +336,13 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.read_changes()?;
-        Ok(AsyncTask::new(QueryTask { inner, sql, params }))
+        let inner = self.apply_queued_events()?;
+        Ok(AsyncTask::new(QueryTask {
+            inner,
+            sql,
+            params,
+            os_code: None,
+        }))
     }
 
     /// [`query`](Self::query), plus the column order the SELECT list names.
@@ -352,17 +358,21 @@ impl DirSQL {
         params: Option<Unknown<'_>>,
     ) -> Result<AsyncTask<QueryOrderedTask>> {
         let params = js_to_params(&env, params)?;
-        let inner = self.read_changes()?;
-        Ok(AsyncTask::new(QueryOrderedTask { inner, sql, params }))
+        let inner = self.apply_queued_events()?;
+        Ok(AsyncTask::new(QueryOrderedTask {
+            inner,
+            sql,
+            params,
+            os_code: None,
+        }))
     }
 
-    /// Reads the files changed since the last query here, on the JS thread,
-    /// because `onFile` can only be called there; the SQL then runs on the
-    /// threadpool.
-    fn read_changes(&self) -> Result<Option<CoreDirSQL>> {
+    /// Applies the watcher's queued events here, on the JS thread, because
+    /// `onFile` can only be called there; the SQL then runs on the threadpool.
+    fn apply_queued_events(&self) -> Result<Option<CoreDirSQL>> {
         let inner = self.inner.borrow().as_ref().cloned();
         if let Some(db) = &inner {
-            db.read_changes().map_err(to_napi_err)?;
+            db.apply_queued_events().map_err(to_napi_err)?;
         }
         Ok(inner)
     }
@@ -447,6 +457,7 @@ pub struct OpenTask {
     extensions: Vec<Extension>,
     suppress_config_extensions: bool,
     no_ignore: bool,
+    os_code: Option<&'static str>,
 }
 
 impl Task for OpenTask {
@@ -475,13 +486,19 @@ impl Task for OpenTask {
         if self.persist {
             builder = builder.persist(self.persist_path.take());
         }
-        builder.prepare().map_err(to_napi_err)
+        builder
+            .prepare()
+            .map_err(|e| core_err(&mut self.os_code, e))
+    }
+
+    fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+        reject_with_code(env, self.os_code, err)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
         // A query runs on a worker thread, where `on_file` cannot be called.
-        inner.set_fresh_reads(false);
+        inner.set_query_applies_events(false);
         Ok(DirSQL {
             inner: RefCell::new(Some(inner)),
         })
@@ -495,6 +512,7 @@ pub struct QueryTask {
     inner: Option<CoreDirSQL>,
     sql: String,
     params: Params,
+    os_code: Option<&'static str>,
 }
 
 impl Task for QueryTask {
@@ -508,12 +526,16 @@ impl Task for QueryTask {
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         let rows = inner
             .query_with(&self.sql, &self.params)
-            .map_err(to_napi_err)?;
+            .map_err(|e| core_err(&mut self.os_code, e))?;
         rows.iter().map(value_row_to_js).collect()
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
+    }
+
+    fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+        reject_with_code(env, self.os_code, err)
     }
 }
 
@@ -545,6 +567,7 @@ pub struct QueryOrderedTask {
     inner: Option<CoreDirSQL>,
     sql: String,
     params: Params,
+    os_code: Option<&'static str>,
 }
 
 impl Task for QueryOrderedTask {
@@ -558,12 +581,16 @@ impl Task for QueryOrderedTask {
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         let result = inner
             .query_ordered_with(&self.sql, &self.params)
-            .map_err(to_napi_err)?;
+            .map_err(|e| core_err(&mut self.os_code, e))?;
         query_result_to_js(&result)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
+    }
+
+    fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+        reject_with_code(env, self.os_code, err)
     }
 }
 
@@ -582,25 +609,27 @@ pub struct PollEventsTask {
 }
 
 impl Task for PollEventsTask {
-    type Output = Vec<RawFileEvent>;
+    type Output = ();
     type JsValue = Vec<RowEvent>;
 
+    /// Waits without taking the events, so a query issued meanwhile on the
+    /// JS thread still applies them.
     fn compute(&mut self) -> Result<Self::Output> {
         let inner = self
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner
-            .wait_file_events(Duration::from_millis(u64::from(self.timeout_ms)))
+            .wait_for_events(Duration::from_millis(u64::from(self.timeout_ms)))
             .map_err(to_napi_err)
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
         let inner = self
             .inner
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
-        let row_events = inner.apply_file_events(output);
+        let row_events = inner.poll_events(Duration::ZERO).map_err(to_napi_err)?;
         row_events.iter().map(row_event_to_js).collect()
     }
 }
@@ -773,6 +802,24 @@ impl std::error::Error for OnFileError {}
 
 fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
     Error::new(Status::GenericFailure, e.to_string())
+}
+
+/// [`to_napi_err`], keeping the code of an OS error for the task's `reject`:
+/// an error built off the JS thread cannot carry it.
+fn core_err(os_code: &mut Option<&'static str>, e: DirSqlError) -> Error {
+    *os_code = e.os_error().map(|os| os.code);
+    to_napi_err(e)
+}
+
+/// `err` as the JS `Error` a task rejects with, carrying the OS error's
+/// `code` as Node's own errors do.
+fn reject_with_code<T>(env: Env, os_code: Option<&'static str>, err: Error) -> Result<T> {
+    let Some(code) = os_code else {
+        return Err(err);
+    };
+    let mut error = env.create_error(err)?;
+    error.set_named_property("code", code)?;
+    Err(Error::from(error.to_unknown()))
 }
 
 /// A `&str` length as the `isize` the raw napi_sys string APIs take.

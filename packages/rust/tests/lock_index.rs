@@ -1,4 +1,4 @@
-//! While `lock_index` holds the index, queries, `read_changes` and watch
+//! While `lock_index` holds the index, queries, `apply_queued_events` and watch
 //! batches wait for `unlock_index`; taking the lock waits for a read already
 //! in progress and for another holder.
 
@@ -6,7 +6,9 @@
 mod fresh;
 
 use dirsql::{DirSQL, Table, Value};
-use fresh::{Tree, lines_of};
+use fresh::Tree;
+#[cfg(target_os = "linux")]
+use fresh::lines_of;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -30,6 +32,7 @@ fn waits_for<T: Send>(work: impl FnOnce() -> T + Send, release: impl FnOnce()) -
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_query_waits_for_unlock_and_then_reads_the_disk() {
     let tree = Tree::new();
     tree.write("a.txt", "one");
@@ -47,11 +50,11 @@ fn a_query_waits_for_unlock_and_then_reads_the_disk() {
 }
 
 #[test]
-fn read_changes_waits_for_unlock() {
+fn apply_queued_events_waits_for_unlock() {
     let tree = Tree::new();
     let db = tree.open();
     db.lock_index().unwrap();
-    let (waited, read) = waits_for(|| db.read_changes(), || db.unlock_index().unwrap());
+    let (waited, read) = waits_for(|| db.apply_queued_events(), || db.unlock_index().unwrap());
     assert!(waited);
     read.unwrap();
 }

@@ -1,23 +1,13 @@
 use crate::matcher::TableMatcher;
 use crate::scanner::{reaches_dir, scan_dirs};
 use notify::ErrorKind;
-#[cfg(not(target_os = "linux"))]
-use notify::event::{ModifyKind, RenameMode};
-#[cfg(not(target_os = "linux"))]
-use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
-};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "linux"))]
-use std::sync::{Arc, Mutex, Weak, mpsc};
-#[cfg(not(target_os = "linux"))]
-use std::thread;
-#[cfg(not(target_os = "linux"))]
-use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 pub use crate::inotify_watch::Watcher;
+#[cfg(not(target_os = "linux"))]
+pub use crate::notify_watch::Watcher;
 
 const EMFILE: i32 = 24;
 
@@ -30,6 +20,29 @@ pub enum FileEvent {
     /// The OS dropped events (an inotify queue overflow); the index may have
     /// diverged from disk and must be rebuilt from a walk.
     Rescan,
+    /// A directory that appeared could not be watched, so changes inside it
+    /// go unseen.
+    Fault(WatchFault),
+}
+
+/// Why the watcher no longer sees every change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchFault {
+    /// inotify's watch limit is exhausted.
+    Limit,
+    /// The OS dropped events.
+    Overflow,
+    /// A directory could not be watched for another reason, described.
+    Failed(String),
+}
+
+impl WatchFault {
+    pub(crate) fn of(err: &notify::Error) -> Self {
+        match err.kind {
+            ErrorKind::MaxFilesWatch => Self::Limit,
+            _ => Self::Failed(describe_watch_error(err, cfg!(target_os = "linux"))),
+        }
+    }
 }
 
 /// A tree to watch, and the skip rules the scan applies within it.
@@ -38,172 +51,18 @@ pub struct WatchScope {
     pub ignore: TableMatcher,
 }
 
-#[cfg(not(target_os = "linux"))]
-/// inotify and kqueue spend a kernel watch on every directory, so only those
-/// the scan enters get one. FSEvents and ReadDirectoryChangesW cover a whole
-/// tree with one watch, where a watch per directory would cost far more.
-const PER_DIRECTORY: bool = !cfg!(any(target_os = "macos", target_os = "windows"));
-
-#[cfg(not(target_os = "linux"))]
-/// Wraps notify::RecommendedWatcher and translates raw events into FileEvent values.
-pub struct Watcher {
-    _watcher: Arc<Mutex<RecommendedWatcher>>,
-    rx: mpsc::Receiver<FileEvent>,
-}
-
-#[cfg(not(target_os = "linux"))]
-impl Watcher {
-    /// Start watching a directory recursively. Events are buffered in an internal channel.
-    pub fn new(path: &Path) -> Result<Self, notify::Error> {
-        Self::over(&[path.to_path_buf()])
-    }
-
-    /// Start watching every directory in `paths` and below, merging their
-    /// events into one channel.
-    pub fn over(paths: &[PathBuf]) -> Result<Self, notify::Error> {
-        let everything = TableMatcher::new(&[], &[]).expect("no patterns to compile");
-        Self::scoped(
-            paths
-                .iter()
-                .map(|root| WatchScope {
-                    root: root.clone(),
-                    ignore: everything.clone(),
-                })
-                .collect(),
-        )
-    }
-
-    /// Watch each scope's root and the directories below it the scan would
-    /// enter, merging their events into one channel. Where [`PER_DIRECTORY`]
-    /// holds, each directory gets its own non-recursive watch, so a skipped
-    /// subtree costs none, and a directory created later is walked and
-    /// watched before its creation is reported.
-    pub fn scoped(scopes: Vec<WatchScope>) -> Result<Self, notify::Error> {
-        let (raw_tx, raw_rx) = mpsc::channel::<Event>();
-        let (tx, rx) = mpsc::channel();
-
-        let mut watcher = RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    // Ignore send errors (receiver dropped)
-                    let _ = raw_tx.send(event);
-                }
-            },
-            Config::default(),
-        )?;
-
-        let mode = if PER_DIRECTORY {
-            RecursiveMode::NonRecursive
-        } else {
-            RecursiveMode::Recursive
-        };
-        let mut watched = HashSet::new();
-        for scope in &scopes {
-            watcher.watch(&scope.root, mode)?;
-            watched.insert(scope.root.clone());
-        }
-        // A recursive watch already covers every directory below its root.
-        let scopes = if PER_DIRECTORY { scopes } else { Vec::new() };
-        for scope in &scopes {
-            watch_tree(
-                &scopes,
-                &scope.root,
-                &walk_scope,
-                &mut watched,
-                &mut |dir| tolerate_missing(watcher.watch(dir, RecursiveMode::NonRecursive)),
-            )?;
-        }
-
-        let watcher = Arc::new(Mutex::new(watcher));
-        let handle = Arc::downgrade(&watcher);
-        thread::spawn(move || forward(&raw_rx, &tx, &handle, &scopes));
-
-        Ok(Self {
-            _watcher: watcher,
-            rx,
-        })
-    }
-
-    /// Receive the next event, blocking until one is available.
-    pub fn recv(&self) -> Option<FileEvent> {
-        self.rx.recv().ok()
-    }
-
-    /// Try to receive an event with a timeout.
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<FileEvent> {
-        self.rx.recv_timeout(timeout).ok()
-    }
-
-    /// Every event queued so far, in order, without blocking.
-    pub fn drain(&self) -> Vec<FileEvent> {
-        self.try_recv_all()
-    }
-
-    /// Drain all currently pending events without blocking.
-    pub fn try_recv_all(&self) -> Vec<FileEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.rx.try_recv() {
-            events.push(event);
-        }
-        events
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-/// Translate each raw event and pass it on, first watching any directory it
-/// creates, so nothing written inside the directory after its creation is
-/// reported goes unseen. Ends once the [`Watcher`] or its reader is dropped.
-fn forward(
-    raw_rx: &mpsc::Receiver<Event>,
-    tx: &mpsc::Sender<FileEvent>,
-    watcher: &Weak<Mutex<RecommendedWatcher>>,
-    scopes: &[WatchScope],
-) {
-    for event in raw_rx {
-        for fe in translate_event(&event) {
-            if let FileEvent::Created(path) = &fe
-                && is_real_dir(path)
-            {
-                let Some(watcher) = watcher.upgrade() else {
-                    return;
-                };
-                let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                watch_tree_quietly(scopes, path, &walk_scope, &mut |dir| {
-                    watcher.watch(dir, RecursiveMode::NonRecursive)
-                });
-            }
-            if fe == FileEvent::Rescan && PER_DIRECTORY {
-                let Some(watcher) = watcher.upgrade() else {
-                    return;
-                };
-                let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                // Directories created while events were being dropped have no
-                // watch yet.
-                for scope in scopes {
-                    watch_tree_quietly(scopes, &scope.root, &walk_scope, &mut |dir| {
-                        watcher.watch(dir, RecursiveMode::NonRecursive)
-                    });
-                }
-            }
-            if tx.send(fe).is_err() {
-                return;
-            }
-        }
-    }
-}
-
-/// [`watch_tree`] from `dir`, carrying on past any directory that cannot be
-/// watched: one gone again before its watch lands has nothing to report.
-pub(crate) fn watch_tree_quietly(
+/// [`watch_tree`] from a directory that appeared after the watcher started.
+/// One gone again before its watch lands has nothing to report.
+pub(crate) fn watch_new_tree(
     scopes: &[WatchScope],
     dir: &Path,
     walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
     watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
-) {
-    let _ = watch_tree(scopes, dir, walk, &mut HashSet::new(), &mut |dir| {
-        let _ = tolerate_missing(watch(dir));
-        Ok(())
-    });
+) -> Result<(), WatchFault> {
+    watch_tree(scopes, dir, walk, &mut HashSet::new(), &mut |dir| {
+        tolerate_missing(watch(dir))
+    })
+    .map_err(|e| WatchFault::of(&e))
 }
 
 /// Watch each directory [`dirs_to_watch`] finds from `dir` that is not in
@@ -231,15 +90,19 @@ pub(crate) fn watch_tree(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-/// A directory, not a symlink to one: the scan does not follow links, so
-/// nothing behind one is indexed.
-fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
-}
-
 pub(crate) fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
     scan_dirs(&scope.root, dir, &scope.ignore)
+}
+
+#[cfg(any(test, not(target_os = "linux")))]
+/// `err` as not found when `root` does not exist: Windows reports a missing
+/// path only as a generic error.
+pub(crate) fn missing_root(root: &Path, err: notify::Error) -> notify::Error {
+    if root.exists() {
+        err
+    } else {
+        notify::Error::path_not_found().add_path(root.to_path_buf())
+    }
 }
 
 /// A directory removed since the walk found it is no error: there is nothing
@@ -251,7 +114,7 @@ pub(crate) fn tolerate_missing(result: Result<(), notify::Error>) -> Result<(), 
     }
 }
 
-fn is_not_found(error: &notify::Error) -> bool {
+pub(crate) fn is_not_found(error: &notify::Error) -> bool {
     match &error.kind {
         notify::ErrorKind::PathNotFound => true,
         notify::ErrorKind::Io(io) => io.kind() == std::io::ErrorKind::NotFound,
@@ -301,139 +164,6 @@ pub(crate) fn describe_watch_error(err: &notify::Error, inotify: bool) -> String
     format!(
         "{base}; the {limit} is likely exhausted: raise it with `sudo sysctl {sysctl}=<higher value>`"
     )
-}
-
-#[cfg(not(target_os = "linux"))]
-/// Translate a notify Event into zero or more FileEvents.
-fn translate_event(event: &Event) -> Vec<FileEvent> {
-    let mut results = Vec::new();
-
-    for path in &event.paths {
-        let fe = match event.kind {
-            EventKind::Create(_) => Some(FileEvent::Created(path.clone())),
-            // A rename OUT of the tree (inotify `IN_MOVED_FROM`) leaves no file
-            // behind, so it is a removal — otherwise the moved-away file's rows
-            // would persist.
-            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
-                Some(FileEvent::Deleted(path.clone()))
-            }
-            // inotify follows a matched `From`/`To` pair with a `Both` naming
-            // the same two paths; both sides were already translated above.
-            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => None,
-            // A rename INTO the tree puts a path here that did not exist a
-            // moment ago — a creation, and for a directory one the watcher must
-            // walk, since the OS reports nothing for the files already inside.
-            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::Created(path.clone())),
-            EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
-            EventKind::Remove(_) => Some(FileEvent::Deleted(path.clone())),
-            _ => None,
-        };
-        if let Some(fe) = fe {
-            results.push(fe);
-        }
-    }
-
-    if event.need_rescan() {
-        results.push(FileEvent::Rescan);
-    }
-
-    results
-}
-
-// Test fixtures: build `notify::Event`s and `notify::Error`s without the unit tests naming the
-// `notify::event::*` inner-kind types (the unit-lint isolation rule).
-// `translate_event` matches only the outer variant, so the inner kind is an
-// arbitrary valid value.
-#[cfg(all(test, not(target_os = "linux")))]
-fn create_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Create(notify::event::CreateKind::File),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn modify_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Content,
-        )),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn remove_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Remove(notify::event::RemoveKind::File),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn rename_from_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Modify(notify::event::ModifyKind::Name(
-            notify::event::RenameMode::From,
-        )),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn rename_to_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Modify(notify::event::ModifyKind::Name(
-            notify::event::RenameMode::To,
-        )),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn rename_any_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Modify(notify::event::ModifyKind::Name(
-            notify::event::RenameMode::Any,
-        )),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn rename_both_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Modify(notify::event::ModifyKind::Name(
-            notify::event::RenameMode::Both,
-        )),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn access_event(paths: Vec<PathBuf>) -> Event {
-    Event {
-        kind: EventKind::Access(notify::event::AccessKind::Read),
-        paths,
-        attrs: Default::default(),
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-fn rescan_event() -> Event {
-    Event {
-        kind: EventKind::Other,
-        paths: Vec::new(),
-        attrs: Default::default(),
-    }
-    .set_flag(notify::event::Flag::Rescan)
 }
 
 #[cfg(test)]
@@ -487,17 +217,6 @@ mod tests {
         assert!(tolerate_missing(Err(max_files_watch_error())).is_err());
     }
 
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn is_real_dir_is_true_only_for_a_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let file = root.path().join("f");
-        std::fs::write(&file, "").unwrap();
-        assert!(is_real_dir(root.path()));
-        assert!(!is_real_dir(&file));
-        assert!(!is_real_dir(&root.path().join("missing")));
-    }
-
     #[test]
     fn walk_scope_lists_the_directories_the_scope_enters() {
         let root = tempfile::tempdir().unwrap();
@@ -510,46 +229,6 @@ mod tests {
         let mut dirs = walk_scope(&scope, &root.path().join("a"));
         dirs.sort();
         assert_eq!(dirs, vec![root.path().join("a"), root.path().join("a/b")]);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn forwarded(events: Vec<Event>) -> Vec<FileEvent> {
-        let (raw_tx, raw_rx) = mpsc::channel();
-        let (tx, rx) = mpsc::channel();
-        for event in events {
-            raw_tx.send(event).unwrap();
-        }
-        drop(raw_tx);
-        forward(&raw_rx, &tx, &Weak::new(), &[]);
-        drop(tx);
-        rx.iter().collect()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn forward_passes_translated_events_on_in_order() {
-        let got = forwarded(vec![
-            modify_event(vec![PathBuf::from("/nowhere/a")]),
-            remove_event(vec![PathBuf::from("/nowhere/b")]),
-        ]);
-        assert_eq!(
-            got,
-            vec![
-                FileEvent::Modified(PathBuf::from("/nowhere/a")),
-                FileEvent::Deleted(PathBuf::from("/nowhere/b")),
-            ]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn forward_stops_at_a_new_directory_once_the_watcher_is_gone() {
-        let root = tempfile::tempdir().unwrap();
-        let got = forwarded(vec![
-            create_event(vec![root.path().to_path_buf()]),
-            modify_event(vec![PathBuf::from("/nowhere/a")]),
-        ]);
-        assert!(got.is_empty());
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
@@ -599,25 +278,58 @@ mod tests {
     }
 
     #[test]
-    fn watch_tree_quietly_watches_every_directory_past_a_failed_one() {
+    fn missing_root_is_not_found_only_when_the_root_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        assert!(is_not_found(&missing_root(&gone, io_error(13))));
+        assert!(!is_not_found(&missing_root(dir.path(), io_error(13))));
+    }
+
+    #[test]
+    fn watch_new_tree_stops_at_a_directory_it_cannot_watch() {
         let scopes = [scope("/r", &[])];
         let mut seen = Vec::new();
-        watch_tree_quietly(
+        let result = watch_new_tree(
             &scopes,
             Path::new("/r"),
             &|_, dir| vec![dir.to_path_buf(), dir.join("a"), dir.join("b")],
             &mut |dir| {
                 seen.push(dir.to_path_buf());
-                Err(io_error(13))
+                if dir.ends_with("a") {
+                    Err(max_files_watch_error())
+                } else {
+                    Ok(())
+                }
             },
         );
+        assert_eq!(result, Err(WatchFault::Limit));
+        assert_eq!(seen, vec![PathBuf::from("/r"), PathBuf::from("/r/a")]);
+    }
+
+    #[test]
+    fn watch_new_tree_passes_a_directory_gone_before_its_watch() {
+        let scopes = [scope("/r", &[])];
+        let mut seen = Vec::new();
+        let result = watch_new_tree(
+            &scopes,
+            Path::new("/r"),
+            &|_, dir| vec![dir.to_path_buf(), dir.join("a")],
+            &mut |dir| {
+                seen.push(dir.to_path_buf());
+                Err(io_error(2))
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, vec![PathBuf::from("/r"), PathBuf::from("/r/a")]);
+    }
+
+    #[test]
+    fn a_fault_is_the_limit_for_max_files_watch_and_described_otherwise() {
+        assert_eq!(WatchFault::of(&max_files_watch_error()), WatchFault::Limit);
+        let other = io_error(13);
         assert_eq!(
-            seen,
-            vec![
-                PathBuf::from("/r"),
-                PathBuf::from("/r/a"),
-                PathBuf::from("/r/b")
-            ]
+            WatchFault::of(&other),
+            WatchFault::Failed(describe_watch_error(&other, cfg!(target_os = "linux")))
         );
     }
 
@@ -701,132 +413,5 @@ mod tests {
             describe_watch_error(&not_found, true),
             not_found.to_string()
         );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_create() {
-        let results = translate_event(&create_event(vec![PathBuf::from("/tmp/test.txt")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/test.txt"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_remove() {
-        let results = translate_event(&remove_event(vec![PathBuf::from("/tmp/gone.txt")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Deleted(PathBuf::from("/tmp/gone.txt"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_turns_a_rescan_flag_into_a_rescan() {
-        assert_eq!(translate_event(&rescan_event()), vec![FileEvent::Rescan]);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_ignores_access_events() {
-        let results = translate_event(&access_event(vec![PathBuf::from("/tmp/read.txt")]));
-        assert!(results.is_empty());
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_modify() {
-        let results = translate_event(&modify_event(vec![PathBuf::from("/tmp/changed.txt")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Modified(PathBuf::from("/tmp/changed.txt"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_rename_from_to_delete() {
-        // inotify emits `Modify(Name(From))` when a file is renamed OUT of the
-        // watched tree; it must be treated as a removal so its rows are deleted.
-        let results = translate_event(&rename_from_event(vec![PathBuf::from("/tmp/moved.txt")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Deleted(PathBuf::from("/tmp/moved.txt"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_rename_to_as_create() {
-        // inotify emits `Modify(Name(To))` when a path is renamed INTO the
-        // watched tree; it is a creation so a moved-in directory gets walked.
-        let results = translate_event(&rename_to_event(vec![PathBuf::from("/tmp/arrived")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/arrived"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_maps_rename_any_as_create() {
-        // kqueue / FSEvents cannot tell which side of a rename they saw; a
-        // creation of a path that turns out not to exist is a harmless no-op.
-        let results = translate_event(&rename_any_event(vec![PathBuf::from("/tmp/either")]));
-        assert_eq!(
-            results,
-            vec![FileEvent::Created(PathBuf::from("/tmp/either"))]
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_ignores_rename_both() {
-        // `Both` restates a `From`/`To` pair inotify already delivered; acting
-        // on it would index the destination twice.
-        let results = translate_event(&rename_both_event(vec![
-            PathBuf::from("/tmp/old"),
-            PathBuf::from("/tmp/new"),
-        ]));
-        assert!(results.is_empty());
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_multiple_paths() {
-        let results = translate_event(&create_event(vec![
-            PathBuf::from("/tmp/a.txt"),
-            PathBuf::from("/tmp/b.txt"),
-        ]));
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0], FileEvent::Created(PathBuf::from("/tmp/a.txt")));
-        assert_eq!(results[1], FileEvent::Created(PathBuf::from("/tmp/b.txt")));
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_empty_paths() {
-        let event = Event {
-            kind: EventKind::Create(notify::event::CreateKind::File),
-            paths: vec![],
-            attrs: Default::default(),
-        };
-        let results = translate_event(&event);
-        assert!(results.is_empty());
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn translate_event_ignores_other_kind() {
-        let event = Event {
-            kind: EventKind::Other,
-            paths: vec![PathBuf::from("/tmp/other.txt")],
-            attrs: Default::default(),
-        };
-        let results = translate_event(&event);
-        assert!(results.is_empty());
     }
 }
