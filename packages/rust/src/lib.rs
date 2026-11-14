@@ -2270,8 +2270,7 @@ impl DirSQL {
     /// Apply what the watcher queued while the build walked, inside the
     /// build's transaction, then commit it with one foreign-key check.
     fn apply_queued_at_build(&self) -> Result<()> {
-        let (out, _) =
-            self.route_batch(self.queued_file_events(), &mut || self.queued_file_events());
+        let (out, _) = self.route_batch(self.queued_file_events(), &mut Vec::new);
         if let Some(RowEvent::Error {
             table,
             file_path,
