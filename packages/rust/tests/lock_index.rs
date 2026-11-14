@@ -1,6 +1,6 @@
-//! While `lock_index` holds the index, queries, `apply_queued_events` and watch
-//! batches wait for `unlock_index`; taking the lock waits for a read already
-//! in progress and for another holder.
+//! While `lock_index` holds the index, queries and watch batches wait for
+//! `unlock_index`; taking the lock waits for a read already in progress and
+//! for another holder.
 
 #[path = "common/fresh.rs"]
 mod fresh;
@@ -47,16 +47,6 @@ fn a_query_waits_for_unlock_and_then_reads_the_disk() {
     );
     assert!(waited);
     assert_eq!(lines, ["two"]);
-}
-
-#[test]
-fn apply_queued_events_waits_for_unlock() {
-    let tree = Tree::new();
-    let db = tree.open();
-    db.lock_index().unwrap();
-    let (waited, read) = waits_for(|| db.apply_queued_events(), || db.unlock_index().unwrap());
-    assert!(waited);
-    read.unwrap();
 }
 
 #[test]

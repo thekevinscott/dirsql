@@ -21,7 +21,10 @@ fn slow_table() -> Table {
         "items/*.txt",
         |path| {
             thread::sleep(Duration::from_millis(2));
-            vec![HashMap::from([("path".into(), Value::Text(path.to_string()))])] as Vec<Row>
+            vec![HashMap::from([(
+                "path".into(),
+                Value::Text(path.to_string()),
+            )])] as Vec<Row>
         },
     )
 }
