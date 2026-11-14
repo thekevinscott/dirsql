@@ -1,6 +1,6 @@
 use crate::matcher::TableMatcher;
 use crate::watcher::{
-    FileEvent, WatchScope, tolerate_missing, walk_scope, watch_tree, watch_tree_quietly,
+    FileEvent, WatchScope, missing_root, tolerate_missing, walk_scope, watch_new_tree, watch_tree,
 };
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
@@ -72,7 +72,9 @@ impl Watcher {
         };
         let mut watched = HashSet::new();
         for scope in &scopes {
-            watcher.watch(&scope.root, mode)?;
+            watcher
+                .watch(&scope.root, mode)
+                .map_err(|e| missing_root(&scope.root, e))?;
             watched.insert(scope.root.clone());
         }
         // A recursive watch already covers every directory below its root.
@@ -163,9 +165,12 @@ fn forward(
                     return;
                 };
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
-                watch_tree_quietly(scopes, path, &walk_scope, &mut |dir| {
+                if let Err(fault) = watch_new_tree(scopes, path, &walk_scope, &mut |dir| {
                     watcher.watch(dir, RecursiveMode::NonRecursive)
-                });
+                }) && tx.send(FileEvent::Fault(fault)).is_err()
+                {
+                    return;
+                }
             }
             if fe == FileEvent::Rescan && PER_DIRECTORY {
                 let Some(watcher) = watcher.upgrade() else {
@@ -175,9 +180,14 @@ fn forward(
                 // Directories created while events were being dropped have no
                 // watch yet.
                 for scope in scopes {
-                    watch_tree_quietly(scopes, &scope.root, &walk_scope, &mut |dir| {
-                        watcher.watch(dir, RecursiveMode::NonRecursive)
-                    });
+                    if let Err(fault) =
+                        watch_new_tree(scopes, &scope.root, &walk_scope, &mut |dir| {
+                            watcher.watch(dir, RecursiveMode::NonRecursive)
+                        })
+                        && tx.send(FileEvent::Fault(fault)).is_err()
+                    {
+                        return;
+                    }
                 }
             }
             if tx.send(fe).is_err() {
