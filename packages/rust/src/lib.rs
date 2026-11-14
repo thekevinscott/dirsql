@@ -967,23 +967,28 @@ impl DirSQL {
     /// pipeline.
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
-        self.apply_file_events_taken(|| events)
+        let _fresh = self.hold_index();
+        self.apply_events(events)
     }
 
-    /// [`apply_file_events`](Self::apply_file_events) over the events `events`
-    /// returns once the index is held.
-    fn apply_file_events_taken(&self, events: impl FnOnce() -> Vec<FileEvent>) -> Vec<RowEvent> {
+    /// Apply the watcher's queued events and hand them to the attached
+    /// stream before a query can read them.
+    fn apply_and_deliver(&self) {
+        let _fresh = self.hold_index();
+        self.deliver(self.apply_events(self.queued_file_events()));
+    }
+
+    /// The index, once no lock holds it.
+    fn hold_index(&self) -> MutexGuard<'_, FreshState> {
         let fresh = self
             .inner
             .fresh
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _fresh = self
-            .inner
+        self.inner
             .unlocked
             .wait_while(fresh, |state| state.locked)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.apply_events(events())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn apply_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
@@ -3362,7 +3367,7 @@ fn run_applier(inner: Weak<DirSqlInner>) {
         let Some(db) = inner.upgrade().map(|inner| DirSQL { inner }) else {
             return;
         };
-        db.deliver(db.apply_file_events_taken(|| db.queued_file_events()));
+        db.apply_and_deliver();
     }
 }
 
