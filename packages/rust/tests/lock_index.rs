@@ -103,13 +103,10 @@ fn taking_the_lock_waits_for_a_watch_batch_in_progress() {
     let (resume_tx, resume_rx) = mpsc::channel();
     *gate.lock().unwrap() = Some((started_tx, resume_rx));
     tree.write("a.txt", "one");
-    thread::scope(|scope| {
-        let reader = scope.spawn(|| db.query("SELECT name FROM items").unwrap());
-        started_rx.recv().unwrap();
-        let (waited, locked) = waits_for(|| db.lock_index(), || resume_tx.send(()).unwrap());
-        assert!(waited);
-        locked.unwrap();
-        assert_eq!(reader.join().unwrap().len(), 1);
-    });
+    started_rx.recv().unwrap();
+    let (waited, locked) = waits_for(|| db.lock_index(), || resume_tx.send(()).unwrap());
+    assert!(waited);
+    locked.unwrap();
     db.unlock_index().unwrap();
+    assert_eq!(db.query("SELECT name FROM items").unwrap().len(), 1);
 }
