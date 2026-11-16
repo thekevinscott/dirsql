@@ -93,6 +93,31 @@ command = "python3 worker.py"
 }
 
 #[test]
+fn an_argument_that_is_not_utf8_fails_the_query_without_a_panic() {
+    let root = TempDir::new().unwrap();
+    write_worker(root.path(), r#"resp = {"ok": args[0].upper()}"#);
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+"#,
+    )
+    .unwrap();
+
+    let out = run(&root, "SELECT up(CAST(x'ff41' AS TEXT)) AS v");
+    assert!(!out.status.success(), "the query must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(r#"argument 1 of "up" holds text that is not valid UTF-8"#),
+        "got stderr: {stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "got stderr: {stderr}");
+}
+
+#[test]
 fn worker_stderr_passes_through_to_dirsql_stderr() {
     let root = TempDir::new().unwrap();
     write_worker(
