@@ -131,7 +131,7 @@ pub(crate) fn register_worker(
             move |ctx| {
                 let mut args = Vec::with_capacity(ctx.len());
                 for i in 0..ctx.len() {
-                    args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
+                    args.push(argument(ctx.get_raw(i), i + 1, &worker.name)?);
                 }
                 worker
                     .call(&args)
@@ -141,6 +141,25 @@ pub(crate) fn register_worker(
         )?;
     }
     Ok(())
+}
+
+/// The argument at 1-based `position` of a call to `function`, as an owned
+/// value. Checked first because rusqlite panics converting text that is not
+/// valid UTF-8.
+fn argument(
+    raw: rusqlite::types::ValueRef<'_>,
+    position: usize,
+    function: &str,
+) -> rusqlite::Result<Value> {
+    if let rusqlite::types::ValueRef::Text(bytes) = raw
+        && std::str::from_utf8(bytes).is_err()
+    {
+        return Err(rusqlite::Error::UserFunctionError(
+            format!("argument {position} of \"{function}\" holds text that is not valid UTF-8")
+                .into(),
+        ));
+    }
+    Ok(Value::from(rusqlite::types::Value::from(raw)))
 }
 
 /// Counts the worker round trips a query pays for, and reports them.
