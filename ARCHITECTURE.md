@@ -216,7 +216,7 @@ reinvent what SQLite expresses natively*. `validate_identifier` remains: `name`
 is spliced into `format!()`-built INSERT/DELETE SQL, so it is still the
 injection guard.
 
-**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://dirsql.dev/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
+**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://dirsql.dev/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
 
 ### `scanner` -- Directory traversal
 
@@ -228,10 +228,10 @@ Maps glob patterns to table names and handles ignore patterns. A file is matched
 
 ### `watcher` -- Filesystem monitoring
 
-Watches the named tables' directories for the life of a `DirSQL` and queues `FileEvent` variants: `Created`, `Modified`, `Deleted`. `drain` returns every queued event, in order, without blocking.
+Watches the named tables' directories for the life of a `DirSQL` and queues `FileEvent` variants: `Created`, `Modified`, `Deleted`. A thread the `DirSQL` owns waits on the watcher and applies its events to the index as they arrive.
 
-- **Linux** reads inotify itself through the `inotify` crate, one watch per directory the scan enters. A file is reported when its writer closes it or it is renamed into place, never when it is created or while it is being written. A new directory gets a watch and a listing. `drain` reads the inotify fd until the kernel's queue is empty, so it returns every write finished before the call.
-- **macOS and Windows** wrap the `notify` crate, whose events arrive from a background thread over a channel. `drain` returns what has been delivered so far, so a write that has just returned may not be in it.
+- **Linux** reads inotify itself through the `inotify` crate, one watch per directory the scan enters. A file is reported when its writer closes it or it is renamed into place, never when it is created or while it is being written. A new directory gets a watch and a listing. Events are queued in the order the kernel reports them.
+- **macOS and Windows** wrap the `notify` crate, whose events arrive from a background thread over a channel, with no guarantee about their order.
 
 ### `differ` -- Row diffing
 
@@ -316,7 +316,8 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 1. Python creates `DirSQL` with root path and table definitions
 2. Rust executes DDL to create SQLite tables
 3. The `watcher` starts over the named tables' directories, before anything is
-   read, and runs for the life of the handle; `watch()` attaches to it
+   read, and runs for the life of the handle; `watch()` and `poll_events()`
+   attach to it
 4. `scanner` walks the directory and matches files to tables. This is the
    only walk: no query walks the tree again
 5. For a programmatic table, Python `on_file` is called via PyO3 for each
@@ -326,13 +327,15 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
    injected); rows are the hook's output alone
 7. Rows are inserted into SQLite with tracking metadata
 8. File-to-rows mapping is stored for later diffing
-9. The events the watcher queued during the walk are applied, and foreign keys
-   are checked once, as the build commits. A row whose foreign key matches
-   nothing fails the build
+9. The events the watcher queued during the walk are applied once, and
+   foreign keys are checked once, as the build commits. A row whose foreign
+   key matches nothing fails the build
+10. The instance's applier thread starts; from then on it applies the
+    watcher's events as they arrive
 
 ### File change processing
 
-1. The `watcher` queues a filesystem event (create/modify/delete); a query, or a `watch()` / `poll_events()` batch, takes the queue
+1. The `watcher` queues a filesystem event (create/modify/delete); the applier thread takes what is queued and applies it as one batch
 2. The matcher checks if the file belongs to a table
 3. For create/modify on a programmatic table: `on_file` is called with the
    file's absolute path (reading the file itself if it needs the body); its
@@ -344,7 +347,9 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
    table takes none of these per-file steps: any event under its glob marks
    it for one re-run of its `on-file` command after the batch, which replaces
    the table's rows
-6. `RowEvent` objects are returned to Python
+6. Foreign keys are checked once, as the batch commits, and the batch's
+   `RowEvent` objects are handed to the `watch()` stream or `poll_events()`
+   attached at that moment
 
 ### Query execution
 
@@ -357,27 +362,24 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 ### What a query sees
 
-Each query applies the watcher's queue before it reads, so the index costs one
-walk, at build, however many queries follow. Foreign keys are checked only
-when the queue is empty: a writer that creates a parent file and then its
-child leaves an orphan only between the two events, and no query checks in
-between.
+A query reads the index as it stands and never waits on the watcher, so the
+index costs one walk, at build, however many queries follow. A query issued
+right after a write may read the old rows.
 
-- **Linux.** Every query drains the inotify queue first, so it sees every
-  write that finished before it, and the empty-queue rule holds exactly.
-- **macOS and Windows.** The same design on `notify`, with no empty-queue
-  guarantee: a query applies only what `notify` has delivered. A query right
-  after a write may return old rows, and a parent whose event has not
-  arrived yet can make its child a false orphan that raises. Both are
-  accepted.
+- **Linux.** Events are applied in the order the kernel reports them, so a
+  writer that creates a parent file and then its child does not make a query
+  raise.
+- **macOS and Windows.** The same design on `notify`, without that ordering
+  guarantee: a child applied before its parent is an orphan, and queries
+  raise its violation until the parent's change is applied.
 
-A real orphan, one still there with the queue empty, does not land: the index
-keeps its last consistent state and every query raises the violation until
-the parent appears or the child is removed.
+A real orphan does not land: the index keeps its last consistent state and
+every query raises the violation until the parent appears or the child is
+removed.
 
 Each directory a Linux watch covers costs one inotify watch. A build that runs
 out fails with the error watchdog raises, `ENOSPC` "inotify watch limit
-reached", and a directory that cannot be watched after the build makes every
-query raise until the handle is rebuilt, since the index can no longer see
-every change. `sudo sysctl fs.inotify.max_user_watches=524288` raises the
-limit.
+reached". After the build, a directory that cannot be watched, or the OS
+dropping events, makes every query raise until the instance is rebuilt, since
+the index can no longer see every change. This raises the limit:
+`sudo sysctl fs.inotify.max_user_watches=524288`.

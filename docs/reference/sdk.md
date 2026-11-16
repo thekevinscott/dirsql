@@ -170,11 +170,11 @@ and the other methods transparently await [readiness](#ready). In Rust,
 for the non-blocking equivalent.
 
 The scan is the only walk of the tree. A file watcher over the named tables
-starts before it and runs for the life of the instance; changes it sees
-during the scan are applied before the build finishes, and each
-[`query`](#query) applies the changes queued since. See
-[The file watcher](./cli.md#the-file-watcher) for what a query sees on each
-platform.
+starts before it and runs for the life of the instance; the changes it sees
+during the scan are applied once, before the build finishes, and later
+changes update the index as they arrive. See
+[The file watcher](./cli.md#the-file-watcher) for the difference between
+platforms.
 
 ::: details Rust builder extras
 - `Table` appears in the builder via `.table(t)` (append) or `.tables(v)`
@@ -309,8 +309,10 @@ db.query_with(
 
 - **Reads the index as it stands.** A query never waits on the watcher, so a
   writer that never pauses cannot hold it. The watcher's events are applied in
-  the background as they arrive, and foreign keys are checked once per batch,
-  so a writer creating a parent file and then its child never fails a query.
+  the background as they arrive, and foreign keys are checked once per batch.
+  On Linux they are applied in the order the kernel reports them, so a writer
+  creating a parent file and then its child does not fail a query; macOS and
+  Windows give no such guarantee.
   While a batch a foreign key rejected waits to be retried, the query raises
   its violation instead, unless a file's `on_file` is failing, whose error is
   raised first: see [Foreign keys](./config.md#foreign-keys).

@@ -209,7 +209,7 @@ between the host language and Rust.
 **Relative-root watching (#250) — parity maintained, no drift.** The watcher
 now canonicalizes its watch-root before handing it to `notify`, so a relative
 `root` emits events identically to an absolute one. The fix is entirely in the
-shared Rust core (`Watcher::scoped` / `process_file_event`), so all three SDKs
+shared Rust core (`watch_scopes` / `process_file_event`), so all three SDKs
 gain it at once with no binding changes; the user-supplied `root` is unchanged
 across all three.
 
@@ -229,18 +229,17 @@ at once with no binding changes and no public-surface change.
 
 **Event-driven index (epic #1695) — parity by construction; platform drift,
 no SDK drift.** The tree is walked once, when the instance is built, with the
-watcher already running; a query applies the watcher's queued events instead
-of walking each table's glob, and checks foreign keys only once that queue is
-empty. A real orphan makes every query raise its foreign-key violation until
-the parent appears or the child is removed. All of it lives in the shared
-core, so the three SDKs and the CLI change at once. TypeScript applies the
-queue on the JS thread, where `onFile` runs, before the SQL goes to the
-threadpool. The drift is by platform: Linux reads inotify and drains its
-queue before every query, so a query sees every write that finished before
-it; macOS and Windows stay on `notify`, with no empty-queue guarantee, so a
-query right after a write may return old rows and a false orphan can raise.
-The hidden Rust methods `DirSQL::set_fresh_reads` and `DirSQL::read_changes`
-are removed; neither binding exposed them.
+watcher already running. The changes it saw during the walk are applied once,
+before the build finishes; later changes update the index as they arrive, on
+a thread the instance owns. A query only reads the index. A real orphan after
+the build makes every query raise its foreign-key violation until the parent
+appears or the child is removed. All of it lives in the shared core, so the
+three SDKs and the CLI change at once. The drift is by platform: Linux reads
+inotify and applies changes in the order the kernel reports them; macOS and
+Windows stay on `notify`, with no ordering guarantee, so a child applied
+before its parent can make queries raise. The hidden Rust methods
+`DirSQL::set_fresh_reads` and `DirSQL::read_changes` are removed; neither
+binding exposed them.
 
 **Watch limit (#1700) — parity, no drift.** On Linux a
 build over more directories than inotify's watch limit fails with `ENOSPC`,

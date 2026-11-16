@@ -8,8 +8,8 @@ The hidden (`#[doc(hidden)]`) Rust methods `DirSQL::set_fresh_reads` and `DirSQL
 
 | Before | After |
 | --- | --- |
-| `db.set_fresh_reads(false);` | `db.set_query_applies_events(false);` (hidden) to stop queries applying the watcher's queued events; delete the call otherwise |
-| `db.read_changes()?;` | `db.apply_queued_events()?;` (hidden) |
+| `db.set_fresh_reads(false);` | Delete the call. |
+| `db.read_changes()?;` | Delete the call. |
 
 #### Deprecations removed
 
@@ -21,4 +21,4 @@ _None._
 
 #### Verification
 
-`cargo build` succeeds once every `set_fresh_reads` and `read_changes` call is replaced.
+`cargo build` succeeds once every `set_fresh_reads` and `read_changes` call is deleted.

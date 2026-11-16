@@ -558,38 +558,38 @@ query; see [the skill page](../howto/agent-skill.md).
 
 A config's named tables are indexed by one walk of the directory, when
 `dirsql` starts: the one-shot query, the REPL and the server all build the
-same way. A file watcher starts before that walk and runs until `dirsql`
-exits, and the changes it sees during the walk are applied before the build
-finishes. No query walks the tree again: each query first applies the
-changes the watcher has queued. [Path-tables](./path-tables.md) are not
-watched; the statement that names one scans it.
+same way. A file watcher starts before that walk, and the changes it sees
+during the walk are applied once, before the build finishes. From then until
+`dirsql` exits, changes update the index as they arrive. A query only reads
+the index, so a query issued right after a write may read the old rows.
+[Path-tables](./path-tables.md) are not watched; the statement that names one
+scans it.
 
-- **Linux.** A query first empties the kernel's event queue, so it sees every
-  write that finished before it. A file is read when its writer closes it or
-  it is renamed into place. Foreign keys are checked only once the queue is
-  empty, so a writer that creates a parent file and then its child never
-  makes a query fail.
-- **macOS and Windows.** The same design, without that guarantee: a query
-  applies the events delivered so far, so a query issued right after a write
-  may return the previous rows, and a child whose event arrives before its
-  parent's can make a query raise a foreign-key violation.
+- **Linux.** `dirsql` reads inotify directly and applies changes in the
+  order the kernel reports them. A file is read when its writer closes it or
+  it is renamed into place. A writer that creates a parent file and then its
+  child does not make a query fail.
+- **macOS and Windows.** The same design, without that ordering guarantee:
+  a child whose change is applied before its parent's makes every query raise
+  a foreign-key violation until the parent's change is applied.
 
-A row whose foreign key matches nothing fails the build. After the build,
-every query raises that violation until the parent appears or the child is
-removed; see [Foreign keys](./config.md#foreign-keys).
+A row whose foreign key matches nothing fails the build. After the build, the
+index keeps its last consistent state and every query raises that violation
+until the parent appears or the child is removed; see
+[Foreign keys](./config.md#foreign-keys).
 
 ### The watch limit (Linux)
 
 Each directory the walk enters costs one inotify watch. A tree with more
-directories than the kernel allows fails the build with `ENOSPC`:
+directories than the kernel allows fails the build:
 
 ```text
 inotify watch limit reached
 ```
 
-A new directory that cannot be watched after the build makes every query
-fail the same way until `dirsql` is restarted. Raise the limit (it lasts
-until the next reboot) and run again:
+After the build, a new directory that cannot be watched, or the kernel
+dropping events, makes every query fail until `dirsql` is restarted. Raise
+the limit (it lasts until the next reboot) and run again:
 
 ```bash
 sudo sysctl fs.inotify.max_user_watches=524288
