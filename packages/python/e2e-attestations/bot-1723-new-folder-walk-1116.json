@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/orphan_query_test.py tests/e2e/parent_then_child_test.py tests/e2e/on_file_failure_test.py tests/e2e/root_at_construction_test.py -x -q",
+  "ran_at": 1794857473,
+  "exit_code": 0,
+  "commit": "0a240e8f176779b0208622ba0969a1a63e70756b",
+  "branch": "bot/1723-new-folder-walk-1116"
+}
