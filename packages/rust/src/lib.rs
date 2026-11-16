@@ -1086,18 +1086,19 @@ impl DirSQL {
         self.after_walks(routed, pending)
     }
 
-    /// Finish routing: when anything was walked, route what the watcher
-    /// queued during the walk, then re-run the per-table hooks `pending`
-    /// names. The open transaction's foreign keys are checked after this, so
-    /// a walk's result is checked together with the changes that raced it.
+    /// Finish routing: after every walk, route what the watcher queued
+    /// during it, until that starts no further walk; then re-run the
+    /// per-table hooks `pending` names. The open transaction's foreign keys
+    /// are checked after this, so each walk's result is checked together
+    /// with the changes that raced it.
     fn after_walks(
         &self,
         (mut out, mut applied): (Vec<RowEvent>, Vec<FileEvent>),
         mut pending: PendingRefresh,
     ) -> (Vec<RowEvent>, Vec<FileEvent>) {
-        if pending.walked {
-            // Only what is already queued, once: waiting for the queue to
-            // empty would never end under a writer that never pauses.
+        while std::mem::take(&mut pending.walked) {
+            // Only what is already queued, once per walk: waiting for the
+            // queue to empty would never end under a writer that never pauses.
             let (queued_out, queued) = self.route_events(self.queued_file_events(), &mut pending);
             out.extend(queued_out);
             applied.extend(queued);
@@ -2337,7 +2338,7 @@ impl DirSQL {
         Ok(built)
     }
 
-    /// Apply what the watcher queued while the build walked, once, inside the
+    /// Apply what the watcher queued while the build walked, inside the
     /// build's transaction, then commit it with one foreign-key check.
     fn apply_queued_at_build(&self) -> Result<()> {
         let walked = PendingRefresh {
