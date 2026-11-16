@@ -1,0 +1,76 @@
+name: win1714 diagnosis
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/win1714-diagnosis.yml'
+
+jobs:
+  hang:
+    name: Windows hang stacks (shard ${{ matrix.shard }})
+    runs-on: windows-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-stable-${{ hashFiles('Cargo.lock') }}
+
+      - name: Find cdb
+        shell: pwsh
+        run: |
+          $known = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+          if (Test-Path $known) { $cdb = $known } else {
+            $cdb = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits', 'C:\Program Files\Windows Kits' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object FullName -match 'x64' | Select-Object -First 1).FullName
+          }
+          if (-not $cdb) { Write-Error 'cdb.exe not found'; exit 1 }
+          "CDB=$cdb" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "cdb: $cdb"
+
+      - name: Build tests
+        run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests --no-run
+
+      - name: Run the suite until it hangs, dumping the hung process's stacks
+        shell: pwsh
+        run: |
+          $root = (Resolve-Path target).Path
+          $sym = "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols"
+          $hits = 0
+          for ($pass = 1; $pass -le 10 -and $hits -lt 2; $pass++) {
+            $out = "$env:RUNNER_TEMP\pass$pass.out"
+            $err = "$env:RUNNER_TEMP\pass$pass.err"
+            $p = Start-Process cargo -ArgumentList 'test','--manifest-path','packages/rust/Cargo.toml','--features','cli','--tests','--no-fail-fast' -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+            $hung = $false
+            while (-not $p.HasExited) {
+              Start-Sleep -Seconds 15
+              $old = Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($root) -and ((Get-Date) - $_.StartTime).TotalSeconds -gt 240 }
+              foreach ($t in $old) {
+                $hung = $true
+                Write-Host "::warning::pass $pass hung: $($t.Path) pid $($t.Id)"
+                Write-Host "----- tests still running in pass $pass -----"
+                Get-Content $out | Select-String 'running for over' | ForEach-Object { Write-Host $_ }
+                Write-Host "----- thread list and stacks of pid $($t.Id) -----"
+                $dir = Split-Path $t.Path
+                & $env:CDB -pv -p $t.Id -y "$dir;$sym" -lines -c '.reload; ~; ~*kn 80; qd' 2>&1 | ForEach-Object { Write-Host $_ }
+                Write-Host "----- end of stacks -----"
+                Stop-Process -Id $t.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+            $res = Get-Content $out | Select-String 'test result:|FAILED|panicked'
+            Write-Host "pass $pass exit $($p.ExitCode) hung=$hung, $($res.Count) result lines"
+            if ($hung) { $hits++ }
+          }
+          Write-Host "hangs captured: $hits"
