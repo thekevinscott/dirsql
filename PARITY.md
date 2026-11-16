@@ -209,7 +209,7 @@ between the host language and Rust.
 **Relative-root watching (#250) — parity maintained, no drift.** The watcher
 now canonicalizes its watch-root before handing it to `notify`, so a relative
 `root` emits events identically to an absolute one. The fix is entirely in the
-shared Rust core (`start_watching` / `process_file_event`), so all three SDKs
+shared Rust core (`watch_scopes` / `process_file_event`), so all three SDKs
 gain it at once with no binding changes; the user-supplied `root` is unchanged
 across all three.
 
@@ -226,6 +226,26 @@ tree (a rename out of or within the root), which the OS reports as one event
 naming the directory and none for its files. The fix is entirely in the shared
 Rust core (`process_file_event` / `Db::files_under`), so all three SDKs gain it
 at once with no binding changes and no public-surface change.
+
+**Event-driven index (epic #1695) — parity by construction; platform drift,
+no SDK drift.** The tree is walked once, when the instance is built, with the
+watcher already running. The changes it saw during the walk are applied once,
+before the build finishes; later changes update the index as they arrive, on
+a thread the instance owns. A query only reads the index. A real orphan after
+the build makes every query raise its foreign-key violation until the parent
+appears or the child is removed. All of it lives in the shared core, so the
+three SDKs and the CLI change at once. The drift is by platform: Linux reads
+inotify and applies changes in the order the kernel reports them; macOS and
+Windows stay on `notify`, with no ordering guarantee, so a child applied
+before its parent can make queries raise. The hidden Rust methods
+`DirSQL::set_fresh_reads` and `DirSQL::read_changes` are removed; neither
+binding exposed them.
+
+**Watch limit (#1700) — parity, no drift.** On Linux a
+build over more directories than inotify's watch limit fails with `ENOSPC`,
+`inotify watch limit reached`, raised as each language's OS error: Python
+`OSError` (`errno.ENOSPC`), TypeScript an `Error` with `code: "ENOSPC"`,
+Rust `DirSqlError::Io` with `os_error()` errno 28.
 
 **Verbatim table columns (#361, epic #358) — parity by construction, no drift.**
 User tables carry exactly the columns declared in their DDL (row ownership is

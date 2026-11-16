@@ -110,7 +110,7 @@ dirsql query "SELECT title, author FROM posts ORDER BY title" -c ./.dirsql.toml
 ```
 
 Same command, same rows. The difference is what a declared table brings: it is
-indexed on build, re-reads only the files that changed on each query, streams
+indexed once on build, kept current by the file watcher, streams
 row events as files change, survives restarts with
 [`--persist`](./persist.md), and a config can declare
 [many tables](./define-tables.md) — each with its own `on-file` — where the flag

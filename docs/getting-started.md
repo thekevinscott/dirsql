@@ -268,6 +268,6 @@ configuration, and a declared table when you want a named shape to reuse.
   a live stream of row changes as files change.
 - [SDK](./reference/sdk.md) — embed `dirsql` in a Python, Rust, or
   TypeScript program instead of running the CLI.
-- Why is the database rebuilt from your files on every query? See
+- Why is the database derived from your files rather than stored? See
   [how `dirsql` thinks](./explanation.md).
 ```

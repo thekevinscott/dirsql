@@ -554,6 +554,47 @@ version that prints it. It takes no flags and exits `0`.
 The dirsql agent skill tells an agent to run this command before it writes a
 query; see [the skill page](../howto/agent-skill.md).
 
+## The file watcher
+
+A config's named tables are indexed by one walk of the directory, when
+`dirsql` starts: the one-shot query, the REPL and the server all build the
+same way. A file watcher starts before that walk, and the changes it sees
+during the walk are applied once, before the build finishes. From then until
+`dirsql` exits, changes update the index as they arrive. A query only reads
+the index, so a query issued right after a write may read the old rows.
+[Path-tables](./path-tables.md) are not watched; the statement that names one
+scans it.
+
+- **Linux.** `dirsql` reads inotify directly and applies changes in the
+  order the kernel reports them. A file is read when its writer closes it or
+  it is renamed into place. A writer that creates a parent file and then its
+  child does not make a query fail.
+- **macOS and Windows.** The same design, without that ordering guarantee:
+  a child whose change is applied before its parent's makes every query raise
+  a foreign-key violation until the parent's change is applied.
+
+A row whose foreign key matches nothing fails the build. After the build, the
+index keeps its last consistent state and every query raises that violation
+until the parent appears or the child is removed; see
+[Foreign keys](./config.md#foreign-keys).
+
+### The watch limit (Linux)
+
+Each directory the walk enters costs one inotify watch. A tree with more
+directories than the kernel allows fails the build:
+
+```text
+inotify watch limit reached
+```
+
+After the build, a new directory that cannot be watched, or the kernel
+dropping events, makes every query fail until `dirsql` is restarted. Raise
+the limit (it lasts until the next reboot) and run again:
+
+```bash
+sudo sysctl fs.inotify.max_user_watches=524288
+```
+
 ## Plugins
 
 A **plugin** is an ordinary Python package that ships a `dirsql.toml` config
