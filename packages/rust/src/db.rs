@@ -3919,6 +3919,25 @@ mod tests {
     }
 
     #[test]
+    fn get_rows_by_file_fails_on_text_that_is_not_utf8() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (id TEXT, d TEXT DEFAULT (CAST(x'ff41' AS TEXT)))",
+        )
+        .unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("a".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+
+        let error = db.get_rows_by_file("t", "a.json").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"d\" holds text that is not valid UTF-8"
+        );
+    }
+
+    #[test]
     fn open_on_unopenable_path_returns_error() {
         // `Db` is not `Debug`; `.map(|_| ())` discards the Ok payload so
         // `unwrap_err` works.
@@ -4983,6 +5002,28 @@ mod tests {
         assert_eq!(table_rows(&db, "t"), vec![(1, "a".into()), (2, "a".into())]);
         assert_eq!(ids(&changes.removed), vec![Value::Text("a".into())]);
         assert!(changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_fails_on_stored_text_that_is_not_utf8() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (id TEXT, d TEXT); \
+             CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN \
+             UPDATE t SET d = CAST(x'ff41' AS TEXT) WHERE rowid = new.rowid; END",
+        )
+        .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", serde_json::json!([{"id":"a"}])), "")
+            .unwrap();
+        let next = shaped(&db, "t", serde_json::json!([{"id":"a","d":"x"}]));
+
+        let error = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"d\" holds text that is not valid UTF-8"
+        );
     }
 
     #[test]
