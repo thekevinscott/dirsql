@@ -307,10 +307,19 @@ db.query_with(
 - Without `params`, a statement with placeholders fails the same way: a
   placeholder is never left unbound.
 
-- **Reads the index as it stands.** A query never waits on the watcher, so a
-  writer that never pauses cannot hold it. The watcher's events are applied in
-  the background as they arrive, and foreign keys are checked once per batch.
-  On Linux they are applied in the order the kernel reports them, so a writer
+- **Waits for the batch being applied.** The watcher's changes are applied in
+  the background, a batch at a time, and foreign keys are checked once per
+  batch. A query that arrives while a batch is being applied waits for it and
+  is answered as soon as it ends; otherwise it is answered at once. A batch
+  is every change that was waiting when applying started, and it is never
+  split, so a query reads whole batches only. `on_file` runs once per change:
+  with a 2 ms callback, a batch of 500 changes holds a query for about a
+  second. Under a writer that never pauses, a slow callback lets one batch
+  grow to thousands of changes, and a query waits as long as that batch
+  takes. The measurements, the Linux limit of 16,384 queued changes, and what
+  keeps the wait short are in
+  [How long a query waits](./cli.md#how-long-a-query-waits).
+  On Linux changes are applied in the order the kernel reports them, so a writer
   creating a parent file and then its child does not fail a query; macOS and
   Windows give no such guarantee.
   While a batch a foreign key rejected waits to be retried, the query raises
@@ -320,7 +329,9 @@ db.query_with(
   query issued the moment a write returns may read the previous rows, so wait
   for the change on [`watch`](#watch) first. In TypeScript `onFile` runs on
   the JavaScript thread, so a change reaches the index when that thread is
-  next free; the SQL runs on the threadpool.
+  next free, and a busy thread lengthens the batch and the wait; the SQL runs
+  on the threadpool. In Python `on_file` needs the GIL, so a busy Python
+  thread does the same.
 
 - **Read-only.** Each statement is classified by SQLite itself
   (`sqlite3_stmt_readonly`); anything classified as a write — `INSERT`,

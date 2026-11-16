@@ -733,6 +733,13 @@ impl DirSQL {
     /// with [`DirSqlError::WriteForbidden`] before any rows are produced. This
     /// keeps the ephemeral index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
+    ///
+    /// A query that arrives while a batch of file changes is being applied
+    /// waits for that batch and is answered as soon as it ends. A batch is
+    /// every change that was waiting when applying started, and it is never
+    /// split, so a query reads whole batches only. `on_file` runs once per
+    /// change: under a writer that never pauses, a slow callback lets one
+    /// batch grow large, and the query waits as long as that batch takes.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
         self.query_ordered(sql).map(|result| result.rows)
     }

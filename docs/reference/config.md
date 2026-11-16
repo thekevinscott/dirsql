@@ -353,7 +353,10 @@ per row: every constraint is deferred to the end of the unit, as if declared
 `DEFERRABLE INITIALLY DEFERRED`. A unit is the initial build, or one batch of
 [watcher](../howto/react-to-changes.md) events across all tables. A child may
 land before its parent, and a parent's file may change while its children
-point at it.
+point at it. A batch is every change that was waiting when applying started.
+It is never split, since a check over part of it could report an orphan whose
+parent is in the rest, and a query that arrives while it is being applied
+waits for it: see [How long a query waits](./cli.md#how-long-a-query-waits).
 
 A row that still references nothing when the unit ends fails the whole unit,
 and the error names each offending row, the file that produced it, and the

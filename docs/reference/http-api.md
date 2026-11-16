@@ -55,7 +55,7 @@ excluded from `SELECT *` results.
 | `200` | Query succeeded. Body: array of row objects. |
 | `400` | Malformed JSON body, missing or empty `sql` field, or a SQL error (syntax error, unknown table, or a statement SQLite classifies as a write — queries are read-only). |
 | `405` | `GET /query`. Plain-text body `method not allowed`. |
-| `408` | The query exceeded the 30-second per-query timeout. |
+| `408` | The query exceeded the 30-second per-query timeout. The time it waits for a batch of file changes to be applied counts: see [How long a query waits](./cli.md#how-long-a-query-waits). |
 | `500` | Internal server fault. |
 | `503` | The server is in [degraded mode](./cli.md#degraded-mode) (the config file exists but failed to load). |
 
