@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { Worker } from "node:worker_threads";
 import { DirSQL, type RowEvent } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,6 +82,28 @@ async function lines(db: DirSQL, rel: string): Promise<string[]> {
   return rows.map((row) => String(row.line));
 }
 
+async function awaitEq<T>(
+  read: () => Promise<T>,
+  expected: T,
+  context: string,
+): Promise<void> {
+  let seen = await read();
+  for (let i = 0; i < 1000 && !isDeepStrictEqual(seen, expected); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    seen = await read();
+  }
+  expect(seen, context).toEqual(expected);
+}
+
+async function awaitLines(
+  db: DirSQL,
+  rel: string,
+  expected: string[],
+  context = rel,
+): Promise<void> {
+  await awaitEq(() => lines(db, rel), expected, context);
+}
+
 async function snapshot(db: DirSQL): Promise<[string, string][]> {
   const rows = await db.query(
     "SELECT file, line FROM notes ORDER BY file, line",
@@ -88,14 +111,15 @@ async function snapshot(db: DirSQL): Promise<[string, string][]> {
   return rows.map((row) => [String(row.file), String(row.line)]);
 }
 
-async function expectMatchesFreshScan(
+async function awaitFreshScan(
   db: DirSQL,
   root: string,
   context: string,
 ): Promise<void> {
   const fresh = await open(root);
   try {
-    expect(await snapshot(db), context).toEqual(await snapshot(fresh));
+    const expected = await snapshot(fresh);
+    await awaitEq(() => snapshot(db), expected, context);
   } finally {
     fresh.close();
   }
@@ -204,9 +228,8 @@ function seedTree(root: string, below: (n: number) => number): void {
   }
 }
 
-// A query reads a write at once only where it drains the inotify queue.
 describe.runIf(process.platform === "linux")(
-  "a declared table reads exactly what is on disk",
+  "every write reaches a declared table's index",
   () => {
     let dir: string;
     let db: DirSQL | undefined;
@@ -221,16 +244,14 @@ describe.runIf(process.platform === "linux")(
       rmSync(dir, { recursive: true, force: true });
     });
 
-    describe("a query right after a write", () => {
+    describe("one write at a time", () => {
       it(
-        "reads every create",
+        "every create reaches the index",
         async () => {
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             write(dir, `h/${i}.txt`, `c${i}`);
-            expect(await lines(db, `h/${i}.txt`), `round ${i}`).toEqual([
-              `c${i}`,
-            ]);
+            await awaitLines(db, `h/${i}.txt`, [`c${i}`], `round ${i}`);
             unlinkSync(join(dir, `h/${i}.txt`));
           }
         },
@@ -238,76 +259,76 @@ describe.runIf(process.platform === "linux")(
       );
 
       it(
-        "reads every edit",
+        "every edit reaches the index",
         async () => {
           write(dir, "e.txt", "start");
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             write(dir, "e.txt", `e${i}`);
-            expect(await lines(db, "e.txt"), `round ${i}`).toEqual([`e${i}`]);
+            await awaitLines(db, "e.txt", [`e${i}`], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
       );
 
       it(
-        "reads every delete",
+        "every delete reaches the index",
         async () => {
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             write(dir, "d.txt", `d${i}`);
-            expect(await lines(db, "d.txt"), `round ${i}`).toEqual([`d${i}`]);
+            await awaitLines(db, "d.txt", [`d${i}`], `round ${i}`);
             unlinkSync(join(dir, "d.txt"));
-            expect(await lines(db, "d.txt"), `round ${i}`).toEqual([]);
+            await awaitLines(db, "d.txt", [], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
       );
 
       it(
-        "reads every rename into and out of the glob",
+        "every rename into and out of the glob reaches the index",
         async () => {
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             write(dir, "r.stage", `r${i}`);
             renameSync(join(dir, "r.stage"), join(dir, "r.txt"));
-            expect(await lines(db, "r.txt"), `round ${i}`).toEqual([`r${i}`]);
+            await awaitLines(db, "r.txt", [`r${i}`], `round ${i}`);
             renameSync(join(dir, "r.txt"), join(dir, "r.stage"));
-            expect(await lines(db, "r.txt"), `round ${i}`).toEqual([]);
+            await awaitLines(db, "r.txt", [], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
       );
 
       it(
-        "reads every atomic save",
+        "every atomic save reaches the index",
         async () => {
           write(dir, "a.txt", "start");
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             saveAtomically(dir, "a.txt", `a${i}`);
-            expect(await lines(db, "a.txt"), `round ${i}`).toEqual([`a${i}`]);
+            await awaitLines(db, "a.txt", [`a${i}`], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
       );
 
       it(
-        "reads every same-size edit",
+        "every same-size edit reaches the index",
         async () => {
           write(dir, "s.txt", "s------");
           db = await open(dir);
           for (let i = 0; i < ROUNDS; i++) {
             const text = `s${String(i).padStart(6, "0")}`;
             write(dir, "s.txt", text);
-            expect(await lines(db, "s.txt"), `round ${i}`).toEqual([text]);
+            await awaitLines(db, "s.txt", [text], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
       );
 
       it(
-        "reads every same-size edit with its times restored",
+        "every same-size edit with its times restored reaches the index",
         async () => {
           write(dir, "t.txt", "t------");
           const before = times(dir, "t.txt");
@@ -316,7 +337,7 @@ describe.runIf(process.platform === "linux")(
             const text = `t${String(i).padStart(6, "0")}`;
             write(dir, "t.txt", text);
             restoreTimes(dir, "t.txt", before);
-            expect(await lines(db, "t.txt"), `round ${i}`).toEqual([text]);
+            await awaitLines(db, "t.txt", [text], `round ${i}`);
           }
         },
         TEST_TIMEOUT,
@@ -336,11 +357,7 @@ describe.runIf(process.platform === "linux")(
             db = await open(root);
             for (let op = 0; op < 100; op++) {
               const done = step(root, below);
-              await expectMatchesFreshScan(
-                db,
-                root,
-                `seed ${seed} op ${op}: ${done}`,
-              );
+              await awaitFreshScan(db, root, `seed ${seed} op ${op}: ${done}`);
             }
           }
         },
@@ -359,11 +376,7 @@ describe.runIf(process.platform === "linux")(
             );
             for (let op = 0; op < 20; op++) {
               const done = step(dir, below);
-              await expectMatchesFreshScan(
-                db,
-                dir,
-                `cycle ${cycle} op ${op}: ${done}`,
-              );
+              await awaitFreshScan(db, dir, `cycle ${cycle} op ${op}: ${done}`);
             }
           }
         },
@@ -376,27 +389,27 @@ describe.runIf(process.platform === "linux")(
         write(dir, "touched.txt", "before");
         const before = times(dir, "touched.txt");
         db = await open(dir);
-        expect(await lines(db, "touched.txt")).toEqual(["before"]);
+        await awaitLines(db, "touched.txt", ["before"]);
         write(dir, "touched.txt", "after!");
         restoreTimes(dir, "touched.txt", before);
-        expect(await lines(db, "touched.txt")).toEqual(["after!"]);
+        await awaitLines(db, "touched.txt", ["after!"]);
       });
 
       it("reads a file deleted and recreated under the same name", async () => {
         write(dir, "again.txt", "first");
         db = await open(dir);
-        expect(await lines(db, "again.txt")).toEqual(["first"]);
+        await awaitLines(db, "again.txt", ["first"]);
         unlinkSync(join(dir, "again.txt"));
         write(dir, "again.txt", "secnd");
-        expect(await lines(db, "again.txt")).toEqual(["secnd"]);
+        await awaitLines(db, "again.txt", ["secnd"]);
       });
 
       it("reads a new and a deleted subdirectory", async () => {
         db = await open(dir);
         write(dir, "sub/deep/one.txt", "one");
-        expect(await lines(db, "sub/deep/one.txt")).toEqual(["one"]);
+        await awaitLines(db, "sub/deep/one.txt", ["one"]);
         rmSync(join(dir, "sub"), { recursive: true });
-        expect(await lines(db, "sub/deep/one.txt")).toEqual([]);
+        await awaitLines(db, "sub/deep/one.txt", []);
       });
 
       it(
@@ -431,7 +444,9 @@ describe.runIf(process.platform === "linux")(
             expect(new Set(seen).size, "mixed versions").toBe(1);
           }
           await exited;
-          expect(await lines(db, "busy.txt")).toEqual(
+          await awaitLines(
+            db,
+            "busy.txt",
             version(300)
               .split("\n")
               .filter((line) => line.length > 0),
@@ -443,19 +458,17 @@ describe.runIf(process.platform === "linux")(
 
     describe("watch consumers", () => {
       it(
-        "stream each change a query read first, once",
+        "a watch stream gets each change once",
         async () => {
           db = await open(dir);
           const stream = db.watch()[Symbol.asyncIterator]();
           const files = 100;
           for (let i = 0; i < files; i++) {
             write(dir, `w/${i}.txt`, `w${i}`);
-            expect(await lines(db, `w/${i}.txt`), `file ${i}`).toEqual([
-              `w${i}`,
-            ]);
+            await awaitLines(db, `w/${i}.txt`, [`w${i}`], `file ${i}`);
           }
-          // Unread by any query, so only the watcher reports it, after every
-          // change before it.
+          // Written last, so the stream reports it after every change before
+          // it.
           write(dir, "sentinel.txt", "end");
           const counts = new Map<string, number>();
           for (;;) {

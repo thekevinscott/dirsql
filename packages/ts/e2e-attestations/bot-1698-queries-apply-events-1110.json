@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1794455046,
+  "ran_at": 1794628656,
   "exit_code": 0,
-  "commit": "b580799684209a456a558b80c59b307e251ad573",
+  "commit": "cfe0889607329a4dcb76a9f51267b8e8d5d85c4e",
   "branch": "bot/1698-queries-apply-events-1110"
 }

@@ -50,6 +50,7 @@ fn a_file_created_under_an_anchor_outside_the_root_emits_an_insert() {
         .build()
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    db.poll_events(Duration::ZERO).unwrap();
 
     fs::write(anchor.path().join("new.txt"), "hello").unwrap();
 
@@ -72,6 +73,7 @@ fn the_root_and_an_outside_anchor_are_both_watched() {
         .build()
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    db.poll_events(Duration::ZERO).unwrap();
 
     fs::write(root.path().join("a.txt"), "a").unwrap();
     fs::write(anchor.path().join("b.txt"), "b").unwrap();

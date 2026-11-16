@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/on_file_failure_test.py tests/e2e/query_contract_test.py tests/e2e/root_at_construction_test.py tests/e2e/parent_then_child_test.py -x -q",
+  "ran_at": 1794483968,
+  "exit_code": 0,
+  "commit": "53615f99f449ed802f2cd006c2719a6504ae9812",
+  "branch": "bot/1700-watch-limit-fatal-1110"
+}
