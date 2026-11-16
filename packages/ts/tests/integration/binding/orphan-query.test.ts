@@ -16,7 +16,9 @@ async function settle(live: DirSQL, sql: string, raises: boolean) {
       () => false,
       () => true,
     );
-    if (failed === raises) return;
+    if (failed === raises) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
