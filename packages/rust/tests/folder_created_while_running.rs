@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -95,13 +95,15 @@ fn queries_never_fail_while_a_new_folder_gathers_children_of_another_folder() {
     let db = DirSQL::new(&root, vec![advice_table(), turn_table()]).unwrap();
     assert!(!turns(&root).exists());
 
-    let stop = Arc::new(AtomicBool::new(false));
     let written = Arc::new(AtomicUsize::new(0));
+    // The writer stops by its own clock: a query waits for a writer that
+    // creates folders faster than they are walked, so it could never stop it.
     let writer = {
-        let (root, stop, written) = (root.clone(), Arc::clone(&stop), Arc::clone(&written));
+        let (root, written) = (root.clone(), Arc::clone(&written));
         thread::spawn(move || {
+            let end = Instant::now() + Duration::from_secs(3);
             let mut n = 0;
-            while !stop.load(Ordering::SeqCst) {
+            while Instant::now() < end {
                 write_pair(&root, n);
                 n += 1;
                 written.store(n, Ordering::SeqCst);
@@ -111,14 +113,12 @@ fn queries_never_fail_while_a_new_folder_gathers_children_of_another_folder() {
     };
     let mut failures = Vec::new();
     let mut queries = 0;
-    let end = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < end {
+    while !writer.is_finished() {
         queries += 1;
         if let Err(e) = db.query(PAIRS) {
             failures.push(e.to_string());
         }
     }
-    stop.store(true, Ordering::SeqCst);
     writer.join().unwrap();
     assert!(
         failures.is_empty(),
