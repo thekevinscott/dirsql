@@ -411,7 +411,7 @@ with the polling API below — mixing them returns an error.
 ::: code-group
 
 ```typescript [TypeScript]
-await db.startWatcher()               // idempotent; must precede pollEvents
+await db.startWatcher()               // optional, idempotent; pollEvents attaches on its own
 await db.pollEvents(timeoutMs) -> RowEvent[]
 ```
 

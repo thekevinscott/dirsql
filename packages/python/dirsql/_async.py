@@ -278,13 +278,14 @@ class DirSQL:
         return db.scan_failures()
 
     def watch(self):
-        """Start watching for file changes. Returns an async iterable of RowEvent.
+        """Stream file changes. Returns an async iterable of RowEvent.
 
-        The watcher is live once both ``watch()`` and :meth:`ready` have
-        returned, in either order: a file written after that point produces
-        an event and reaches the index. Called after the scan, ``watch()``
-        starts the watcher before returning; called before it, the watcher
-        starts before :meth:`ready` resolves. Writes made while the scan is
+        The file watcher runs from the moment the instance is built;
+        ``watch()`` attaches to it. The stream is live once both ``watch()``
+        and :meth:`ready` have returned, in either order: a file written after
+        that point produces an event and reaches the index. Called after the
+        scan, ``watch()`` attaches before returning; called before it, it
+        attaches before :meth:`ready` resolves. Writes made while the scan is
         still running may be missed.
 
         The returned stream awaits :meth:`ready` on its first iteration, so

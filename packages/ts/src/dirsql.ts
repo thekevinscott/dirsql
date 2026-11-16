@@ -253,9 +253,7 @@ export class DirSQL {
   /**
    * Execute a SQL query and return results as an array of row objects.
    *
-   * Awaits the initial scan if it has not yet finished, then reads the
-   * files that changed since the last query, so the rows match the disk.
-   * The query itself runs on the libuv threadpool, so the JS event loop
+   * Awaits the initial scan if it has not yet finished. The query runs on the libuv threadpool, so the JS event loop
    * stays responsive even for large result sets or long-running queries.
    *
    * `params` binds to the statement's placeholders through SQLite, so the
@@ -305,11 +303,13 @@ export class DirSQL {
   }
 
   /**
-   * Start the file watcher. Must be called before {@link pollEvents}.
-   * Idempotent — safe to call multiple times.
+   * Attach to the file watcher, which runs from the moment the instance is
+   * built. Idempotent — safe to call multiple times. {@link pollEvents}
+   * attaches on its own, so calling this first is optional.
    *
-   * Awaits the initial scan if it has not yet finished, then registers the
-   * watcher on the JS thread; the watcher is live once this resolves.
+   * Awaits the initial scan if it has not yet finished, then attaches on the
+   * JS thread; changes applied after this resolves reach the next
+   * {@link pollEvents}.
    */
   async startWatcher(): Promise<void> {
     await this.ready;
@@ -343,11 +343,12 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * The watcher is live once both `watch()` and {@link ready} have
-   * returned, in either order: a file written after that point produces an
-   * event and reaches the index. Called after the scan, `watch()` starts the
-   * watcher before returning; called before it, the watcher starts before
-   * `ready` resolves. Writes made while the scan is still running may be
+   * The file watcher runs from the moment the instance is built; `watch()`
+   * attaches to it. The stream is live once both `watch()` and
+   * {@link ready} have returned, in either order: a file written after that
+   * point produces an event and reaches the index. Called after the scan,
+   * `watch()` attaches before returning; called before it, it attaches
+   * before `ready` resolves. Writes made while the scan is still running may be
    * missed.
    *
    * The stream awaits `ready` on first iteration, then awaits a bounded

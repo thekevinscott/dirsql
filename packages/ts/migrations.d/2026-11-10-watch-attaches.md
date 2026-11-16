@@ -1,8 +1,8 @@
-### `watch()` attaches to the running watcher
+### Docs: `watch()` and `startWatcher()` attach
 
 #### Summary
 
-`watch()` attaches to the file watcher the instance started when it was built, instead of starting it. `startWatcher()` is no longer needed before `pollEvents()`; it remains and only attaches. Nothing breaks.
+Documentation only: `watch()` and `startWatcher()` are described as attaching to the file watcher that runs from the moment the instance is built, `startWatcher()` is optional before `pollEvents()`, and `query()` reads the index. Nothing breaks.
 
 #### Required changes
 
@@ -14,8 +14,8 @@ _None._
 
 #### Behavior changes without code changes
 
-On an instance with no named tables, `db.watch()` called after `await db.ready` returns a stream, and the error naming the cause rejects its first `next()`.
+_None._
 
 #### Verification
 
-`await db.watch().next()` on a `DirSQL` with no tables rejects with an error matching `/path-tables emit no watch events/`.
+_None._

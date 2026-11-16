@@ -1,8 +1,8 @@
-### `watch()` attaches to the running watcher
+### Docs: `watch()` attaches
 
 #### Summary
 
-`watch()` attaches to the file watcher the instance started when it was built, instead of starting it. Nothing breaks.
+Documentation only: `watch()` is described as attaching to the file watcher that runs from the moment the instance is built. Nothing breaks.
 
 #### Required changes
 
@@ -14,8 +14,8 @@ _None._
 
 #### Behavior changes without code changes
 
-On an instance with no named tables, `db.watch()` called after `await db.ready()` returns a stream, and the error naming the cause is raised from its first iteration.
+_None._
 
 #### Verification
 
-`async for _ in db.watch(): break` on a `DirSQL` with no tables raises an error containing `path-tables emit no watch events`.
+_None._

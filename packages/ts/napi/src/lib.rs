@@ -367,9 +367,10 @@ impl DirSQL {
         }))
     }
 
-    /// Start the file watcher. Must be called before pollEvents. Idempotent.
+    /// Attach to the file watcher the build started. Idempotent; pollEvents
+    /// attaches on its own.
     ///
-    /// Synchronous, so the watcher is live when the call returns: a stream
+    /// Synchronous, so the attach is done when the call returns: a stream
     /// handed out right after it sees every later write.
     #[napi(js_name = "startWatcher")]
     pub fn start_watcher(&self) -> Result<()> {
