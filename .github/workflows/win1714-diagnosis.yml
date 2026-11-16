@@ -40,6 +40,13 @@ jobs:
           "CDB=$cdb" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "cdb: $cdb"
 
+      - name: Apply the candidate fix (notify 8)
+        shell: bash
+        run: |
+          sed -i 's/^notify = "7"$/notify = "8"/' packages/rust/Cargo.toml
+          cargo update -p notify
+          grep -A1 'name = "notify"' Cargo.lock
+
       - name: Build tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests --no-run
 
@@ -49,7 +56,7 @@ jobs:
           $root = (Resolve-Path target).Path
           $sym = "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols"
           $hits = 0
-          for ($pass = 1; $pass -le 10 -and $hits -lt 2; $pass++) {
+          for ($pass = 1; $pass -le 10; $pass++) {
             $out = "$env:RUNNER_TEMP\pass$pass.out"
             $err = "$env:RUNNER_TEMP\pass$pass.err"
             $p = Start-Process cargo -ArgumentList 'test','--manifest-path','packages/rust/Cargo.toml','--features','cli','--tests','--no-fail-fast' -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
