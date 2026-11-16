@@ -1081,8 +1081,38 @@ impl DirSQL {
     /// Route `events` into the open transaction. Returns the row events and
     /// every file event routed.
     fn route_batch(&self, events: Vec<FileEvent>) -> (Vec<RowEvent>, Vec<FileEvent>) {
-        let mut applied = Vec::new();
         let mut pending = PendingRefresh::default();
+        let routed = self.route_events(events, &mut pending);
+        self.after_walks(routed, pending)
+    }
+
+    /// Finish routing: when anything was walked, route what the watcher
+    /// queued during the walk, then re-run the per-table hooks `pending`
+    /// names. The open transaction's foreign keys are checked after this, so
+    /// a walk's result is checked together with the changes that raced it.
+    fn after_walks(
+        &self,
+        (mut out, mut applied): (Vec<RowEvent>, Vec<FileEvent>),
+        mut pending: PendingRefresh,
+    ) -> (Vec<RowEvent>, Vec<FileEvent>) {
+        if pending.walked {
+            // Only what is already queued, once: waiting for the queue to
+            // empty would never end under a writer that never pauses.
+            let (queued_out, queued) = self.route_events(self.queued_file_events(), &mut pending);
+            out.extend(queued_out);
+            applied.extend(queued);
+        }
+        out.extend(self.refresh_pending(pending));
+        (out, applied)
+    }
+
+    /// Route each event in order, then walk again after an overflow.
+    fn route_events(
+        &self,
+        events: Vec<FileEvent>,
+        pending: &mut PendingRefresh,
+    ) -> (Vec<RowEvent>, Vec<FileEvent>) {
+        let mut applied = Vec::new();
         let mut out = Vec::new();
         let mut rescan = false;
         for fe in events {
@@ -1100,13 +1130,12 @@ impl DirSQL {
                 _ => {}
             }
             for fe in self.through_links(fe) {
-                out.extend(self.route_file_event(fe, &mut pending));
+                out.extend(self.route_file_event(fe, pending));
             }
         }
         if rescan {
-            out.extend(self.rescan(&mut pending));
+            out.extend(self.rescan(pending));
         }
-        out.extend(self.refresh_pending(pending));
         (out, applied)
     }
 
@@ -1373,7 +1402,7 @@ impl DirSQL {
     /// Re-run every per-table hook `pending` names, once each, over the files
     /// its glob matches now, and replace that table's rows.
     fn refresh_pending(&self, pending: PendingRefresh) -> Vec<RowEvent> {
-        let mut pending = pending.0;
+        let mut pending = pending.tables;
         pending.sort_by_key(|(table, _)| declared_position(&self.inner.declared, table));
         let mut events = Vec::new();
         for (table, trigger) in pending {
@@ -1576,6 +1605,7 @@ impl DirSQL {
         } else {
             &group.anchor
         };
+        pending.walked = true;
         if dir.starts_with(&group.watch_anchor) && !self.below_a_link(dir) {
             self.register_link(dir.to_path_buf());
         }
@@ -2310,7 +2340,11 @@ impl DirSQL {
     /// Apply what the watcher queued while the build walked, once, inside the
     /// build's transaction, then commit it with one foreign-key check.
     fn apply_queued_at_build(&self) -> Result<()> {
-        let (out, _) = self.route_batch(self.queued_file_events());
+        let walked = PendingRefresh {
+            walked: true,
+            ..PendingRefresh::default()
+        };
+        let (out, _) = self.after_walks((Vec::new(), Vec::new()), walked);
         if let Some(RowEvent::Error {
             table,
             file_path,
@@ -3144,12 +3178,17 @@ fn map_db_error(e: DbError) -> DirSqlError {
 /// path that touched it. Marked once per table however many events arrive,
 /// which is what keeps a burst of writes to one re-run.
 #[derive(Default)]
-struct PendingRefresh(Vec<(String, String)>);
+struct PendingRefresh {
+    tables: Vec<(String, String)>,
+    /// Whether a walk ran: its result is checked only together with the
+    /// events the watcher queued during it.
+    walked: bool,
+}
 
 impl PendingRefresh {
     fn mark(&mut self, table: &str, trigger: &str) {
-        if !self.0.iter().any(|(t, _)| t == table) {
-            self.0.push((table.to_string(), trigger.to_string()));
+        if !self.tables.iter().any(|(t, _)| t == table) {
+            self.tables.push((table.to_string(), trigger.to_string()));
         }
     }
 }
@@ -4831,7 +4870,10 @@ mod internal_tests {
 
         db.delete_subtree(group, "moved", &mut pending);
 
-        assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+        assert_eq!(
+            pending.tables,
+            vec![("held".to_string(), "moved".to_string())]
+        );
     }
 
     #[test]
@@ -5710,6 +5752,57 @@ mod internal_tests {
         while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
             held.extend(db.queued_file_events());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn real_items_db(root: &Path) -> DirSQL {
+        let table = Table::new(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            |path| {
+                vec![Row::from_iter([(
+                    "name".to_string(),
+                    Value::Text(path.to_string()),
+                )])]
+            },
+        );
+        DirSQL::with_ignore_and_fs(root, vec![table], Vec::<String>::new(), Arc::new(RealFs))
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_batch_that_walks_a_new_folder_applies_what_was_queued_during_the_walk() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = real_items_db(&root);
+        std::fs::create_dir(root.join("new")).unwrap();
+        std::fs::write(root.join("queued.txt"), "x").unwrap();
+
+        db.apply_file_events(vec![FileEvent::Created(root.join("new"))]);
+
+        assert_eq!(
+            row_names(&db),
+            vec![root.join("queued.txt").to_string_lossy().to_string()]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_batch_that_walks_nothing_leaves_what_is_queued_for_the_next() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = real_items_db(&root);
+        std::fs::write(root.join("queued.txt"), "x").unwrap();
+
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("gone.txt"))]);
+
+        assert!(row_names(&db).is_empty());
+        assert!(
+            db.queued_file_events()
+                .contains(&FileEvent::Created(root.join("queued.txt")))
+        );
     }
 
     #[test]

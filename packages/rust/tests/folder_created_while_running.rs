@@ -127,7 +127,7 @@ fn queries_never_fail_while_a_new_folder_gathers_children_of_another_folder() {
         failures[0]
     );
 
-    let pairs = written.load(Ordering::SeqCst) as i64;
+    let pairs = i64::try_from(written.load(Ordering::SeqCst)).unwrap();
     let end = Instant::now() + Duration::from_secs(30);
     while count(&db) != pairs && Instant::now() < end {
         thread::sleep(Duration::from_millis(10));
