@@ -88,7 +88,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak,
+    Arc, Condvar, LockResult, Mutex, MutexGuard, OnceLock, PoisonError, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
@@ -506,9 +506,11 @@ struct DirSqlInner {
     /// Held across every change to the index and every query, so a query
     /// never reads a batch half applied.
     fresh: Mutex<FreshState>,
-    /// How many times the index has been asked for.
+    /// How many times the index has been asked for. Each caller's count is
+    /// its turn.
     arrivals: AtomicU64,
-    /// Signalled when [`DirSQL::unlock_index`] releases the index.
+    /// Signalled when [`DirSQL::unlock_index`] releases the index and when
+    /// the turn passes on.
     unlocked: Condvar,
     /// The symlinked directories the index reaches files through. The watcher
     /// reports a change only at the link's target, so each is restated here.
@@ -568,6 +570,14 @@ struct FreshState {
     /// Set by [`DirSQL::lock_index`]: nothing changes the index until
     /// [`DirSQL::unlock_index`].
     locked: bool,
+    /// The turn the index goes to next.
+    serving: u64,
+}
+
+impl FreshState {
+    fn must_wait(&self, turn: u64) -> bool {
+        self.locked || self.serving != turn
+    }
 }
 
 /// The watcher the build keeps, given how starting it went.
@@ -799,12 +809,33 @@ impl DirSQL {
     }
 
     fn unlocked_fresh(&self) -> Result<MutexGuard<'_, FreshState>> {
-        self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
-        let state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
-        self.inner
+        self.take_turn().map_err(DirSqlError::lock)
+    }
+
+    /// The index, in the order it was asked for and once no lock holds it.
+    /// The mutex alone lets the thread that released it take it again ahead
+    /// of one already waiting, so a query could wait through batch after
+    /// batch.
+    fn take_turn(&self) -> LockResult<MutexGuard<'_, FreshState>> {
+        let turn = self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
+        let state = self
+            .inner
+            .fresh
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut state = self
+            .inner
             .unlocked
-            .wait_while(state, |state| state.locked)
-            .map_err(DirSqlError::lock)
+            .wait_while(state, |state| state.must_wait(turn))
+            .unwrap_or_else(PoisonError::into_inner);
+        // Passed on even when poisoned: a turn never passed on would leave
+        // every later caller waiting.
+        state.serving += 1;
+        self.inner.unlocked.notify_all();
+        if self.inner.fresh.is_poisoned() {
+            return Err(PoisonError::new(state));
+        }
+        Ok(state)
     }
 
     /// Hold the index still until the returned guard drops. A watch batch
@@ -1011,16 +1042,7 @@ impl DirSQL {
 
     /// The index, once no lock holds it.
     fn hold_index(&self) -> MutexGuard<'_, FreshState> {
-        self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
-        let fresh = self
-            .inner
-            .fresh
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.inner
-            .unlocked
-            .wait_while(fresh, |state| state.locked)
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.take_turn().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn apply_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
@@ -8470,6 +8492,56 @@ mod internal_tests {
         row_names(&db);
         db.apply_file_events(Vec::new());
         assert_eq!(db.index_arrivals(), before + 2);
+    }
+
+    #[test]
+    fn a_caller_waits_while_the_index_is_locked_or_the_turn_is_not_its_own() {
+        let state = |locked, serving| FreshState { locked, serving };
+        assert!(!state(false, 3).must_wait(3));
+        assert!(state(true, 3).must_wait(3));
+        assert!(state(false, 3).must_wait(4));
+        assert!(state(false, 4).must_wait(3));
+    }
+
+    #[test]
+    fn the_index_goes_to_callers_in_the_order_they_asked() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        let held = db.hold_index();
+        let order = Mutex::new(Vec::new());
+        thread::scope(|scope| {
+            for caller in 1..=3 {
+                let (db, order) = (&db, &order);
+                scope.spawn(move || {
+                    let _held = db.hold_index();
+                    order.lock().unwrap().push(caller);
+                });
+                while db.index_arrivals() == caller {
+                    thread::yield_now();
+                }
+            }
+            assert_eq!(held.serving, 1);
+            drop(held);
+        });
+        assert_eq!(order.into_inner().unwrap(), vec![1, 2, 3]);
+        assert_eq!(db.inner.fresh.lock().unwrap().serving, 4);
+    }
+
+    #[test]
+    fn a_poisoned_index_fails_each_query_and_still_passes_the_turn_on() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        let poisoner = db.clone();
+        let _ = thread::spawn(move || {
+            let _held = poisoner.hold_index();
+            panic!("poison the index");
+        })
+        .join();
+        for _ in 0..2 {
+            assert!(matches!(
+                db.query("SELECT name FROM items"),
+                Err(DirSqlError::Lock(_))
+            ));
+        }
+        assert_eq!(db.hold_index().serving, 4);
     }
 
     #[test]
