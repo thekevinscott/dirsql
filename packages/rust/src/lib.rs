@@ -36,6 +36,8 @@ mod listing;
 mod long_path;
 #[doc(hidden)]
 pub mod matcher;
+#[cfg(not(target_os = "linux"))]
+mod notify_watch;
 mod on_file;
 mod params;
 #[doc(hidden)]
@@ -80,13 +82,13 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::{Found, scan_directory_reporting};
-use crate::watcher::{FileEvent, WatchScope, Watcher};
+use crate::watcher::{FileEvent, WatchFault, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard,
+    Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -148,6 +150,17 @@ pub struct OnFileFailure {
     pub path: String,
     /// The hook's error, as rendered by its `Display`.
     pub message: String,
+}
+
+/// An error the OS reported, which each binding raises as its own native OS
+/// error. Carried inside [`DirSqlError::Io`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct OsError {
+    pub errno: i32,
+    /// The errno's symbolic name, as Node's `code`.
+    pub code: &'static str,
+    pub message: &'static str,
 }
 
 #[derive(Debug, Error)]
@@ -239,6 +252,14 @@ pub enum DirSqlError {
 }
 
 impl DirSqlError {
+    /// The OS error this is, when a binding should raise its native one.
+    pub fn os_error(&self) -> Option<&OsError> {
+        match self {
+            Self::Io(e) => e.get_ref()?.downcast_ref(),
+            _ => None,
+        }
+    }
+
     fn lock(e: impl std::fmt::Display) -> Self {
         DirSqlError::Lock(e.to_string())
     }
@@ -441,6 +462,12 @@ impl Table {
     }
 }
 
+/// Where the applier hands each applied batch's row events.
+enum Sink {
+    Stream(UnboundedSender<RowEvent>),
+    Poll(std::sync::mpsc::Sender<Vec<RowEvent>>),
+}
+
 struct DirSqlInner {
     db: Mutex<Db>,
     root: PathBuf,
@@ -458,6 +485,7 @@ struct DirSqlInner {
     /// The watch batches a foreign key rejected, replayed with every later
     /// batch until one lands them.
     held: Mutex<Held>,
+    fault: OnceLock<WatchFault>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Arc<Watcher>>>,
@@ -467,21 +495,25 @@ struct DirSqlInner {
     /// Locks out [`DirSQL::poll_events`] once [`DirSQL::watch`] has spawned
     /// its background thread.
     watch_thread_started: AtomicBool,
+    /// Where the row events of each applied batch go: to [`DirSQL::watch`]'s
+    /// stream or to [`DirSQL::poll_events`], whichever attached.
+    stream: Mutex<Option<Sink>>,
+    /// The batches delivered for [`DirSQL::poll_events`] to return.
+    polled: Mutex<Option<std::sync::mpsc::Receiver<Vec<RowEvent>>>>,
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
-    /// Whether a query first applies the events the watcher has queued. Off
-    /// where a query cannot run `on_file` on its own thread.
-    query_applies_events: AtomicBool,
-    /// Held across every change to the index, so a query's apply and a watch
-    /// batch never interleave and their events reach consumers in the order
-    /// they were applied.
+    /// Held across every change to the index and every query, so a query
+    /// never reads a batch half applied.
     fresh: Mutex<FreshState>,
     /// Signalled when [`DirSQL::unlock_index`] releases the index.
     unlocked: Condvar,
     /// The symlinked directories the index reaches files through. The watcher
     /// reports a change only at the link's target, so each is restated here.
     links: Mutex<Vec<Link>>,
+    /// The error of each file, by table and path, whose hook or rows failed
+    /// after the build. Every query raises the first while any stands.
+    failed_files: Mutex<BTreeMap<(String, String), String>>,
 }
 
 /// A symlinked directory at `path`, under a watch anchor, resolving to
@@ -509,7 +541,7 @@ impl Link {
             FileEvent::Created(p) => (p, FileEvent::Created),
             FileEvent::Modified(p) => (p, FileEvent::Modified),
             FileEvent::Deleted(p) => (p, FileEvent::Deleted),
-            FileEvent::Rescan => return None,
+            FileEvent::Rescan | FileEvent::Fault(_) => return None,
         };
         match path.strip_prefix(&self.target) {
             Ok(rest) => Some(kind(self.path.join(rest))),
@@ -531,11 +563,41 @@ struct Held {
 
 #[derive(Default)]
 struct FreshState {
-    /// Row events a query's apply produced, for the next watch batch.
-    outbox: Vec<RowEvent>,
     /// Set by [`DirSQL::lock_index`]: nothing changes the index until
     /// [`DirSQL::unlock_index`].
     locked: bool,
+}
+
+/// The watcher the build keeps, given how starting it went.
+fn watcher_at_build<W>(started: std::result::Result<W, notify::Error>) -> Result<Option<W>> {
+    match started {
+        Ok(watcher) => Ok(Some(watcher)),
+        Err(e) if watcher::is_not_found(&e) => Ok(None),
+        Err(e) => match WatchFault::of(&e) {
+            WatchFault::Limit => Err((&WatchFault::Limit).into()),
+            _ => Err(DirSqlError::watch(e)),
+        },
+    }
+}
+
+impl From<&WatchFault> for DirSqlError {
+    fn from(fault: &WatchFault) -> Self {
+        match fault {
+            // What watchdog raises, so each binding raises its own OS error.
+            WatchFault::Limit => Self::Io(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                OsError {
+                    errno: 28,
+                    code: "ENOSPC",
+                    message: "inotify watch limit reached",
+                },
+            )),
+            WatchFault::Overflow => Self::watch_msg(
+                "the OS dropped file events, so the index no longer matches the files; rebuild it",
+            ),
+            WatchFault::Failed(message) => Self::watch_msg(message.clone()),
+        }
+    }
 }
 
 /// [`watch_scopes`] before the build has canonicalized each anchor.
@@ -710,24 +772,6 @@ impl DirSQL {
         db.query_ordered_until(sql, cancelled).map_err(map_db_error)
     }
 
-    /// Stop queries applying the watcher's queued events themselves, for a
-    /// caller whose queries run where `on_file` cannot be called; it calls
-    /// [`apply_queued_events`](Self::apply_queued_events) first, on the
-    /// thread that can.
-    #[doc(hidden)]
-    pub fn set_query_applies_events(&self, on: bool) {
-        self.inner.query_applies_events.store(on, Ordering::SeqCst);
-    }
-
-    /// Apply every event the watcher has queued, holding their row events
-    /// for the next watch batch.
-    #[doc(hidden)]
-    pub fn apply_queued_events(&self) -> Result<()> {
-        let mut state = self.unlocked_fresh()?;
-        self.apply_queued(&mut state);
-        Ok(())
-    }
-
     /// Hold the index still until [`unlock_index`](Self::unlock_index): no
     /// query reads the disk and no watch batch applies until then. Waits for
     /// a read or batch already in progress, and for another holder.
@@ -753,16 +797,17 @@ impl DirSQL {
             .map_err(DirSqlError::lock)
     }
 
-    /// Hold the index still until the returned guard drops, first applying
-    /// the events the watcher has queued. A watch batch releases the database
-    /// between statements inside its transaction, so a query that took only
-    /// the database could read it half applied. Raises the violation of a
-    /// held batch while one stands.
+    /// Hold the index still until the returned guard drops. A watch batch
+    /// releases the database between statements inside its transaction, so a
+    /// query that took only the database could read it half applied. Raises
+    /// a watcher fault, else a failing file's error, else the violation of a
+    /// held batch.
     fn refresh(&self) -> Result<MutexGuard<'_, FreshState>> {
-        let mut state = self.unlocked_fresh()?;
-        if self.inner.query_applies_events.load(Ordering::SeqCst) {
-            self.apply_queued(&mut state);
+        let state = self.unlocked_fresh()?;
+        if let Some(fault) = self.inner.fault.get() {
+            return Err(fault.into());
         }
+        self.raise_failed_file()?;
         if let Some(violation) = self
             .inner
             .held
@@ -776,13 +821,44 @@ impl DirSQL {
         Ok(state)
     }
 
-    /// Apply the watcher's queued events until none are left, then check
-    /// foreign keys once. A new directory's listing can find a child whose
-    /// parent's event is still queued, so nothing is judged before then.
-    fn apply_queued(&self, state: &mut FreshState) {
-        let events = self.queued_file_events();
-        let out = self.apply_events(events, || self.queued_file_events());
-        state.outbox.extend(out);
+    /// The first file failing since the build, as the error the build would
+    /// have raised for it.
+    fn raise_failed_file(&self) -> Result<()> {
+        let failed = self.inner.failed_files.lock().map_err(DirSqlError::lock)?;
+        match failed.iter().next() {
+            Some(((table, path), message)) => Err(DirSqlError::OnFile {
+                table: table.clone(),
+                path: path.clone(),
+                message: message.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Record `table`'s read of `rel_path`: a failure stands until a later
+    /// read of the file succeeds or the file leaves.
+    fn record_read(&self, table: &str, rel_path: &str, failure: Option<&str>) {
+        let Ok(mut failed) = self.inner.failed_files.lock() else {
+            return;
+        };
+        let key = (table.to_string(), rel_path.to_string());
+        match failure {
+            Some(message) => {
+                failed.insert(key, message.to_string());
+            }
+            None => {
+                failed.remove(&key);
+            }
+        }
+    }
+
+    /// Forget the failures of `table`'s files at or beneath `rel_path`.
+    fn forget_failures_under(&self, table: &str, rel_path: &str) {
+        let Ok(mut failed) = self.inner.failed_files.lock() else {
+            return;
+        };
+        let below = format!("{rel_path}/");
+        failed.retain(|(t, path), _| t != table || (path != rel_path && !path.starts_with(&below)));
     }
 
     /// The directory the index is rooted at: where path-tables resolve.
@@ -867,55 +943,31 @@ impl DirSQL {
         watch_scopes(&self.inner.groups)
     }
 
-    /// Poll-based watch API. Blocks up to `timeout` waiting for the next
-    /// filesystem event, then drains any additional events that arrived during
-    /// processing, applying all of them to the ephemeral database. Returns the
-    /// batch of [`RowEvent`]s produced (possibly empty). Safe to call in a
-    /// loop.
+    /// Poll-based watch API. The first call attaches, as [`watch`](Self::watch)
+    /// does; each call returns the [`RowEvent`]s of every change applied since
+    /// the previous one, blocking up to `timeout` while there are none.
+    /// Returns an empty batch if none arrive in time. Safe to call in a loop.
     ///
     /// Mutually exclusive with [`watch`](Self::watch): calling `watch` after
-    /// `poll_events` (or vice versa) returns an error, because both would
-    /// drain the same underlying filesystem watcher.
+    /// `poll_events` (or vice versa) returns an error, because each would
+    /// take the other's changes.
     pub fn poll_events(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
-        if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::watch_msg(
-                "watch() is active; cannot mix with poll_events()",
-            ));
-        }
-        self.inner.poll_used.store(true, Ordering::SeqCst);
-        self.attach_watcher()?;
-        self.poll_once(timeout)
-    }
-
-    /// Split-phase wait helper used by async bindings that cannot safely
-    /// invoke the `on_file` callback off the host thread (e.g. the napi-rs
-    /// TypeScript binding, where JS callbacks must run on the main JS
-    /// thread). Blocks up to `timeout` for raw file events and returns them
-    /// unprocessed. Pair with [`apply_file_events`](Self::apply_file_events)
-    /// to finish the pipeline on the correct thread.
-    #[doc(hidden)]
-    pub fn wait_file_events(&self, timeout: Duration) -> Result<Vec<FileEvent>> {
-        if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::watch_msg(
-                "watch() is active; cannot mix with poll_events()",
-            ));
-        }
-        self.inner.poll_used.store(true, Ordering::SeqCst);
-        self.attach_watcher()?;
-        let watcher = self.live_watcher()?;
-        let mut events = Vec::new();
-        if let Some(first) = watcher.recv_timeout(timeout) {
-            events.push(first);
-            events.extend(watcher.try_recv_all());
-        }
+        self.attach_poll()?;
+        let polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        let Some(rx) = polled.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let Ok(mut events) = rx.recv_timeout(timeout) else {
+            return Ok(Vec::new());
+        };
+        events.extend(rx.try_iter().flatten());
         Ok(events)
     }
 
-    /// Block up to `timeout` until the watcher holds an event, taking none:
-    /// [`poll_events`](Self::poll_events) with a zero timeout then applies
-    /// them, on a thread where `on_file` can be called.
+    /// Attach as [`poll_events`](Self::poll_events)' first call does, without
+    /// waiting: changes applied from here on reach the next `poll_events`.
     #[doc(hidden)]
-    pub fn wait_for_events(&self, timeout: Duration) -> Result<()> {
+    pub fn attach_poll(&self) -> Result<()> {
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "watch() is active; cannot mix with poll_events()",
@@ -923,64 +975,50 @@ impl DirSQL {
         }
         self.inner.poll_used.store(true, Ordering::SeqCst);
         self.attach_watcher()?;
-        self.live_watcher()?.wait(timeout);
+        let mut polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        if polled.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Poll(tx));
+            *polled = Some(rx);
+        }
         Ok(())
     }
 
-    fn live_watcher(&self) -> Result<Arc<Watcher>> {
-        self.inner
-            .watcher
-            .lock()
-            .map_err(DirSqlError::lock)?
-            .clone()
-            .ok_or_else(|| DirSqlError::watch_msg("watcher not started"))
-    }
-
     /// Apply a batch of raw file events through the on_file/DB update
-    /// pipeline. Counterpart to [`wait_file_events`](Self::wait_file_events).
-    /// Runs the `on_file` callback inline, so the caller must invoke this on
-    /// a thread where that callback is safe to call (the JS main thread for
-    /// the TypeScript binding).
+    /// pipeline.
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
-        self.apply_file_events_draining(|| events, Vec::new)
+        let _fresh = self.hold_index();
+        self.apply_events(events)
     }
 
-    /// [`apply_file_events`](Self::apply_file_events), asking `late` for events
-    /// that arrived while the batch was being routed, until it returns none,
-    /// before any per-table hook runs. One write reaches the watcher as
-    /// several events; a hook run for the first would run again for the rest.
-    fn apply_file_events_draining(
-        &self,
-        events: impl FnOnce() -> Vec<FileEvent>,
-        late: impl FnMut() -> Vec<FileEvent>,
-    ) -> Vec<RowEvent> {
+    /// Apply the watcher's queued events and hand them to the attached
+    /// stream before a query can read them.
+    fn apply_and_deliver(&self) {
+        let _fresh = self.hold_index();
+        self.deliver(self.apply_events(self.queued_file_events()));
+    }
+
+    /// The index, once no lock holds it.
+    fn hold_index(&self) -> MutexGuard<'_, FreshState> {
         let fresh = self
             .inner
             .fresh
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut fresh = self
-            .inner
+        self.inner
             .unlocked
             .wait_while(fresh, |state| state.locked)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut out = std::mem::take(&mut fresh.outbox);
-        out.extend(self.apply_events(events(), late));
-        out
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn apply_events(
-        &self,
-        events: Vec<FileEvent>,
-        mut late: impl FnMut() -> Vec<FileEvent>,
-    ) -> Vec<RowEvent> {
+    fn apply_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
         if events.is_empty() {
             return Vec::new();
         }
         let held = self.take_held();
         if held.is_empty() {
-            return match self.apply_batch(events, &mut late) {
+            return match self.apply_batch(events) {
                 Ok(out) => out,
                 Err(rejected) => {
                     self.hold(rejected.events, rejected.violation);
@@ -992,14 +1030,13 @@ impl DirSQL {
         // they go first, together. When they still can't land, this batch
         // is tried alone, so a change elsewhere is not held up behind them.
         let held_len = held.len();
-        let mut rejected =
-            match self.apply_batch(held.into_iter().chain(events).collect(), &mut late) {
-                Ok(out) => return out,
-                Err(rejected) => rejected,
-            };
+        let mut rejected = match self.apply_batch(held.into_iter().chain(events).collect()) {
+            Ok(out) => return out,
+            Err(rejected) => rejected,
+        };
         let fresh = rejected.events.split_off(held_len);
         self.hold(rejected.events, rejected.violation);
-        match self.apply_batch(fresh, &mut Vec::new) {
+        match self.apply_batch(fresh) {
             Ok(out) => rejected
                 .errors
                 .split_off(rejected.errors.len() - 1)
@@ -1013,17 +1050,16 @@ impl DirSQL {
         }
     }
 
-    /// Apply `events`, and those `late` reports while they are routed, in one
-    /// transaction whose foreign keys are checked at its end.
+    /// Apply `events` in one transaction whose foreign keys are checked at its
+    /// end.
     fn apply_batch(
         &self,
         events: Vec<FileEvent>,
-        late: &mut impl FnMut() -> Vec<FileEvent>,
     ) -> std::result::Result<Vec<RowEvent>, RejectedBatch> {
         if let Err(e) = self.with_db(|db| Ok(foreign_key::begin(db.conn())?)) {
             return Ok(vec![batch_error(e)]);
         }
-        let (out, applied) = self.route_batch(events, late);
+        let (out, applied) = self.route_batch(events);
         match self.with_db(|db| foreign_key::commit(db.conn())) {
             Ok(()) => Ok(out),
             Err(e) => {
@@ -1042,37 +1078,42 @@ impl DirSQL {
         }
     }
 
-    /// Route `events`, and those `late` reports while they are routed, into
-    /// the open transaction. Returns the row events and every file event
-    /// routed.
-    fn route_batch(
-        &self,
-        events: Vec<FileEvent>,
-        late: &mut impl FnMut() -> Vec<FileEvent>,
-    ) -> (Vec<RowEvent>, Vec<FileEvent>) {
+    /// Route `events` into the open transaction. Returns the row events and
+    /// every file event routed.
+    fn route_batch(&self, events: Vec<FileEvent>) -> (Vec<RowEvent>, Vec<FileEvent>) {
         let mut applied = Vec::new();
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         let mut rescan = false;
-        let mut batch = events;
-        while !batch.is_empty() {
-            for fe in batch {
-                applied.push(fe.clone());
-                if fe == FileEvent::Rescan {
+        for fe in events {
+            applied.push(fe.clone());
+            match fe {
+                FileEvent::Rescan => {
+                    self.record_fault(WatchFault::Overflow);
                     rescan = true;
                     continue;
                 }
-                for fe in self.through_links(fe) {
-                    out.extend(self.route_file_event(fe, &mut pending));
+                FileEvent::Fault(fault) => {
+                    self.record_fault(fault);
+                    continue;
                 }
+                _ => {}
             }
-            batch = late();
+            for fe in self.through_links(fe) {
+                out.extend(self.route_file_event(fe, &mut pending));
+            }
         }
         if rescan {
             out.extend(self.rescan(&mut pending));
         }
         out.extend(self.refresh_pending(pending));
         (out, applied)
+    }
+
+    /// The watcher has stopped seeing every change: from now on, every query
+    /// fails with the first such fault.
+    fn record_fault(&self, fault: WatchFault) {
+        let _ = self.inner.fault.set(fault);
     }
 
     /// Keep `events` to replay with the next batch, once per path. The
@@ -1112,7 +1153,7 @@ impl DirSQL {
                         FileEvent::Deleted(p)
                     }
                 }
-                FileEvent::Rescan => FileEvent::Rescan,
+                other @ (FileEvent::Rescan | FileEvent::Fault(_)) => other,
             };
             if !restated.contains(&event) {
                 restated.push(event);
@@ -1126,8 +1167,8 @@ impl DirSQL {
         Ok(f(&db)?)
     }
 
-    /// Channel-based watch API. Spawns a background thread that pushes
-    /// [`RowEvent`]s into the returned stream. Intended for long-running Rust
+    /// Channel-based watch API. The returned stream receives the [`RowEvent`]s
+    /// of every change applied from now on. Intended for long-running Rust
     /// consumers (e.g. a CLI `watch` command). Can only be called once per
     /// `DirSQL` instance.
     ///
@@ -1145,18 +1186,27 @@ impl DirSQL {
         self.attach_watcher()?;
 
         let (tx, rx) = unbounded();
-        let this = self.clone();
-        thread::spawn(move || run_channel_loop(this, tx));
+        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Stream(tx));
         Ok(rx)
     }
 
-    /// Wait for the watcher to hold an event, then take and apply them under
-    /// the index lock, so a query never runs while events this poll took are
-    /// still unapplied.
-    fn poll_once(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
-        self.live_watcher()?.wait(timeout);
-        Ok(self
-            .apply_file_events_draining(|| self.queued_file_events(), || self.queued_file_events()))
+    /// Hand `events` to the stream [`watch`](Self::watch) attached. Changes
+    /// applied before it attached reach no stream.
+    fn deliver(&self, events: Vec<RowEvent>) {
+        let Ok(mut stream) = self.inner.stream.lock() else {
+            return;
+        };
+        let delivered = match stream.as_ref() {
+            None => return,
+            Some(_) if events.is_empty() => return,
+            Some(Sink::Stream(tx)) => events
+                .into_iter()
+                .all(|event| tx.unbounded_send(event).is_ok()),
+            Some(Sink::Poll(tx)) => tx.send(events).is_ok(),
+        };
+        if !delivered {
+            *stream = None;
+        }
     }
 
     /// The events the watcher already holds, without waiting for more.
@@ -1182,7 +1232,7 @@ impl DirSQL {
     fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
-            FileEvent::Rescan => return Vec::new(),
+            FileEvent::Rescan | FileEvent::Fault(_) => return Vec::new(),
         };
         let mut events = Vec::new();
         for (group, rel_path_buf) in self.groups_containing(&abs_path) {
@@ -1232,7 +1282,7 @@ impl DirSQL {
                     FileEvent::Created(_) | FileEvent::Modified(_) => {
                         events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                     }
-                    FileEvent::Rescan => {}
+                    FileEvent::Rescan | FileEvent::Fault(_) => {}
                 }
             }
             // The mirror of the walk above: a directory that leaves the tree
@@ -1438,6 +1488,9 @@ impl DirSQL {
     ) -> Vec<RowEvent> {
         let prefix = format!("{rel_dir}/");
         let in_group = |table: &str| group.tables.iter().any(|name| name == table);
+        for table in &group.tables {
+            self.forget_failures_under(table, rel_dir);
+        }
         if let Ok(mut batch_files) = self.inner.batch_files.lock() {
             for (table, files) in batch_files.iter_mut() {
                 if in_group(table) && files.iter().any(|file| file.starts_with(&prefix)) {
@@ -1470,6 +1523,9 @@ impl DirSQL {
     /// each group's root again, drop the rows of files that are gone, re-read
     /// the files that are there, and rebuild each per-table hook's file list.
     fn rescan(&self, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+        if let Ok(mut failed) = self.inner.failed_files.lock() {
+            failed.clear();
+        }
         let owned = match self.inner.db.lock() {
             Ok(db) => db.owned_files(),
             Err(e) => return vec![error_event(None, "", e.to_string())],
@@ -1553,6 +1609,7 @@ impl DirSQL {
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
+        self.forget_failures_under(table, rel_path);
         // Snapshot the file's rows before deleting them — the Delete events
         // carry the old-row payloads. Read and delete under one lock
         // acquisition so a concurrent event for the same file can't
@@ -1590,25 +1647,46 @@ impl DirSQL {
         rel_path: &str,
         report_parse_error: bool,
     ) -> Vec<RowEvent> {
+        match self.read_file_rows(table, abs_path, rel_path, report_parse_error) {
+            Ok(events) => {
+                self.record_read(table, rel_path, None);
+                events
+            }
+            Err(message) => {
+                self.record_read(table, rel_path, Some(&message));
+                vec![error_event(Some(table), rel_path, message)]
+            }
+        }
+    }
+
+    /// Run `table`'s hook over the file and write the rows it returns,
+    /// failing with the message of whatever went wrong.
+    fn read_file_rows(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        report_parse_error: bool,
+    ) -> std::result::Result<Vec<RowEvent>, String> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
         // non-files.
         match self.inner.fs.is_file(abs_path) {
             Ok(true) => {}
-            Ok(false) => return Vec::new(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Ok(false) => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
         }
 
         let Some(Hook::PerFile(on_file)) = self.inner.on_file_map.get(table) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
         let raw_rows = match on_file(&abs_path.to_string_lossy()) {
             Ok(r) => r,
-            Err(_) if !report_parse_error => return Vec::new(),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(_) if !report_parse_error => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
         };
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
@@ -1618,11 +1696,11 @@ impl DirSQL {
         // interleave between the read and the write.
         let db = match self.inner.db.lock() {
             Ok(g) => g,
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(e) => return Err(e.to_string()),
         };
         let new_rows = match db.shape_value_rows(table, raw_rows, strict) {
             Ok(rows) => rows,
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            Err(e) => return Err(e.to_string()),
         };
         let applied = foreign_key::atomically(db.conn(), || -> db::Result<_> {
             if let Some(changes) = db.reconcile_file_rows(table, rel_path, &new_rows)? {
@@ -1647,7 +1725,7 @@ impl DirSQL {
                 rel_path,
             ))
         });
-        applied.unwrap_or_else(|e| vec![error_event(Some(table), rel_path, e.to_string())])
+        applied.map_err(|e| e.to_string())
     }
 
     pub(crate) fn build_from_resolved(resolved: ResolvedBuild) -> Result<Self> {
@@ -1772,11 +1850,11 @@ impl DirSQL {
             (HashMap::new(), Vec::new())
         };
         // A watcher that cannot start yet (an anchor not created) does not
-        // fail the build; watching starts it, or surfaces why it cannot.
+        // fail the build; watching starts it.
         let watcher = if table_names.is_empty() {
             None
         } else {
-            Watcher::scoped(build_watch_scopes(&groups)).ok()
+            watcher_at_build(Watcher::scoped(build_watch_scopes(&groups)))?
         };
         let (scanned, fresh_db) = if table_names.is_empty() {
             let fresh_db = if persist_ctx.is_none() {
@@ -1901,7 +1979,19 @@ impl DirSQL {
     /// run. For the napi-rs binding that is the JS main thread.
     #[doc(hidden)]
     pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
-        Self::finish_build_with_fs(prepared, Arc::new(RealFs), Progress::indexing())
+        let built = Self::finish_build_with_fs(prepared, Arc::new(RealFs), Progress::indexing())?;
+        built.start_applier();
+        Ok(built)
+    }
+
+    /// Apply the watcher's events on a thread of the instance's own, from now
+    /// until it is dropped.
+    fn start_applier(&self) {
+        if self.inner.groups.is_empty() {
+            return;
+        }
+        let inner = Arc::downgrade(&self.inner);
+        thread::spawn(move || run_applier(inner));
     }
 
     /// Variant of [`finish_build`] taking the [`FileSystem`] to store on the
@@ -2198,27 +2288,29 @@ impl DirSQL {
                 declared,
                 batch_files: Mutex::new(batch_files),
                 held: Mutex::new(Held::default()),
+                fault: OnceLock::new(),
                 scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
+                stream: Mutex::new(None),
+                polled: Mutex::new(None),
                 poll_interval,
                 fs,
-                query_applies_events: AtomicBool::new(true),
                 fresh: Mutex::new(FreshState::default()),
                 unlocked: Condvar::new(),
                 links: Mutex::new(links),
+                failed_files: Mutex::new(BTreeMap::new()),
             }),
         };
         built.apply_queued_at_build()?;
         Ok(built)
     }
 
-    /// Apply what the watcher queued while the build walked, inside the
+    /// Apply what the watcher queued while the build walked, once, inside the
     /// build's transaction, then commit it with one foreign-key check.
     fn apply_queued_at_build(&self) -> Result<()> {
-        let (out, _) =
-            self.route_batch(self.queued_file_events(), &mut || self.queued_file_events());
+        let (out, _) = self.route_batch(self.queued_file_events());
         if let Some(RowEvent::Error {
             table,
             file_path,
@@ -3282,26 +3374,36 @@ fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     }
 }
 
-fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
-    let interval = db.inner.poll_interval;
+/// Apply the watcher's events as they arrive, for as long as the instance
+/// lives.
+fn run_applier(inner: Weak<DirSqlInner>) {
     loop {
-        match db.poll_once(interval) {
-            Ok(events) => {
-                for event in events {
-                    if tx.unbounded_send(event).is_err() {
-                        return;
-                    }
-                }
-            }
+        let Some(db) = inner.upgrade().map(|inner| DirSQL { inner }) else {
+            return;
+        };
+        let watcher = match db.inner.watcher.lock() {
+            Ok(guard) => guard.clone(),
             Err(e) => {
-                let _ = tx.unbounded_send(RowEvent::Error {
+                db.deliver(vec![RowEvent::Error {
                     table: None,
                     file_path: db.inner.root.clone(),
-                    error: e.to_string(),
-                });
+                    error: DirSqlError::lock(e).to_string(),
+                }]);
                 return;
             }
+        };
+        let interval = db.inner.poll_interval;
+        // Held through the wait, the instance would outlive its last handle,
+        // and dropping that handle would not close the database.
+        drop(db);
+        match watcher {
+            Some(watcher) => watcher.wait(interval),
+            None => thread::sleep(interval),
         }
+        let Some(db) = inner.upgrade().map(|inner| DirSQL { inner }) else {
+            return;
+        };
+        db.apply_and_deliver();
     }
 }
 
@@ -3559,6 +3661,16 @@ struct AsyncDirSqlInner {
 #[cfg(test)]
 fn generic_watch_error(message: &str) -> notify::Error {
     notify::Error::generic(message)
+}
+
+#[cfg(test)]
+fn max_files_watch_error() -> notify::Error {
+    notify::Error::new(notify::ErrorKind::MaxFilesWatch)
+}
+
+#[cfg(test)]
+fn path_not_found_error() -> notify::Error {
+    notify::Error::path_not_found()
 }
 
 #[cfg(test)]
@@ -4618,6 +4730,16 @@ mod internal_tests {
         names
     }
 
+    fn await_row_names(db: &DirSQL, expected: &[&str]) {
+        for _ in 0..1000 {
+            if row_names(db) == expected {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(row_names(db), expected);
+    }
+
     fn deleted_paths(events: &[RowEvent]) -> Vec<String> {
         assert!(
             events.iter().all(|e| matches!(e, RowEvent::Delete { .. })),
@@ -4710,6 +4832,22 @@ mod internal_tests {
         db.delete_subtree(group, "moved", &mut pending);
 
         assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+    }
+
+    #[test]
+    fn delete_subtree_forgets_the_failures_of_this_groups_tables_beneath_it() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        let tables = vec![anchored_table("held", "*.txt", "/one")];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        db.record_read("held", "moved/x", Some("broken"));
+        db.record_read("foreign", "moved/z", Some("broken"));
+
+        db.delete_subtree(&groups[0], "moved", &mut PendingRefresh::default());
+
+        assert_eq!(
+            failing_paths(&db),
+            vec![("foreign".to_string(), "moved/z".to_string())]
+        );
     }
 
     fn found_at(root: &Path, path: &Path, table: &str) -> Found {
@@ -5197,10 +5335,10 @@ mod internal_tests {
     }
 
     #[test]
-    fn poll_once_surfaces_lock_poison() {
+    fn poll_events_surfaces_lock_poison() {
         let (_dir, db) = simple_db();
-        poison(&db.inner.watcher);
-        let err = db.poll_once(Duration::from_millis(0)).unwrap_err();
+        poison(&db.inner.polled);
+        let err = db.poll_events(Duration::from_millis(0)).unwrap_err();
         assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
@@ -5371,18 +5509,49 @@ mod internal_tests {
     }
 
     #[test]
-    fn run_channel_loop_emits_error_event_on_poll_failure() {
+    fn run_applier_reports_a_failure_to_the_stream_and_stops() {
         let (_dir, db) = simple_db();
+        let mut rx = db.watch().unwrap();
         poison(&db.inner.watcher);
 
-        let (tx, mut rx) = unbounded();
-        run_channel_loop(db, tx);
+        run_applier(Arc::downgrade(&db.inner));
 
         let event = rx.try_recv().expect("expected an error event");
         let dbg = format!("{event:?}");
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
         assert!(dbg.contains("failed to lock"), "expected lock text: {dbg}");
-        assert!(rx.try_recv().is_err(), "loop should have ended");
+    }
+
+    #[test]
+    fn run_applier_ends_once_the_instance_is_dropped() {
+        let (_dir, db) = simple_db();
+        let inner = Arc::downgrade(&db.inner);
+        drop(db);
+        run_applier(inner);
+    }
+
+    #[test]
+    fn deliver_without_a_stream_drops_the_events() {
+        let (_dir, db) = simple_db();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+        assert!(db.inner.stream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn deliver_hands_no_empty_batch_to_poll_events() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(Vec::new());
+        let polled = db.inner.polled.lock().unwrap();
+        assert!(polled.as_ref().unwrap().try_recv().is_err());
+    }
+
+    #[test]
+    fn deliver_detaches_a_stream_whose_receiver_is_gone() {
+        let (_dir, db) = simple_db();
+        drop(db.watch().unwrap());
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+        assert!(db.inner.stream.lock().unwrap().is_none());
     }
 
     #[test]
@@ -5518,30 +5687,24 @@ mod internal_tests {
     }
 
     #[test]
-    fn wait_file_events_returns_empty_batch_without_activity() {
-        let (_dir, db) = simple_db();
-        assert!(
-            db.wait_file_events(Duration::from_millis(0))
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn watch_locks_out_the_poll_apis() {
+    fn watch_locks_out_poll_events() {
         let (_dir, db) = simple_db();
         let _stream = db.watch().unwrap();
         let e1 = db.poll_events(Duration::from_millis(0)).unwrap_err();
         assert!(e1.to_string().contains("watch() is active"), "got: {e1}");
-        let e2 = db.wait_file_events(Duration::from_millis(0)).unwrap_err();
-        assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
-        let e3 = db.wait_for_events(Duration::from_millis(0)).unwrap_err();
-        assert!(e3.to_string().contains("watch() is active"), "got: {e3}");
     }
 
     #[test]
     fn queued_file_events_hands_over_what_the_watcher_holds_without_waiting() {
-        let (dir, db) = simple_db();
+        let dir = TempDir::new().unwrap();
+        let table = Table::new("t", "CREATE TABLE t (x TEXT)", "*.none", |_| vec![]);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![table],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
+        )
+        .unwrap();
         std::fs::write(dir.path().join("a.none"), "x").unwrap();
         let mut held = Vec::new();
         while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
@@ -5621,7 +5784,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
         std::fs::write(&abs, "Alpha").unwrap();
-        let db = DirSQL::new(
+        let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
                 "items",
@@ -5637,6 +5800,8 @@ mod internal_tests {
                     ])]
                 },
             )],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
         )
         .unwrap();
         std::fs::write(&abs, "Renamed").unwrap();
@@ -7254,32 +7419,6 @@ mod internal_tests {
     }
 
     #[test]
-    fn events_arriving_while_a_batch_is_routed_share_its_per_table_rerun() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().to_path_buf();
-        let a = root.join("a.txt");
-        let b = root.join("b.txt");
-        let fake = FakeFs::default().with_subtree(
-            root.clone(),
-            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
-        );
-        let (items, calls) = recording_per_table("items", "**/*.txt");
-        let db =
-            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(fake))
-                .unwrap();
-
-        let mut arrivals = vec![vec![FileEvent::Modified(b.clone())]];
-        let events = db.apply_file_events_draining(
-            || vec![FileEvent::Created(a.clone())],
-            || arrivals.pop().unwrap_or_default(),
-        );
-
-        assert_eq!(*calls.lock().unwrap(), vec![vec![a, b]]);
-        assert_eq!(events.len(), 2);
-        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
-    }
-
-    #[test]
     fn apply_file_events_refreshes_a_per_table_hook_without_walking_the_tree() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
@@ -7557,6 +7696,16 @@ mod internal_tests {
     }
 
     #[test]
+    fn a_rescan_forgets_the_failures_it_reads_again() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+        db.record_read("items", "gone.txt", Some("broken"));
+
+        db.apply_file_events(vec![FileEvent::Rescan]);
+
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
+    #[test]
     fn a_rescan_reconciles_a_per_file_table_with_the_tree() {
         let (_dir, root, db, _) = rescan_fixture(false);
         drift(&root);
@@ -7567,7 +7716,7 @@ mod internal_tests {
             rescan_summary(&events),
             vec!["delete a.txt", "insert c.txt", "insert d.txt"]
         );
-        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+        assert_eq!(stored_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
     }
 
     #[test]
@@ -7592,13 +7741,97 @@ mod internal_tests {
                 "insert c.txt"
             ]
         );
-        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+        assert_eq!(stored_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
     }
 
     #[test]
     fn a_rescan_of_a_tree_that_did_not_drift_emits_nothing() {
         let (_dir, _root, db, _) = rescan_fixture(false);
         assert_eq!(db.apply_file_events(vec![FileEvent::Rescan]), vec![]);
+    }
+
+    fn two_query_errors(db: &DirSQL) -> Vec<DirSqlError> {
+        (0..2)
+            .map(|_| match db.query("SELECT name FROM items") {
+                Ok(rows) => panic!("the query returned {rows:?}"),
+                Err(e) => e,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_overflow_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Rescan]);
+
+        for err in two_query_errors(&db) {
+            assert!(matches!(err, DirSqlError::Watch { .. }), "got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn a_directory_over_the_watch_limit_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Fault(WatchFault::Limit)]);
+
+        for err in two_query_errors(&db) {
+            assert_eq!(err.os_error().map(|os| os.errno), Some(28), "got: {err:?}");
+            assert_eq!(err.to_string(), "inotify watch limit reached");
+        }
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_watched_fails_every_query_after_it() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+
+        db.apply_file_events(vec![FileEvent::Fault(WatchFault::Failed(
+            "denied".to_string(),
+        ))]);
+
+        for err in two_query_errors(&db) {
+            assert_eq!(err.to_string(), "watcher error: denied");
+        }
+    }
+
+    #[test]
+    fn a_build_over_the_watch_limit_raises_what_watchdog_raises() {
+        let err = match watcher_at_build::<()>(Err(max_files_watch_error())) {
+            Ok(kept) => panic!("the build kept {kept:?}"),
+            Err(e) => e,
+        };
+        let DirSqlError::Io(io) = &err else {
+            panic!("not an io error: {err:?}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::StorageFull);
+        assert_eq!(
+            err.os_error(),
+            Some(&OsError {
+                errno: 28,
+                code: "ENOSPC",
+                message: "inotify watch limit reached",
+            })
+        );
+        assert_eq!(err.to_string(), "inotify watch limit reached");
+    }
+
+    #[test]
+    fn a_build_whose_watcher_cannot_start_fails_with_the_watch_error() {
+        let err = match watcher_at_build::<()>(Err(generic_watch_error("denied"))) {
+            Ok(kept) => panic!("the build kept {kept:?}"),
+            Err(e) => e,
+        };
+        assert_eq!(err.to_string(), "watcher error: denied");
+    }
+
+    #[test]
+    fn a_build_over_a_missing_anchor_starts_no_watcher() {
+        assert_eq!(
+            watcher_at_build::<()>(Err(path_not_found_error())).unwrap(),
+            None
+        );
+        assert_eq!(watcher_at_build(Ok(7)).unwrap(), Some(7));
     }
 
     fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {
@@ -8026,6 +8259,149 @@ mod internal_tests {
         (table, reads)
     }
 
+    fn stored_names(db: &DirSQL) -> Vec<String> {
+        let guard = db.inner.db.lock().unwrap();
+        let mut stmt = guard.conn().prepare("SELECT name FROM items").unwrap();
+        let mut names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|name| name.unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn failing_paths(db: &DirSQL) -> Vec<(String, String)> {
+        db.inner
+            .failed_files
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn failing_fixture(failing: &[(&str, &str)]) -> DirSQL {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::default()),
+        )
+        .unwrap();
+        for (table, path) in failing {
+            db.record_read(table, path, Some("broken"));
+        }
+        db
+    }
+
+    #[test]
+    fn a_query_raises_the_first_failing_file_by_table_and_path() {
+        let db = failing_fixture(&[("t", "b.txt"), ("t", "a.txt")]);
+        match db.query("SELECT 1") {
+            Err(DirSqlError::OnFile {
+                table,
+                path,
+                message,
+            }) => {
+                assert_eq!(
+                    (table.as_str(), path.as_str(), message.as_str()),
+                    ("t", "a.txt", "broken")
+                );
+            }
+            other => panic!("expected the hook failure, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_query_succeeds_when_no_file_fails() {
+        let db = failing_fixture(&[]);
+        assert_eq!(db.query("SELECT 1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_successful_read_clears_only_its_own_failure() {
+        let db = failing_fixture(&[("t", "a.txt"), ("t", "b.txt"), ("u", "a.txt")]);
+        db.record_read("t", "a.txt", None);
+        assert_eq!(
+            failing_paths(&db),
+            vec![("t".into(), "b.txt".into()), ("u".into(), "a.txt".into())]
+        );
+    }
+
+    #[test]
+    fn forgetting_failures_under_a_path_keeps_siblings_and_other_tables() {
+        let db = failing_fixture(&[
+            ("t", "d"),
+            ("t", "d/a.txt"),
+            ("t", "d/e/b.txt"),
+            ("t", "dx/c.txt"),
+            ("u", "d/a.txt"),
+        ]);
+        db.forget_failures_under("t", "d");
+        assert_eq!(
+            failing_paths(&db),
+            vec![
+                ("t".into(), "dx/c.txt".into()),
+                ("u".into(), "d/a.txt".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn handle_upsert_records_its_failure_and_a_later_success_clears_it() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let fails = Arc::new(AtomicBool::new(true));
+        let hook_fails = Arc::clone(&fails);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::try_new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                move |_| {
+                    if hook_fails.load(Ordering::SeqCst) {
+                        Err("boom".into())
+                    } else {
+                        Ok(vec![])
+                    }
+                },
+            )],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::with_stat(abs.clone(), fake_stat())),
+        )
+        .unwrap();
+        db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(failing_paths(&db), vec![("items".into(), "a.txt".into())]);
+        fails.store(false, Ordering::SeqCst);
+        db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_file_that_cannot_be_statted_fails_rather_than_reading_as_gone() {
+        let (_dir, root, db, _) = fresh_fixture(&[("f.txt", "one")]);
+        let events = db.handle_upsert("items", &root.join("f.txt/a.txt"), "f.txt/a.txt");
+        assert!(
+            matches!(events.as_slice(), [RowEvent::Error { .. }]),
+            "got: {events:?}"
+        );
+        assert_eq!(
+            failing_paths(&db),
+            vec![("items".to_string(), "f.txt/a.txt".to_string())]
+        );
+    }
+
+    #[test]
+    fn deleting_a_failing_file_clears_its_failure() {
+        let db = failing_fixture(&[("items", "a.txt")]);
+        db.handle_delete("items", "a.txt");
+        assert_eq!(failing_paths(&db), vec![]);
+    }
+
     fn fresh_fixture(files: &[(&str, &str)]) -> (TempDir, PathBuf, DirSQL, Reads) {
         let dir = TempDir::new().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -8043,42 +8419,32 @@ mod internal_tests {
     #[cfg(target_os = "linux")]
     fn a_query_reads_a_file_written_after_the_build() {
         let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "one").unwrap();
-        assert_eq!(row_names(&db), vec!["one"]);
+        await_row_names(&db, &["one"]);
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn a_query_reads_an_edit_to_a_file_the_build_indexed() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "two").unwrap();
-        assert_eq!(row_names(&db), vec!["two"]);
+        await_row_names(&db, &["two"]);
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn a_query_drops_the_rows_of_a_deleted_file() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        db.start_applier();
         std::fs::remove_file(root.join("a.txt")).unwrap();
-        assert_eq!(row_names(&db), vec!["two"]);
-        assert_eq!(row_names(&db), vec!["two"]);
+        await_row_names(&db, &["two"]);
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
-    fn a_query_that_does_not_apply_events_reads_the_index_as_built() {
-        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
-        db.set_query_applies_events(false);
-        std::fs::write(root.join("b.txt"), "two").unwrap();
-        assert_eq!(row_names(&db), vec!["one"]);
-        db.set_query_applies_events(true);
-        assert_eq!(row_names(&db), vec!["one", "two"]);
-    }
-
-    #[test]
-    fn a_query_that_does_not_apply_events_still_holds_the_index_still() {
+    fn a_query_holds_the_index_still() {
         let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
-        db.set_query_applies_events(false);
         let held = db.refresh().unwrap();
         assert!(db.inner.fresh.try_lock().is_err());
         drop(held);
@@ -8103,19 +8469,11 @@ mod internal_tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn apply_queued_events_applies_what_queries_do_not() {
-        let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one")]);
-        db.set_query_applies_events(false);
-        std::fs::write(root.join("b.txt"), "two").unwrap();
-        db.apply_queued_events().unwrap();
-        assert_eq!(row_names(&db), vec!["one", "two"]);
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
     fn query_ordered_and_query_each_read_fresh_rows_too() {
         let (_dir, root, db, _) = fresh_fixture(&[]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "one").unwrap();
+        await_row_names(&db, &["one"]);
         assert_eq!(
             db.query_ordered("SELECT name FROM items")
                 .unwrap()
@@ -8124,6 +8482,7 @@ mod internal_tests {
             1
         );
         std::fs::write(root.join("b.txt"), "two").unwrap();
+        await_row_names(&db, &["one", "two"]);
         let count = db
             .query_each("SELECT name FROM items", |_| 0, |n, _| *n += 1)
             .unwrap();
@@ -8132,54 +8491,29 @@ mod internal_tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn a_file_whose_hook_fails_as_a_query_applies_it_keeps_its_rows_and_reports_the_error() {
+    fn a_file_whose_hook_fails_after_the_build_keeps_its_rows_and_fails_the_query() {
         let (_dir, root, db, _) = fresh_fixture(&[("a.txt", "one"), ("b.txt", "two")]);
+        db.start_applier();
         std::fs::write(root.join("a.txt"), "uno").unwrap();
         std::fs::write(root.join("b.txt"), "bad").unwrap();
-        assert_eq!(row_names(&db), vec!["two", "uno"]);
-        assert!(
-            db.apply_file_events(Vec::new()).iter().any(|event| matches!(
-                event,
-                RowEvent::Error { table: Some(table), file_path, error }
-                    if table == "items" && file_path.ends_with("b.txt") && error == "bad content"
-            )),
-            "the failure reaches the consumer"
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn a_query_hands_its_row_events_to_the_next_poll_once() {
-        let (_dir, root, db, _) = fresh_fixture(&[]);
-        std::fs::write(root.join("a.txt"), "one").unwrap();
-        row_names(&db);
-        assert_eq!(
-            rescan_summary(&db.apply_file_events(Vec::new())),
-            vec!["insert one"]
-        );
-        assert_eq!(db.apply_file_events(Vec::new()), vec![]);
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn a_query_hands_its_row_events_to_the_consumer() {
-        let (_dir, root, db, _) = fresh_fixture(&[]);
-        std::fs::write(root.join("a.txt"), "one").unwrap();
-        row_names(&db);
-        assert_eq!(
-            rescan_summary(&db.apply_file_events(Vec::new())),
-            vec!["insert one"]
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn a_change_a_query_read_reaches_the_next_poll_once_when_the_watcher_reports_it_too() {
-        let (_dir, root, db, _) = fresh_fixture(&[]);
-        std::fs::write(root.join("a.txt"), "one").unwrap();
-        row_names(&db);
-        let events = db.apply_file_events(vec![FileEvent::Created(root.join("a.txt"))]);
-        assert_eq!(rescan_summary(&events), vec!["insert one"]);
+        for _ in 0..1000 {
+            if db.query("SELECT name FROM items").is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        match db.query("SELECT name FROM items") {
+            Err(DirSqlError::OnFile {
+                table,
+                path,
+                message,
+            }) => {
+                assert_eq!((table.as_str(), message.as_str()), ("items", "bad content"));
+                assert!(path.ends_with("b.txt"), "got: {path}");
+            }
+            other => panic!("expected the hook failure, got: {other:?}"),
+        }
+        assert_eq!(stored_names(&db), vec!["two", "uno"]);
     }
 
     #[test]
@@ -8192,14 +8526,15 @@ mod internal_tests {
         let db =
             DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
                 .unwrap();
+        db.start_applier();
         std::fs::write(root.join("b.txt"), "x").unwrap();
-        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+        await_row_names(&db, &["a.txt", "b.txt"]);
         assert_eq!(
             calls.lock().unwrap().last().unwrap(),
             &vec![root.join("a.txt"), root.join("b.txt")]
         );
         std::fs::remove_file(root.join("a.txt")).unwrap();
-        assert_eq!(row_names(&db), vec!["b.txt"]);
+        await_row_names(&db, &["b.txt"]);
         assert_eq!(
             calls.lock().unwrap().last().unwrap(),
             &vec![root.join("b.txt")]

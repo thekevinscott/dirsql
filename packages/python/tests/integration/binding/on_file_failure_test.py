@@ -3,7 +3,9 @@ query, with an error naming the file, the table and the original error. A hook
 that raises and a row the table rejects follow the same rule.
 """
 
+import asyncio
 import os
+import sys
 
 import pytest
 
@@ -28,6 +30,18 @@ def _assert_names(err, *parts):
     message = str(err.value)
     for part in parts:
         assert part in message, message
+
+
+async def _settle(db, expected):
+    """Wait for a query's answer, or its error, to mention ``expected``."""
+    for _ in range(1000):
+        try:
+            answer = str(await db.query("SELECT n FROM notes"))
+        except RuntimeError as e:
+            answer = str(e)
+        if expected in answer:
+            return
+        await asyncio.sleep(0.01)
 
 
 def describe_on_file_failure():
@@ -83,7 +97,8 @@ def describe_on_file_failure():
         _assert_names(err, "d/a.txt", "notes", "nope-xyzzy")
 
     @pytest.mark.asyncio
-    async def it_fails_the_query_when_a_changed_file_fails(tmp_dir):
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
+    async def it_fails_every_query_while_a_changed_file_fails(tmp_dir):
         _write(tmp_dir, "d/a.txt", "1")
 
         def on_file(path):
@@ -94,9 +109,13 @@ def describe_on_file_failure():
         assert await db.query("SELECT n FROM notes") == [{"n": 1}]
 
         _write(tmp_dir, "d/a.txt", "half-writ")
-        with pytest.raises(RuntimeError) as err:
-            await db.query("SELECT n FROM notes")
-        _assert_names(err, "d/a.txt", "notes", "half-writ")
+        await _settle(db, "half-writ")
+        for _ in range(3):
+            with pytest.raises(RuntimeError) as err:
+                await db.query("SELECT n FROM notes")
+            _assert_names(err, "d/a.txt", "notes", "half-writ")
 
         _write(tmp_dir, "d/a.txt", "22")
+        await _settle(db, "22")
+        assert await db.query("SELECT n FROM notes") == [{"n": 22}]
         assert await db.query("SELECT n FROM notes") == [{"n": 22}]

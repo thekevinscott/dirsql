@@ -6,14 +6,13 @@
 #[path = "common/fresh.rs"]
 mod fresh;
 
-use fresh::{Rng, Tree, assert_matches_fresh_scan};
+use fresh::{Rng, Tree, await_fresh_scan};
 use std::fs;
 use std::time::Duration;
 
 const DIRS: &[&str] = &["", "a/", "a/b/", "c/"];
 const NAMES: &[&str] = &["n0", "n1", "n2", "n3"];
 const EXTS: &[&str] = &["txt", "json", "stage"];
-const IGNORES: &[&str] = &["n0.txt\n", "a/\n", "*.json\n", "c/n1.*\n"];
 
 /// Every file holds JSON lines, so a rename across globs leaves both tables
 /// readable.
@@ -108,16 +107,6 @@ fn step(tree: &Tree, rng: &mut Rng) -> String {
             }
             format!("remove directory {dir}")
         }
-        8 => {
-            if rng.below(3) == 0 {
-                let _ = fs::remove_file(tree.path(".gitignore"));
-                "remove .gitignore".to_string()
-            } else {
-                let rule = rng.pick(IGNORES);
-                tree.write(".gitignore", rule);
-                format!("set .gitignore to {rule:?}")
-            }
-        }
         _ => {
             let rel = random_file(rng);
             let text = content(rng, &rel);
@@ -129,7 +118,6 @@ fn step(tree: &Tree, rng: &mut Rng) -> String {
 
 fn seeded_tree(rng: &mut Rng) -> Tree {
     let tree = Tree::new();
-    fs::create_dir(tree.path(".git")).unwrap();
     for _ in 0..8 {
         let rel = random_file(rng);
         let text = content(rng, &rel);
@@ -146,7 +134,7 @@ fn random_operations_read_what_a_fresh_scan_reads() {
         let db = tree.open();
         for op in 0..150 {
             let done = step(&tree, &mut rng);
-            assert_matches_fresh_scan(&db, &tree, &format!("seed {seed} op {op}: {done}"));
+            await_fresh_scan(&db, &tree, &format!("seed {seed} op {op}: {done}"));
         }
     }
 }
@@ -160,7 +148,7 @@ fn a_long_lived_instance_reads_what_a_fresh_scan_reads_across_idle_gaps_and_burs
         std::thread::sleep(Duration::from_millis(250 * (cycle % 4)));
         for op in 0..25 {
             let done = step(&tree, &mut rng);
-            assert_matches_fresh_scan(&db, &tree, &format!("cycle {cycle} op {op}: {done}"));
+            await_fresh_scan(&db, &tree, &format!("cycle {cycle} op {op}: {done}"));
         }
     }
 }

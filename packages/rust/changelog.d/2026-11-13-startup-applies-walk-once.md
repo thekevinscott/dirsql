@@ -1,0 +1,1 @@
+**Fixed** Startup finishes while files are written faster than `on_file` reads them. The changes that arrived during the initial walk are applied once; later changes reach the first poll or watch instead of holding up startup.

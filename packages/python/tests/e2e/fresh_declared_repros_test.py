@@ -1,10 +1,9 @@
-"""E2E: a long-lived ``DirSQL`` reads what is on disk when each query runs.
+"""E2E: every write reaches a long-lived ``DirSQL``'s index.
 
 Regressions for the reported repros, against the installed build: a declared
 table read with no watch running, a change written between ``ready()`` and
-``watch()`` starting, and a query racing a consumed ``watch()``. Every query
-runs the moment the write before it returns. No mocks: real binding, real
-filesystem, real SQLite.
+``watch()`` starting, and a query racing a consumed ``watch()``. No mocks:
+real binding, real filesystem, real SQLite.
 """
 
 from __future__ import annotations
@@ -18,10 +17,7 @@ import pytest
 
 from dirsql import DirSQL, Table
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux",
-    reason="a query reads a write at once only where it drains the inotify queue",
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
 
 RACE_ROUNDS = 1000
 
@@ -60,9 +56,30 @@ async def _turn_ids(db: DirSQL) -> list[str]:
     return [row["id"] for row in await db.query("SELECT id FROM turns ORDER BY id")]
 
 
+def _turn_count(db: DirSQL):
+    async def read():
+        return len(await db.query("SELECT id FROM turns"))
+
+    return read
+
+
 async def _records_of(db: DirSQL) -> list[tuple[str, int]]:
     rows = await db.query("SELECT name, v FROM t ORDER BY name")
     return [(row["name"], row["v"]) for row in rows]
+
+
+async def _await_eq(read, expected):
+    """Wait for ``read`` to return ``expected``. A file caught mid-write fails
+    its hook, and every query with it, until the write completes."""
+    for _ in range(1000):
+        try:
+            seen = await read()
+        except RuntimeError as e:
+            seen = e
+        if seen == expected:
+            return
+        await asyncio.sleep(0.01)
+    assert seen == expected
 
 
 async def _open_turns(root: Path) -> DirSQL:
@@ -84,7 +101,7 @@ def describe_a_declared_table_with_no_watch_running():
         (tmp_path / "turns/0/a.txt").write_text("x")
         db = await _open_turns(tmp_path)
         _add_turn(tmp_path, 1)
-        assert await _turn_ids(db) == ["turns/0", "turns/1"]
+        await _await_eq(lambda: _turn_ids(db), ["turns/0", "turns/1"])
 
     @pytest.mark.asyncio
     async def it_reads_a_create_an_edit_and_a_delete(tmp_path):
@@ -93,36 +110,29 @@ def describe_a_declared_table_with_no_watch_running():
         assert await _records_of(db) == [("a.json", 1)]
         (tmp_path / "b.json").write_text(json.dumps({"v": 2}))
         (tmp_path / "a.json").write_text(json.dumps({"v": 10}))
-        assert await _records_of(db) == [("a.json", 10), ("b.json", 2)]
+        await _await_eq(lambda: _records_of(db), [("a.json", 10), ("b.json", 2)])
         (tmp_path / "b.json").unlink()
-        assert await _records_of(db) == [("a.json", 10)]
+        await _await_eq(lambda: _records_of(db), [("a.json", 10)])
 
 
 def describe_a_change_written_before_watch_starts():
     @pytest.mark.asyncio
-    async def it_is_read_by_the_next_query_and_streamed_once(tmp_path):
+    async def it_reaches_the_index_and_no_stream(tmp_path):
         (tmp_path / "turns/0").mkdir(parents=True)
         (tmp_path / "turns/0/a.txt").write_text("x")
         db = await _open_turns(tmp_path)
         _add_turn(tmp_path, 1)
-        assert await _turn_ids(db) == ["turns/0", "turns/1"]
+        await _await_eq(lambda: _turn_ids(db), ["turns/0", "turns/1"])
         stream = db.watch()
-        # Unread by any query, so only the watcher reports it, after every
-        # change before it.
         _add_turn(tmp_path, 2)
-        inserted = []
-        async for event in stream:
-            assert event.action == "insert", event
-            inserted.append(event.row["id"])
-            if event.row["id"] == "turns/2":
-                break
-        assert inserted == ["turns/1", "turns/2"]
+        event = await stream.__anext__()
+        assert (event.action, event.row["id"]) == ("insert", "turns/2")
         assert await _turn_ids(db) == ["turns/0", "turns/1", "turns/2"]
 
 
 def describe_a_query_racing_a_consumed_watch():
     @pytest.mark.asyncio
-    async def it_reads_every_write_before_it(tmp_path):
+    async def it_gets_every_write_into_the_index(tmp_path):
         (tmp_path / "turns").mkdir()
         db = await _open_turns(tmp_path)
         stream = db.watch()
@@ -132,16 +142,13 @@ def describe_a_query_racing_a_consumed_watch():
                 pass
 
         task = asyncio.create_task(consume())
-        misses = []
         for n in range(RACE_ROUNDS):
             _add_turn(tmp_path, n)
-            if len(await db.query("SELECT id FROM turns")) != n + 1:
-                misses.append(n)
+            await _await_eq(_turn_count(db), n + 1)
         task.cancel()
-        assert misses == []
 
     @pytest.mark.asyncio
-    async def it_reads_a_create_with_a_watch_consumed(tmp_path):
+    async def it_gets_a_create_into_the_index_with_a_watch_consumed(tmp_path):
         (tmp_path / "a.json").write_text(json.dumps({"v": 1}))
         db = await _open_records(tmp_path)
         stream = db.watch()
@@ -152,7 +159,7 @@ def describe_a_query_racing_a_consumed_watch():
 
         task = asyncio.create_task(consume())
         (tmp_path / "b.json").write_text(json.dumps({"v": 2}))
-        assert await _records_of(db) == [("a.json", 1), ("b.json", 2)]
+        await _await_eq(lambda: _records_of(db), [("a.json", 1), ("b.json", 2)])
         task.cancel()
 
 

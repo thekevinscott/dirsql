@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e root-at-construction query-contract query-params fanout",
+  "ran_at": 1794484012,
+  "exit_code": 0,
+  "commit": "838084c5fa157a237f5ae75508300224f926017e",
+  "branch": "bot/1700-watch-limit-fatal-1110"
+}

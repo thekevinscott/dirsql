@@ -1,7 +1,6 @@
 """CLI e2e: while a child references no parent, every query to a running
 `dirsql server` fails with the foreign-key error, until the parent is written
-or the child deleted. Linux only: there a query applies every event the kernel
-has queued first. No mocks: real console script, real server process, real
+or the child deleted. Linux only. No mocks: real console script, real server process, real
 sockets, real filesystem, real SQLite, real `on-file` spawn.
 """
 
@@ -12,14 +11,13 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux", reason="the empty-queue guarantee is Linux's"
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
 
 CONFIG = """\
 [[table]]
@@ -69,6 +67,14 @@ def _ask(port, sql):
         return json.loads(err.read())["error"]
 
 
+def _settle(port, fails):
+    """Wait for the index to catch up: until a query fails, or succeeds."""
+    for _ in range(1000):
+        if isinstance(_ask(port, COUNTS), str) == fails:
+            return
+        time.sleep(0.01)
+
+
 def describe_a_server_over_a_child_with_no_parent():
     @pytest.fixture
     def served(tmp_path):
@@ -89,6 +95,7 @@ def describe_a_server_over_a_child_with_no_parent():
             ready = server.stdout.readline()
             assert ready.startswith("Running at"), ready + server.stderr.read()
             (root / "c" / "lost.json").write_text('{"id": "lost", "pid": 1}\n')
+            _settle(port, fails=True)
             yield root, port
         finally:
             server.terminate()
@@ -106,6 +113,7 @@ def describe_a_server_over_a_child_with_no_parent():
         _assert_fails(port)
 
         (root / "p" / "one.json").write_text('{"id": 1}\n')
+        _settle(port, fails=False)
 
         assert _ask(port, COUNTS) == [{"parents": 1, "children": 1}]
 
@@ -114,5 +122,6 @@ def describe_a_server_over_a_child_with_no_parent():
         _assert_fails(port)
 
         (root / "c" / "lost.json").unlink()
+        _settle(port, fails=False)
 
         assert _ask(port, COUNTS) == [{"parents": 0, "children": 0}]

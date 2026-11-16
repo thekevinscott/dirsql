@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use dirsql::watcher::FileEvent;
 use dirsql::{DirSQL, Row, RowEvent, Table, Value};
@@ -173,7 +174,6 @@ fn a_parent_and_its_child_arriving_in_one_batch_both_land() {
 #[test]
 fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
-    db.set_query_applies_events(false);
     let parent = root.join("parents").join("1.txt");
     fs::remove_file(&parent).unwrap();
 
@@ -217,8 +217,17 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
 #[cfg(target_os = "linux")]
 fn every_query_over_an_orphaned_child_raises_until_its_parent_returns() {
     let (_dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
+    db.poll_events(Duration::ZERO).unwrap();
     fs::remove_file(root.join("parents").join("1.txt")).unwrap();
 
+    let mut reported = Vec::new();
+    for _ in 0..50 {
+        reported.extend(errors(&db.poll_events(Duration::from_millis(200)).unwrap()));
+        if !reported.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(reported.len(), 1, "expected one error, got {reported:?}");
     for _ in 0..2 {
         let message = query_error(&db, "SELECT name FROM parent");
         for needle in ["child", "parent", "children/kid.txt", "parent_id = 1"] {
@@ -229,6 +238,12 @@ fn every_query_over_an_orphaned_child_raises_until_its_parent_returns() {
         }
     }
     fs::write(root.join("parents").join("1.txt"), "alpha again").unwrap();
+    for _ in 0..1000 {
+        if db.query("SELECT name FROM parent").is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(names(&db, "SELECT name FROM parent"), vec!["alpha again"]);
 }
 
@@ -304,11 +319,10 @@ fn query_error(db: &DirSQL, sql: &str) -> String {
     }
 }
 
-/// A built `family` whose queries apply no events of their own, plus an
+/// A built `family` plus an
 /// orphaned child `children/lost.txt` applied through one watch batch.
 fn with_orphan() -> (TempDir, PathBuf, DirSQL, PathBuf) {
     let (dir, root, db) = family(&[("1", "alpha")], &[("kid", "1")]);
-    db.set_query_applies_events(false);
     let lost = root.join("children").join("lost.txt");
     fs::write(&lost, "9").unwrap();
     let events = db.apply_file_events(vec![FileEvent::Created(lost.clone())]);
@@ -368,4 +382,60 @@ fn deleting_the_orphaned_child_clears_the_error() {
 
     assert_eq!(errors(&events), Vec::<String>::new());
     assert_eq!(names(&db, "SELECT name FROM child"), vec!["kid"]);
+}
+
+#[test]
+fn a_failing_file_is_raised_ahead_of_an_orphaned_child() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for sub in ["parents", "children", "notes"] {
+        fs::create_dir(root.join(sub)).unwrap();
+    }
+    let note = root.join("notes").join("a.txt");
+    fs::write(&note, "1").unwrap();
+    let notes = Table::try_new(
+        "notes",
+        "CREATE TABLE notes (n INTEGER)",
+        "notes/*.txt",
+        |path| -> Result<Vec<Row>, Box<dyn std::error::Error + Send + Sync>> {
+            let n: i64 = contents(path).parse()?;
+            Ok(vec![HashMap::from([("n".into(), Value::Integer(n))])])
+        },
+    );
+    let db = DirSQL::new(
+        &root,
+        vec![
+            child_table("children/*.txt"),
+            parent_table("parents/*.txt"),
+            notes,
+        ],
+    )
+    .unwrap();
+
+    fs::write(&note, "half-writ").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note.clone())]);
+    let lost = root.join("children").join("lost.txt");
+    fs::write(&lost, "9").unwrap();
+    db.apply_file_events(vec![FileEvent::Created(lost)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    assert!(
+        message.starts_with("table `notes`, file `notes/a.txt`: "),
+        "{message}"
+    );
+
+    fs::write(&note, "2").unwrap();
+    db.apply_file_events(vec![FileEvent::Modified(note)]);
+
+    let message = query_error(&db, "SELECT name FROM child");
+    for needle in [
+        "foreign key violation",
+        "children/lost.txt",
+        "parent_id = 9",
+    ] {
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from: {message}"
+        );
+    }
 }

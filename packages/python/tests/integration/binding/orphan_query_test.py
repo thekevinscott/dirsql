@@ -1,8 +1,8 @@
 """Binding-tier tests: while a child references no parent, every query
 raises the foreign-key error, until the parent appears or the child goes.
-Linux only: there a query applies every event the kernel has queued first.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -10,9 +10,7 @@ import pytest
 
 from dirsql import DirSQL, Table
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux", reason="the empty-queue guarantee is Linux's"
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
 
 
 def _tables():
@@ -34,12 +32,26 @@ def _tables():
     ]
 
 
+async def _settle(db, sql, raises):
+    """Wait for the index to catch up: until ``sql`` raises, or succeeds."""
+    for _ in range(1000):
+        try:
+            await db.query(sql)
+            if not raises:
+                return
+        except RuntimeError:
+            if raises:
+                return
+        await asyncio.sleep(0.01)
+
+
 async def _with_orphan(root):
     (root / "parents").mkdir()
     (root / "children").mkdir()
     db = DirSQL(str(root), tables=_tables())
     await db.ready()
     (root / "children" / "lost.txt").write_text("p1")
+    await _settle(db, "SELECT id FROM child", raises=True)
     return db
 
 
@@ -59,12 +71,13 @@ def describe_a_child_with_no_parent():
         await _assert_raises(db)
 
         (tmp_path / "parents" / "p1.txt").write_text("")
-
-        rows = await db.query(
+        sql = (
             "SELECT c.id AS child, p.id AS parent"
             " FROM child c JOIN parent p ON p.id = c.parent"
         )
-        assert rows == [{"child": "lost", "parent": "p1"}]
+        await _settle(db, sql, raises=False)
+
+        assert await db.query(sql) == [{"child": "lost", "parent": "p1"}]
 
     @pytest.mark.asyncio
     async def it_clears_when_the_child_is_deleted(tmp_path):
@@ -72,5 +85,6 @@ def describe_a_child_with_no_parent():
         await _assert_raises(db)
 
         (tmp_path / "children" / "lost.txt").unlink()
+        await _settle(db, "SELECT id FROM child", raises=False)
 
         assert await db.query("SELECT id FROM child") == []

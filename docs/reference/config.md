@@ -373,7 +373,8 @@ foreign key violation: `task` row from `projects/beta/tasks/t1.json` has project
   again. A table's `on-file` command re-reads all of its files, so a later
   batch that touches the same table carries the orphaning change and waits
   too. While a rejected batch waits, every query raises its violation; once
-  a later batch lands it, queries succeed again.
+  a later batch lands it, queries succeed again. A file whose `on-file`
+  command is failing is raised ahead of the violation, until it is fixed.
 
 `ON DELETE` and `ON UPDATE` actions are not deferred. A parent table with a
 `PRIMARY KEY`, or a `UNIQUE` column its rows fill, has an edited row `UPDATE`d

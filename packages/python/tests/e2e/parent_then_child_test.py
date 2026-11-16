@@ -1,13 +1,13 @@
 """E2E: a writer creating a parent and then its child never fails a query.
 
 The writer makes each advice and the turn referencing it in new directories
-while the main thread queries in a loop. Linux only: there a query applies
-every event the kernel has queued before it checks a foreign key. No mocks:
-real binding, real filesystem, real SQLite.
+while the main thread queries in a loop. No mocks: real binding, real
+filesystem, real SQLite.
 """
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 import time
@@ -17,9 +17,7 @@ import pytest
 
 from dirsql import DirSQL, Table
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux", reason="the empty-queue guarantee is Linux's"
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux only")
 
 
 def _advice() -> Table:
@@ -88,7 +86,7 @@ def describe_a_writer_creating_parents_then_children():
         assert failures == [], f"{len(failures)} of {queries} queries failed"
 
     @pytest.mark.asyncio
-    async def it_reads_each_pair_the_moment_it_is_written(tmp_path):
+    async def it_gets_each_pair_into_the_index(tmp_path):
         (tmp_path / "advices").mkdir()
         (tmp_path / "turns").mkdir()
         db = DirSQL(str(tmp_path), tables=[_advice(), _turn()])
@@ -96,4 +94,9 @@ def describe_a_writer_creating_parents_then_children():
         for n in range(100):
             _write_pair(tmp_path, n)
             rows = await db.query("SELECT count(*) AS n FROM turn")
+            for _ in range(1000):
+                if rows == [{"n": n + 1}]:
+                    break
+                await asyncio.sleep(0.01)
+                rows = await db.query("SELECT count(*) AS n FROM turn")
             assert rows == [{"n": n + 1}], n
