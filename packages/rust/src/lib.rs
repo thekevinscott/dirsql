@@ -89,7 +89,7 @@ use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -506,6 +506,8 @@ struct DirSqlInner {
     /// Held across every change to the index and every query, so a query
     /// never reads a batch half applied.
     fresh: Mutex<FreshState>,
+    /// How many times the index has been asked for.
+    arrivals: AtomicU64,
     /// Signalled when [`DirSQL::unlock_index`] releases the index.
     unlocked: Condvar,
     /// The symlinked directories the index reaches files through. The watcher
@@ -789,7 +791,15 @@ impl DirSQL {
         Ok(())
     }
 
+    /// How many times the index has been asked for, by a query, a watch
+    /// batch or [`lock_index`](Self::lock_index), answered or still waiting.
+    #[doc(hidden)]
+    pub fn index_arrivals(&self) -> u64 {
+        self.inner.arrivals.load(Ordering::SeqCst)
+    }
+
     fn unlocked_fresh(&self) -> Result<MutexGuard<'_, FreshState>> {
+        self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
         let state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
         self.inner
             .unlocked
@@ -1001,6 +1011,7 @@ impl DirSQL {
 
     /// The index, once no lock holds it.
     fn hold_index(&self) -> MutexGuard<'_, FreshState> {
+        self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
         let fresh = self
             .inner
             .fresh
@@ -2298,6 +2309,7 @@ impl DirSQL {
                 poll_interval,
                 fs,
                 fresh: Mutex::new(FreshState::default()),
+                arrivals: AtomicU64::new(0),
                 unlocked: Condvar::new(),
                 links: Mutex::new(links),
                 failed_files: Mutex::new(BTreeMap::new()),
@@ -8449,6 +8461,15 @@ mod internal_tests {
         assert!(db.inner.fresh.try_lock().is_err());
         drop(held);
         assert!(db.inner.fresh.try_lock().is_ok());
+    }
+
+    #[test]
+    fn index_arrivals_counts_each_query_and_each_batch() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        let before = db.index_arrivals();
+        row_names(&db);
+        db.apply_file_events(Vec::new());
+        assert_eq!(db.index_arrivals(), before + 2);
     }
 
     #[test]
