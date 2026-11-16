@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1794858181,
+  "exit_code": 0,
+  "commit": "ab0a9b6c0e19b6dedbdc90c0e1391109b855016f",
+  "branch": "bot/1630-function-args-1116"
+}
