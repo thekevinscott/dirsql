@@ -4,7 +4,7 @@
 //! - wraps a Python `on_file` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
-//! - forwards `new` / `query` / `_poll_events` to the
+//! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
 //!   corresponding `DirSQL` methods
 //!
 //! The Python-side async wrapper (`dirsql._async.DirSQL`) drives this binding
@@ -13,8 +13,10 @@
 #[cfg(feature = "extension-module")]
 mod python {
     use ::dirsql::extension_resolution::{self, ConfigSource, PlanEntry};
-    use ::dirsql::{DirSQL, Extension, Params, Row, RowEvent, Table, Value, flatten_row_event};
-    use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError};
+    use ::dirsql::{
+        DirSQL, DirSqlError, Extension, Params, Row, RowEvent, Table, Value, flatten_row_event,
+    };
+    use pyo3::exceptions::{PyOSError, PyOverflowError, PyRuntimeError, PyTypeError, PyValueError};
     use pyo3::prelude::*;
     use pyo3::types::{
         PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PySequence,
@@ -189,7 +191,7 @@ mod python {
                         .suppress_config_extensions(suppress_config_extensions)
                         .build()
                 })
-                .map_err(to_py_err)?;
+                .map_err(core_err)?;
 
             Ok(Self { inner })
         }
@@ -205,7 +207,7 @@ mod python {
             let db = self.inner.clone();
             let result = py
                 .detach(move || db.query_ordered_with(&sql, &params))
-                .map_err(to_py_err)?;
+                .map_err(core_err)?;
 
             let list = PyList::empty(py);
             for row in &result.rows {
@@ -223,6 +225,11 @@ mod python {
                     message: f.message.clone(),
                 })
                 .collect()
+        }
+
+        fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.attach_poll()).map_err(to_py_err)
         }
 
         fn _lock(&self, py: Python<'_>) -> PyResult<()> {
@@ -294,6 +301,15 @@ mod python {
 
     fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
         PyRuntimeError::new_err(e.to_string())
+    }
+
+    /// The OS's error as Python's `OSError`, as watchdog raises it; any other
+    /// error as [`to_py_err`].
+    fn core_err(e: DirSqlError) -> PyErr {
+        match e.os_error() {
+            Some(os) => PyOSError::new_err((os.errno, os.message)),
+            None => to_py_err(e),
+        }
     }
 
     fn row_event_to_py(py: Python<'_>, event: &RowEvent) -> PyResult<PyRowEvent> {

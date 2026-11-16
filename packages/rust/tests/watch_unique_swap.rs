@@ -61,6 +61,7 @@ fn swapping_a_unique_value_between_keyed_rows_updates_both_in_place() {
         .build()
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    db.poll_events(Duration::ZERO).unwrap();
 
     write_rows(
         root.path(),
@@ -97,6 +98,7 @@ fn rotating_a_unique_value_through_three_keyed_rows_updates_each_in_place() {
         .build()
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    db.poll_events(Duration::ZERO).unwrap();
 
     write_rows(
         root.path(),

@@ -20,6 +20,7 @@ class _WatchStream:
     def __init__(self, owner):
         self._owner = owner
         self._db = None
+        self._started = False
         self._buffer = []
         owner._watch_streams.add(self)
 
@@ -27,11 +28,13 @@ class _WatchStream:
         return self
 
     async def __anext__(self):
-        if self._db is None:
+        if not self._started:
             await self._owner.ready()
             db = self._owner._db
             assert db is not None  # ready() returned, so _init_bg set _db
             self._db = db
+            await asyncio.to_thread(db._start_watcher)
+            self._started = True
 
         owner = self._owner
         while not self._buffer:
@@ -152,10 +155,19 @@ class DirSQL:
         """Run the scan in the background."""
         try:
             self._db = await asyncio.to_thread(self._build_db)
+            if self._watch_streams:
+                await asyncio.to_thread(self._start_watcher_quietly, self._db)
         except Exception as exc:
             self._init_error = exc
         finally:
             self._ready_event.set()
+
+    @staticmethod
+    def _start_watcher_quietly(db):
+        # A watcher that cannot start is the stream's error, not init's: the
+        # stream's first iteration retries the start and raises it there.
+        with contextlib.suppress(Exception):
+            db._start_watcher()
 
     def _build_db(self):
         """Resolve extensions and construct the Rust-backed instance.
@@ -266,13 +278,14 @@ class DirSQL:
         return db.scan_failures()
 
     def watch(self):
-        """Stream file changes. Returns an async iterable of RowEvent.
+        """Start watching for file changes. Returns an async iterable of RowEvent.
 
-        The file watcher runs from the moment the instance is built;
-        ``watch()`` attaches to it and starts nothing. Once both ``watch()``
-        and :meth:`ready` have returned, in either order, a file written
-        produces an event and reaches the index. Writes made while the scan
-        is still running may be missed.
+        The watcher is live once both ``watch()`` and :meth:`ready` have
+        returned, in either order: a file written after that point produces
+        an event and reaches the index. Called after the scan, ``watch()``
+        starts the watcher before returning; called before it, the watcher
+        starts before :meth:`ready` resolves. Writes made while the scan is
+        still running may be missed.
 
         The returned stream awaits :meth:`ready` on its first iteration, so
         iterating before an explicit ``await db.ready()`` waits for the
@@ -282,4 +295,7 @@ class DirSQL:
         every event observed after it was created, so several consumers
         (one per client, say) can share one instance.
         """
-        return _WatchStream(self)
+        stream = _WatchStream(self)
+        if self._db is not None:
+            self._db._start_watcher()
+        return stream

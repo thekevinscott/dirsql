@@ -150,6 +150,7 @@ fn watch_create_and_delete_fan_out_to_both_tables() {
     );
 
     let db = DirSQL::new(dir.path(), vec![ta, tb]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     thread::sleep(Duration::from_millis(250));
 
     let file = dir

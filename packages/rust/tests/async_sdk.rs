@@ -185,6 +185,7 @@ async fn poll_events_forwards() {
     let root = TempDir::new().unwrap();
     let db = AsyncDirSQL::new(root.path(), vec![items_table()]).unwrap();
     db.ready().await.unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     fs::write(root.path().join("apple.txt"), "apple").unwrap();
