@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e extension-package",
+  "ran_at": 1794856277,
+  "exit_code": 0,
+  "commit": "93c26b518a87aefd6e6bfa5747b5b1a0c9107738",
+  "branch": "bot/1622-testext-build-1116"
+}
