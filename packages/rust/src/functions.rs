@@ -1361,6 +1361,59 @@ mod tests {
     }
 
     #[test]
+    fn an_argument_that_is_not_utf8_fails_the_call_naming_its_position() {
+        let s = scripted_worker(vec![vec![ok(r#"{"ok": "A"}"#)]], false);
+        let spawns = Arc::clone(&s.spawns);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let err = conn
+            .query_row("SELECT embed('a', CAST(x'ff41' AS TEXT))", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"argument 2 of "embed" holds text that is not valid UTF-8"#
+        );
+        assert_eq!(*spawns.lock().unwrap(), 0, "the worker is never asked");
+    }
+
+    #[test]
+    fn a_first_argument_that_is_not_utf8_is_argument_one() {
+        let s = scripted_worker(vec![], false);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let err = conn
+            .query_row("SELECT embed(CAST(x'ff41' AS TEXT), 'a')", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"argument 1 of "embed" holds text that is not valid UTF-8"#
+        );
+    }
+
+    #[test]
+    fn valid_text_arguments_reach_the_worker_unchanged() {
+        let s = scripted_worker(vec![vec![ok(r#"{"ok": "A"}"#)]], false);
+        let sent = Arc::clone(&s.sent);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let value: String = conn
+            .query_row("SELECT embed('a', 'é')", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(value, "A");
+        assert_eq!(*sent.lock().unwrap(), [r#"{"call":["a","é"]}"#]);
+    }
+
+    #[test]
     fn constructing_a_worker_spawns_nothing() {
         let s = scripted_worker(vec![], false);
         let spawns = Arc::clone(&s.spawns);

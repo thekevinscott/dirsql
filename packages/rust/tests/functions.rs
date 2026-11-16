@@ -440,6 +440,36 @@ command = "python3 worker.py"
 }
 
 #[test]
+fn an_argument_that_is_not_utf8_fails_the_query_naming_its_position() {
+    let root = TempDir::new().unwrap();
+    write_worker(
+        root.path(),
+        "worker.py",
+        r#"resp = {"ok": args[0].upper()}"#,
+    );
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+"#,
+    )
+    .unwrap();
+
+    let db = build(&root).unwrap();
+    let err = db
+        .query("SELECT up(CAST(x'ff41' AS TEXT)) AS v")
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains(r#"argument 1 of "up" holds text that is not valid UTF-8"#),
+        "got: {msg}"
+    );
+}
+
+#[test]
 fn undeclared_function_keeps_sqlites_no_such_function_error() {
     let root = TempDir::new().unwrap();
     write_worker(root.path(), "worker.py", r#"resp = {"ok": None}"#);
