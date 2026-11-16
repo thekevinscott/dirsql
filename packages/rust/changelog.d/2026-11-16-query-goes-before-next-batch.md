@@ -1,0 +1,1 @@
+**Fixed** A query that arrives while a batch of file changes is being applied is answered as soon as that batch ends. Under a writer that never pauses it could be passed over for one batch after another and wait many times longer. The index is now handed out in the order it was asked for; a batch is still never split, so a query can wait as long as the batch in progress takes.
