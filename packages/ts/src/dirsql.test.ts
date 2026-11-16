@@ -123,7 +123,7 @@ describe("DirSQL", () => {
       expect(resolveExtensionPath).toHaveBeenCalledWith(
         "sqlite-vec",
         process.cwd(),
-        false,
+        true,
       );
       expect(openAsync).toHaveBeenCalledWith(
         resolve("/data"),
@@ -138,6 +138,41 @@ describe("DirSQL", () => {
         ],
         false,
         null,
+      );
+    });
+
+    it("resolves extension paths against the cwd at construction", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue("/built");
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockRestore();
+      await db.ready;
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/built",
+        true,
+      );
+    });
+
+    it("reads an unreadable construction cwd again when resolving extensions", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockImplementationOnce(() => {
+        throw new Error("ENOENT: uv_cwd");
+      });
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockReturnValue("/later");
+      await db.ready;
+      cwd.mockRestore();
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/later",
+        true,
       );
     });
 
