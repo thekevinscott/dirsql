@@ -71,6 +71,7 @@ pub mod cli;
 
 use crate::config::Source;
 use crate::db::{Db, ShapedRows};
+use crate::foreign_key::ForeignKeyViolation;
 use crate::functions::ResolvedFunction;
 use crate::matcher::TableMatcher;
 use crate::persist::{
@@ -481,9 +482,9 @@ struct DirSqlInner {
     /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
     /// deleted directory is traced back to the tables it fed.
     batch_files: Mutex<HashMap<String, Vec<String>>>,
-    /// The file events of watch batches a foreign key rejected, replayed
-    /// with every later batch until one lands them.
-    held: Mutex<Vec<FileEvent>>,
+    /// The watch batches a foreign key rejected, replayed with every later
+    /// batch until one lands them.
+    held: Mutex<Held>,
     fault: OnceLock<WatchFault>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
@@ -550,6 +551,14 @@ impl Link {
             Err(_) => None,
         }
     }
+}
+
+/// The file events of rejected watch batches, and the violation that
+/// rejected them, which every query raises while it stands.
+#[derive(Default)]
+struct Held {
+    events: Vec<FileEvent>,
+    violation: Option<ForeignKeyViolation>,
 }
 
 #[derive(Default)]
@@ -790,13 +799,25 @@ impl DirSQL {
 
     /// Hold the index still until the returned guard drops. A watch batch
     /// releases the database between statements inside its transaction, so a
-    /// query that took only the database could read it half applied.
+    /// query that took only the database could read it half applied. Raises
+    /// a watcher fault, else a failing file's error, else the violation of a
+    /// held batch.
     fn refresh(&self) -> Result<MutexGuard<'_, FreshState>> {
         let state = self.unlocked_fresh()?;
         if let Some(fault) = self.inner.fault.get() {
             return Err(fault.into());
         }
         self.raise_failed_file()?;
+        if let Some(violation) = self
+            .inner
+            .held
+            .lock()
+            .map_err(DirSqlError::lock)?
+            .violation
+            .clone()
+        {
+            return Err(DirSqlError::Core(DbError::ForeignKey(violation)));
+        }
         Ok(state)
     }
 
@@ -1000,7 +1021,7 @@ impl DirSQL {
             return match self.apply_batch(events) {
                 Ok(out) => out,
                 Err(rejected) => {
-                    self.hold(rejected.events);
+                    self.hold(rejected.events, rejected.violation);
                     rejected.errors
                 }
             };
@@ -1014,7 +1035,7 @@ impl DirSQL {
             Err(rejected) => rejected,
         };
         let fresh = rejected.events.split_off(held_len);
-        self.hold(rejected.events);
+        self.hold(rejected.events, rejected.violation);
         match self.apply_batch(fresh) {
             Ok(out) => rejected
                 .errors
@@ -1023,7 +1044,7 @@ impl DirSQL {
                 .chain(out)
                 .collect(),
             Err(fresh) => {
-                self.hold(fresh.events);
+                self.hold(fresh.events, fresh.violation);
                 rejected.errors
             }
         }
@@ -1046,10 +1067,12 @@ impl DirSQL {
                     .into_iter()
                     .filter(|event| matches!(event, RowEvent::Error { .. }))
                     .collect();
+                let violation = violation_of(&e);
                 errors.push(batch_error(e));
                 Err(RejectedBatch {
                     events: applied,
                     errors,
+                    violation,
                 })
             }
         }
@@ -1093,15 +1116,20 @@ impl DirSQL {
         let _ = self.inner.fault.set(fault);
     }
 
-    /// Keep `events` to replay with the next batch, once per path.
-    fn hold(&self, events: Vec<FileEvent>) {
+    /// Keep `events` to replay with the next batch, once per path. The
+    /// first violation held stands: it names every orphan of the batch it
+    /// rejected, held events and new ones together.
+    fn hold(&self, events: Vec<FileEvent>, violation: Option<ForeignKeyViolation>) {
         let Ok(mut held) = self.inner.held.lock() else {
             return;
         };
         for event in events {
-            if !held.contains(&event) {
-                held.push(event);
+            if !held.events.contains(&event) {
+                held.events.push(event);
             }
+        }
+        if held.violation.is_none() {
+            held.violation = violation;
         }
     }
 
@@ -1110,7 +1138,7 @@ impl DirSQL {
     /// is deleted. A replay then can't undo a later change to the same path.
     fn take_held(&self) -> Vec<FileEvent> {
         let held = match self.inner.held.lock() {
-            Ok(mut held) => std::mem::take(&mut *held),
+            Ok(mut held) => std::mem::take(&mut *held).events,
             Err(_) => return Vec::new(),
         };
         let mut restated: Vec<FileEvent> = Vec::new();
@@ -2259,7 +2287,7 @@ impl DirSQL {
                 strict_map,
                 declared,
                 batch_files: Mutex::new(batch_files),
-                held: Mutex::new(Vec::new()),
+                held: Mutex::new(Held::default()),
                 fault: OnceLock::new(),
                 scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
@@ -3317,6 +3345,14 @@ fn start_per_table_hooks(
 struct RejectedBatch {
     events: Vec<FileEvent>,
     errors: Vec<RowEvent>,
+    violation: Option<ForeignKeyViolation>,
+}
+
+fn violation_of(e: &DirSqlError) -> Option<ForeignKeyViolation> {
+    match e {
+        DirSqlError::Core(DbError::ForeignKey(v)) => Some(v.clone()),
+        _ => None,
+    }
 }
 
 /// The error event for a watch batch that could not be applied: an orphaned
@@ -8004,8 +8040,13 @@ mod internal_tests {
         (fake, db)
     }
 
+    /// The index's parent ids, read past the held violation a query raises.
     fn parent_ids(db: &DirSQL) -> Vec<Value> {
-        db.query("SELECT id FROM parent ORDER BY id")
+        db.inner
+            .db
+            .lock()
+            .unwrap()
+            .query("SELECT id FROM parent ORDER BY id")
             .unwrap()
             .into_iter()
             .map(|row| row["id"].clone())
@@ -8020,7 +8061,7 @@ mod internal_tests {
     }
 
     fn held(db: &DirSQL) -> Vec<FileEvent> {
-        db.inner.held.lock().unwrap().clone()
+        db.inner.held.lock().unwrap().events.clone()
     }
 
     #[test]
@@ -8089,9 +8130,69 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let (_fake, db) = fk_db(dir.path(), &[], &[]);
         let a = FileEvent::Modified(dir.path().join("a"));
-        db.hold(vec![a.clone(), FileEvent::Rescan]);
-        db.hold(vec![FileEvent::Rescan, a.clone()]);
+        db.hold(vec![a.clone(), FileEvent::Rescan], None);
+        db.hold(vec![FileEvent::Rescan, a.clone()], None);
         assert_eq!(held(&db), vec![a, FileEvent::Rescan]);
+    }
+
+    fn violation(message: &str) -> ForeignKeyViolation {
+        ForeignKeyViolation {
+            table: "child".into(),
+            file: None,
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn hold_keeps_the_first_violation() {
+        let dir = TempDir::new().unwrap();
+        let (_fake, db) = fk_db(dir.path(), &[], &[]);
+        db.hold(Vec::new(), None);
+        db.hold(Vec::new(), Some(violation("first")));
+        db.hold(Vec::new(), Some(violation("second")));
+        assert_eq!(
+            db.inner.held.lock().unwrap().violation,
+            Some(violation("first"))
+        );
+    }
+
+    #[test]
+    fn take_held_clears_the_violation() {
+        let dir = TempDir::new().unwrap();
+        let (_fake, db) = fk_db(dir.path(), &[], &[]);
+        db.hold(vec![FileEvent::Rescan], Some(violation("orphan")));
+        assert_eq!(db.take_held(), vec![FileEvent::Rescan]);
+        assert_eq!(db.inner.held.lock().unwrap().violation, None);
+    }
+
+    #[test]
+    fn a_query_raises_the_held_violation_until_a_batch_lands_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let (fake, db) = fk_db(root, &["p1", "c1"], &[]);
+        fake.remove(&root.join("p1"));
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("p1"))]);
+
+        for _ in 0..2 {
+            let err = db.query("SELECT id FROM parent").unwrap_err();
+            assert!(
+                matches!(&err, DirSqlError::Core(DbError::ForeignKey(v)) if v.table == "child"),
+                "got: {err:?}"
+            );
+        }
+
+        fake.remove(&root.join("c1"));
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("c1"))]);
+        assert_eq!(db.query("SELECT id FROM parent").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn only_a_foreign_key_error_is_a_violation() {
+        assert_eq!(
+            violation_of(&DirSqlError::Core(DbError::ForeignKey(violation("orphan")))),
+            Some(violation("orphan"))
+        );
+        assert_eq!(violation_of(&DirSqlError::WriteForbidden), None);
     }
 
     #[test]
@@ -8102,13 +8203,16 @@ mod internal_tests {
         fake.stats.insert(root.join("f"), fake_stat());
         let db = DirSQL::with_ignore_and_fs(root, Vec::new(), Vec::<String>::new(), Arc::new(fake))
             .unwrap();
-        db.hold(vec![
-            FileEvent::Deleted(root.join("f")),
-            FileEvent::Modified(root.join("f")),
-            FileEvent::Deleted(root.join("d")),
-            FileEvent::Created(root.join("gone")),
-            FileEvent::Rescan,
-        ]);
+        db.hold(
+            vec![
+                FileEvent::Deleted(root.join("f")),
+                FileEvent::Modified(root.join("f")),
+                FileEvent::Deleted(root.join("d")),
+                FileEvent::Created(root.join("gone")),
+                FileEvent::Rescan,
+            ],
+            None,
+        );
 
         assert_eq!(
             db.take_held(),

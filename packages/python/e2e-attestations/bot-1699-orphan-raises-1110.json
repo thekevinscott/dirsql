@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/orphan_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/on_file_query_test.py tests/e2e/parent_then_child_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/watch_fault_test.py -x -q",
+  "ran_at": 1794833092,
+  "exit_code": 0,
+  "commit": "6d433f4714a8c54968e3e22a1b2143caf56ec571",
+  "branch": "bot/1699-orphan-raises-1110"
+}

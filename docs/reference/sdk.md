@@ -298,6 +298,9 @@ db.query_with(
   writer that never pauses cannot hold it. The watcher's events are applied in
   the background as they arrive, and foreign keys are checked once per batch,
   so a writer creating a parent file and then its child never fails a query.
+  While a batch a foreign key rejected waits to be retried, the query raises
+  its violation instead, unless a file's `on_file` is failing, whose error is
+  raised first: see [Foreign keys](./config.md#foreign-keys).
   A file is read when it is closed after writing or renamed into place; a
   query issued the moment a write returns may read the previous rows, so wait
   for the change on [`watch`](#watch) first. In TypeScript `onFile` runs on
