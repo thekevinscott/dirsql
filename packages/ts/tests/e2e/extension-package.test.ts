@@ -140,7 +140,7 @@ beforeAll(async () => {
     `#!/usr/bin/env bash\nexec "${process.execPath}" "${LAUNCHER}" "$@"\n`,
   );
   await chmod(shim, 0o755);
-}, 120_000);
+}, 0);
 
 afterAll(async () => {
   await rm(PKG_DIR, { recursive: true, force: true });

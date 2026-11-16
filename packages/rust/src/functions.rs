@@ -131,7 +131,7 @@ pub(crate) fn register_worker(
             move |ctx| {
                 let mut args = Vec::with_capacity(ctx.len());
                 for i in 0..ctx.len() {
-                    args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
+                    args.push(argument(ctx.get_raw(i), i + 1, &worker.name)?);
                 }
                 worker
                     .call(&args)
@@ -141,6 +141,25 @@ pub(crate) fn register_worker(
         )?;
     }
     Ok(())
+}
+
+/// The argument at 1-based `position` of a call to `function`, as an owned
+/// value. Checked first because rusqlite panics converting text that is not
+/// valid UTF-8.
+fn argument(
+    raw: rusqlite::types::ValueRef<'_>,
+    position: usize,
+    function: &str,
+) -> rusqlite::Result<Value> {
+    if let rusqlite::types::ValueRef::Text(bytes) = raw
+        && std::str::from_utf8(bytes).is_err()
+    {
+        return Err(rusqlite::Error::UserFunctionError(
+            format!("argument {position} of \"{function}\" holds text that is not valid UTF-8")
+                .into(),
+        ));
+    }
+    Ok(Value::from(rusqlite::types::Value::from(raw)))
 }
 
 /// Counts the worker round trips a query pays for, and reports them.
@@ -1358,6 +1377,59 @@ mod tests {
         assert_eq!(value(&s.worker, &[text("a")]), text("A"));
         assert_eq!(value(&s.worker, &[text("b")]), text("B"));
         assert_eq!(s.spawns(), 1);
+    }
+
+    #[test]
+    fn an_argument_that_is_not_utf8_fails_the_call_naming_its_position() {
+        let s = scripted_worker(vec![vec![ok(r#"{"ok": "A"}"#)]], false);
+        let spawns = Arc::clone(&s.spawns);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let err = conn
+            .query_row("SELECT embed('a', CAST(x'ff41' AS TEXT))", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"argument 2 of "embed" holds text that is not valid UTF-8"#
+        );
+        assert_eq!(*spawns.lock().unwrap(), 0, "the worker is never asked");
+    }
+
+    #[test]
+    fn a_first_argument_that_is_not_utf8_is_argument_one() {
+        let s = scripted_worker(vec![], false);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let err = conn
+            .query_row("SELECT embed(CAST(x'ff41' AS TEXT), 'a')", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"argument 1 of "embed" holds text that is not valid UTF-8"#
+        );
+    }
+
+    #[test]
+    fn valid_text_arguments_reach_the_worker_unchanged() {
+        let s = scripted_worker(vec![vec![ok(r#"{"ok": "A"}"#)]], false);
+        let sent = Arc::clone(&s.sent);
+        let conn = Connection::open_in_memory().unwrap();
+        register_worker(&conn, &Arc::new(s.worker), &[2], false).unwrap();
+
+        let value: String = conn
+            .query_row("SELECT embed('a', 'é')", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(value, "A");
+        assert_eq!(*sent.lock().unwrap(), [r#"{"call":["a","é"]}"#]);
     }
 
     #[test]

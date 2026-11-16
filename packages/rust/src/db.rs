@@ -1018,7 +1018,7 @@ impl Db {
                 select_list("", &rows.columns)
             ),
             [],
-            rows.columns.len(),
+            &rows.columns,
             &mut stored,
         )?;
         let key = self.row_key(table, rows)?;
@@ -1057,7 +1057,6 @@ impl Db {
             return Ok(None);
         };
         let columns = select_list("", &rows.columns);
-        let width = rows.columns.len();
         let mut stored = Vec::new();
         self.read_stored(
             &format!(
@@ -1066,7 +1065,7 @@ impl Db {
                  WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
             ),
             rusqlite::params![table, file_path],
-            width,
+            &rows.columns,
             &mut stored,
         )?;
         let ranged = format!(
@@ -1074,7 +1073,7 @@ impl Db {
              WHERE t.rowid BETWEEN ?1 AND ?2 ORDER BY t.rowid"
         );
         for (first, last) in Self::ranges_by_file(&self.conn, table, file_path)? {
-            self.read_stored(&ranged, [first, last], width, &mut stored)?;
+            self.read_stored(&ranged, [first, last], &rows.columns, &mut stored)?;
         }
         let (changes, placed) = self.reconcile_rows(table, &stored, rows, Some(&key))?;
         if placed.iter().eq(stored.iter().map(|(rowid, _)| rowid)) {
@@ -1124,20 +1123,23 @@ impl Db {
         )?)
     }
 
-    /// Append each row `sql` selects, its rowid then `width` cells, to `out`.
+    /// Append each row `sql` selects, its rowid then a cell per one of
+    /// `columns`, to `out`.
     fn read_stored(
         &self,
         sql: &str,
         params: impl rusqlite::Params,
-        width: usize,
+        columns: &[String],
         out: &mut Vec<(i64, Vec<Value>)>,
     ) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(sql)?;
         let mut cursor = stmt.query(params)?;
         while let Some(row) = cursor.next()? {
-            let cells = (0..width)
-                .map(|i| row.get::<_, rusqlite::types::Value>(i + 1).map(Value::from))
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut cells = Vec::with_capacity(columns.len());
+            for (i, column) in columns.iter().enumerate() {
+                let cell = utf8_checked(row.get_ref(i + 1)?, column)?;
+                cells.push(Value::from(rusqlite::types::Value::from(cell)));
+            }
             out.push((row.get(0)?, cells));
         }
         Ok(())
@@ -1511,47 +1513,29 @@ impl Db {
         file_path: &str,
     ) -> Result<Vec<HashMap<String, Value>>> {
         let user_columns = self.get_table_columns(table)?;
-        let mut col_list = user_columns
-            .iter()
-            .map(|c| format!("t.{}", quote_identifier(c)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if col_list.is_empty() {
-            // No columns can only happen for a nonexistent table (SQLite
-            // requires ≥1 declared column); keep the SELECT list valid and
-            // let SQLite report "no such table".
-            col_list = "1".to_string();
-        }
-        let read_row = |row: &rusqlite::Row<'_>| {
-            let mut map = HashMap::new();
-            for (i, name) in user_columns.iter().enumerate() {
-                let v: rusqlite::types::Value = row.get(i)?;
-                map.insert(name.clone(), Value::from(v));
-            }
-            Ok(map)
-        };
-        let mapped = format!(
-            "SELECT {col_list} FROM \"{table}\" AS t \
-             JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
-             WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
-        );
-        let mut out = self
-            .conn
-            .prepare(&mapped)?
-            .query_map(rusqlite::params![table, file_path], &read_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let columns = select_list("t.", &user_columns);
+        let mut stored = Vec::new();
+        self.read_stored(
+            &format!(
+                "SELECT t.rowid{columns} FROM \"{table}\" AS t \
+                 JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
+                 WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
+            ),
+            rusqlite::params![table, file_path],
+            &user_columns,
+            &mut stored,
+        )?;
         let ranged = format!(
-            "SELECT {col_list} FROM \"{table}\" AS t \
+            "SELECT t.rowid{columns} FROM \"{table}\" AS t \
              WHERE t.rowid BETWEEN ?1 AND ?2 ORDER BY t.rowid"
         );
-        let mut stmt = self.conn.prepare(&ranged)?;
         for (first, last) in Self::ranges_by_file(&self.conn, table, file_path)? {
-            out.extend(
-                stmt.query_map([first, last], &read_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?,
-            );
+            self.read_stored(&ranged, [first, last], &user_columns, &mut stored)?;
         }
-        Ok(out)
+        Ok(stored
+            .into_iter()
+            .map(|(_, cells)| user_columns.iter().cloned().zip(cells).collect())
+            .collect())
     }
 
     fn ranges_by_file(
@@ -3919,6 +3903,25 @@ mod tests {
     }
 
     #[test]
+    fn get_rows_by_file_fails_on_text_that_is_not_utf8() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (id TEXT, d TEXT DEFAULT (CAST(x'ff41' AS TEXT)))",
+        )
+        .unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("a".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+
+        let error = db.get_rows_by_file("t", "a.json").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"d\" holds text that is not valid UTF-8"
+        );
+    }
+
+    #[test]
     fn open_on_unopenable_path_returns_error() {
         // `Db` is not `Debug`; `.map(|_| ())` discards the Ok payload so
         // `unwrap_err` works.
@@ -4983,6 +4986,28 @@ mod tests {
         assert_eq!(table_rows(&db, "t"), vec![(1, "a".into()), (2, "a".into())]);
         assert_eq!(ids(&changes.removed), vec![Value::Text("a".into())]);
         assert!(changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_fails_on_stored_text_that_is_not_utf8() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (id TEXT, d TEXT); \
+             CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN \
+             UPDATE t SET d = CAST(x'ff41' AS TEXT) WHERE rowid = new.rowid; END",
+        )
+        .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", serde_json::json!([{"id":"a"}])), "")
+            .unwrap();
+        let next = shaped(&db, "t", serde_json::json!([{"id":"a","d":"x"}]));
+
+        let error = db.reconcile_batch_rows("t", "", &next).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "column \"d\" holds text that is not valid UTF-8"
+        );
     }
 
     #[test]
