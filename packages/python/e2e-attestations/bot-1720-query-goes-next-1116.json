@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/query_contract_test.py tests/e2e/watch_fault_test.py tests/e2e/written_during_build_test.py tests/e2e/orphan_query_test.py tests/e2e/parent_then_child_test.py tests/e2e/repl_interactive_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1794862632,
+  "exit_code": 0,
+  "commit": "8054cde360c4edff2b781b56b5142619649d2b91",
+  "branch": "bot/1720-query-goes-next-1116"
+}
