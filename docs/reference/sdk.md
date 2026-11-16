@@ -159,8 +159,8 @@ shortcut was removed in #603 — use
   `node_modules`) — for both the programmatic list and a `config` file's
   `[[dirsql.extension]]` entries. The Rust SDK is file-path-only.
   Programmatic entries load first, then the config's. A relative
-  programmatic path is used verbatim (resolved by the OS against the
-  process working directory); config-file paths resolve against the config
+  programmatic path resolves against the process working directory when the
+  instance is constructed; config-file paths resolve against the config
   file's parent.
 
 **Construction is asynchronous in Python and TypeScript.** The constructor

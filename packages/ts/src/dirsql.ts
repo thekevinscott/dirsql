@@ -12,8 +12,8 @@ import type { TableDef } from "./table.js";
 export interface ExtensionSpec {
   /**
    * Path to the extension's shared library (`.so` / `.dylib` / `.dll`).
-   * Taken verbatim — relative paths resolve against the process working
-   * directory at load time (config-file paths, by contrast, resolve against
+   * A relative path resolves against the process working directory when
+   * `new DirSQL` is called (config-file paths, by contrast, resolve against
    * the config file's parent directory).
    */
   path: string;
@@ -195,11 +195,15 @@ export class DirSQL {
           ? [options.config]
           : options.config;
     // Read now: the core is built after the constructor returns, and a chdir
-    // in between must not move the root. An unreadable cwd stays the core's
-    // error, rejecting `ready` like any other.
+    // in between must not move the root or a relative extension path. An
+    // unreadable cwd stays the core's error, rejecting `ready` like any other.
     let root = options.root ?? null;
     try {
       root = resolve(root ?? process.cwd());
+    } catch {}
+    let cwd: string | null = null;
+    try {
+      cwd = process.cwd();
     } catch {}
     const Ctor = getCore().DirSQL;
     // Extension paths (possibly bare package names) are resolved inside the
@@ -209,7 +213,7 @@ export class DirSQL {
       .then(() => {
         const extensions =
           options.extensions?.map((e) => ({
-            path: resolveExtensionPath(e.path, process.cwd(), false),
+            path: resolveExtensionPath(e.path, cwd ?? process.cwd(), true),
             entrypoint: e.entrypoint,
           })) ?? null;
         // The SDK resolves the config's [[dirsql.extension]] entries itself
