@@ -129,8 +129,8 @@ struct ConfigArgs {
 
     /// Scan files a `.gitignore` would hide. Path-tables respect `.gitignore`
     /// files by default (hierarchically, like fd/ripgrep); this flag restores
-    /// the full walk. The built-in skips (`node_modules`/`.git`) and any
-    /// configured `ignore` patterns still apply.
+    /// the full walk. The built-in `.git` skip still applies; a config's
+    /// `ignore` never applies to path-tables.
     #[arg(long = "no-ignore")]
     no_ignore: bool,
 }

@@ -1,0 +1,1 @@
+**Fixed** `--no-ignore`'s help no longer claims a config's `ignore` patterns apply to path-tables, or that `node_modules` is skipped by default. A config's `ignore` covers only that config's own tables; the built-in skip is `.git` alone.
