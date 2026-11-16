@@ -35,6 +35,11 @@ curl -s http://localhost:7117/query \
   | jq
 ```
 
+A query does not wait for file changes still queued or not yet reported by
+the operating system, so a write followed at once by a query can return the
+old rows: see
+[A query can miss a file you just wrote](./cli.md#a-query-can-miss-a-file-you-just-wrote).
+
 ### Value serialization
 
 | SQLite value | JSON |

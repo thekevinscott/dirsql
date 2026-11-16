@@ -563,8 +563,9 @@ during the walk are applied once, before the build finishes. From then until
 `dirsql` exits, changes update the index as they arrive, a batch at a time. A
 query that arrives while a batch is being applied waits for it; see
 [How long a query waits](#how-long-a-query-waits). A query issued right after
-a write may still read the old rows, when the change has not reached the
-watcher yet. [Path-tables](./path-tables.md) are not watched; the statement
+a write may still read the old rows; see
+[A query can miss a file you just wrote](#a-query-can-miss-a-file-you-just-wrote).
+[Path-tables](./path-tables.md) are not watched; the statement
 that names one scans it.
 
 - **Linux.** `dirsql` reads inotify directly and applies changes in the
@@ -617,6 +618,21 @@ For example, with an SDK callback that takes 2 ms:
 
 And a `[[table]]` whose command takes 3 seconds over its files holds a query
 for up to 3 seconds, whether one file changed or a thousand.
+
+#### A query can miss a file you just wrote
+
+A query waits only for the batch being applied when it arrives. It does not
+wait for:
+
+- changes that are queued for the next batch, and
+- changes the operating system has not reported to `dirsql` yet.
+
+So a write followed at once by a query can return the old rows. The new rows
+appear in a later query, once the batch holding that change has been applied.
+
+A row's event on the [change stream](./http-api.md#get-events) is sent after
+the batch holding it has been applied, so a query made after the event
+arrives reads that row.
 
 #### The limit: a writer that never pauses
 

@@ -319,6 +319,10 @@ db.query_with(
   takes. The measurements, the Linux limit of 16,384 queued changes, and what
   keeps the wait short are in
   [How long a query waits](./cli.md#how-long-a-query-waits).
+- **Can miss a file you just wrote.** A query does not wait for changes still
+  queued or not yet reported by the operating system, so a write followed at
+  once by a query can return the old rows: see
+  [A query can miss a file you just wrote](./cli.md#a-query-can-miss-a-file-you-just-wrote).
   On Linux changes are applied in the order the kernel reports them, so a writer
   creating a parent file and then its child does not fail a query; macOS and
   Windows give no such guarantee.
