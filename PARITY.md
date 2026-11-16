@@ -96,7 +96,7 @@ core, so all three SDKs change at once. **No drift.**
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Query carrying the projection order | `db.query(sql)`: each row dict is keyed in projection order | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | `await db.queryOrdered(sql) -> QueryResult` (`columns` + `rows`) |
 | Query with bind parameters (sequence -> `?`, mapping -> `:name`) | `await db.query(sql, params)` | `db.query_with(sql, &Params)` (also `query_ordered_with`, `query_each_with`, `AsyncDirSQL::query_with`) | `await db.query(sql, params)` (array -> `?`, plain object -> `:name`; also `queryOrdered(sql, params)`) |
-| Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
+| Attach to the watcher (it runs from instantiation) | `db._start_watcher()` (attaches)  | **N** (`watch()` / `poll_events()` attach)           | `await db.startWatcher()` (optional: attaches on the JS thread; `pollEvents()` attaches on its own) |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Hold the index still during a multi-file write | `with db.lock:` | **N** (core `lock_index` / `unlock_index` are `#[doc(hidden)]` binding plumbing) | **N** |
@@ -502,7 +502,7 @@ public-API binding, so no drift.
 - Table definitions may be written as `new Table({...})` or as a plain object literal (`{ name, ddl, glob, onFile, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
 - The constructor is overloaded: `new DirSQL(configPath: string)` or `new DirSQL(options: { root?, tables?, ignore?, config? })`. There is no separate `fromConfig` factory.
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
-- `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
+- `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s; `query()` and `pollEvents()` run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts), and `startWatcher()` attaches on the JS thread.
 - `new DirSQL(...)` returns synchronously but the initial directory scan runs on the libuv threadpool: `ready` resolves once it completes and rejects on scan error. Every method transparently awaits `ready`, so callers can issue queries immediately.
 
 ## Test Coverage Matrix

@@ -1,0 +1,1 @@
+**Fixed** Docs: `startWatcher()` no longer claims it must precede `pollEvents()`, which attaches on its own; `watch()` is described as attaching to the watcher that runs from the moment the instance is built; `query()` no longer claims it reads the files that changed since the last query.
