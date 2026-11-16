@@ -5805,6 +5805,56 @@ mod internal_tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_walk_a_queued_event_starts_applies_what_was_queued_during_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("advices")).unwrap();
+        let advice = Table::new(
+            "advice",
+            "CREATE TABLE advice (id TEXT PRIMARY KEY)",
+            "advices/*.txt",
+            |_| {
+                vec![Row::from_iter([(
+                    "id".to_string(),
+                    Value::Text("a".into()),
+                )])]
+            },
+        );
+        let advices = root.join("advices");
+        let turn = Table::new(
+            "turn",
+            "CREATE TABLE turn (advice TEXT NOT NULL REFERENCES advice(id))",
+            "turns/*.txt",
+            move |_| {
+                std::fs::write(advices.join("a.txt"), "x").unwrap();
+                vec![Row::from_iter([(
+                    "advice".to_string(),
+                    Value::Text("a".into()),
+                )])]
+            },
+        );
+        let db = DirSQL::with_ignore_and_fs(
+            &root,
+            vec![advice, turn],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("new")).unwrap();
+        std::fs::create_dir(root.join("turns")).unwrap();
+        std::fs::write(root.join("turns/1.txt"), "x").unwrap();
+
+        let events = db.apply_file_events(vec![FileEvent::Created(root.join("new"))]);
+
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        let pairs = db
+            .query("SELECT count(*) AS n FROM turn JOIN advice ON advice.id = turn.advice")
+            .unwrap();
+        assert_eq!(pairs[0]["n"], Value::Integer(1));
+    }
+
     #[test]
     fn poll_events_locks_out_watch() {
         let (_dir, db) = simple_db();
