@@ -72,10 +72,13 @@ works — `EventSource` in a browser, an SSE client library, or plain
 
 ## Notes
 
-- Querying never waits on this stream: a query reads the index as it stands
-  ([The file watcher](../reference/cli.md#the-file-watcher)). The stream
-  carries the changes applied after you subscribe; earlier ones are not
-  replayed.
+- A query never waits for a subscriber to read this stream. It does wait for
+  a batch of changes that is being applied when it arrives, and is answered
+  as soon as that batch ends, so it sees whole batches only. Under a writer
+  that never pauses, with a slow `on-file` command, that wait can be long:
+  see [How long a query waits](../reference/cli.md#how-long-a-query-waits).
+- The stream carries the changes applied after you subscribe; earlier ones
+  are not replayed.
 - Events reflect *row* changes, not raw filesystem events: a file edit
   that leaves a table's rows identical emits nothing, and one file change
   can emit several events. The diffing model is part of

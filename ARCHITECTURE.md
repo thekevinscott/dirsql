@@ -354,7 +354,7 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 ### Query execution
 
 1. Python calls `db.query(sql)`
-2. The query reads the index as it stands; a background applier thread applies the watcher's events as they arrive and hands their row events to `watch()` streams and `poll_events`. While a batch a foreign key rejected is held, the query raises its violation, unless a watcher fault or a failing file's `on_file` error is raised first
+2. A background applier thread applies the watcher's events as they arrive, a batch at a time, and hands their row events to `watch()` streams and `poll_events`. A query that arrives while a batch is being applied waits for it, then reads the index (see *What a query sees*). While a batch a foreign key rejected is held, the query raises its violation, unless a watcher fault or a failing file's `on_file` error is raised first
 3. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
 4. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
 5. Rust executes the prepared statement
@@ -362,9 +362,35 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 ### What a query sees
 
-A query reads the index as it stands and never waits on the watcher, so the
-index costs one walk, at build, however many queries follow. A query issued
-right after a write may read the old rows.
+A query never walks the tree, so the index costs one walk, at build, however
+many queries follow. A query issued right after a write may read the old
+rows, when the change has not reached the watcher yet.
+
+**A query waits for the freshest index it can get.** One that arrives while
+a batch of changes is being applied waits for that batch and is answered as
+soon as it ends; one that arrives when nothing is being applied is answered
+at once. A batch is every change that was waiting when applying started.
+Changes that arrive meanwhile form the next batch, and the waiting query
+does not wait for that one.
+
+**A batch is applied whole and never split.** Foreign keys are checked once
+per batch, across all tables. Half a batch could hold a child whose parent is
+in the other half, and the check would report a violation the files do not
+have. So a query sees whole batches only.
+
+**The accepted limit is a writer that never pauses.** When changes arrive
+faster than they are applied, each batch gathers more changes than the last,
+and a query waits as long as one such batch takes. A per-file callback runs
+once per change, so a slow one makes this likely. Measured in a stress test
+on Linux, with a callback taking 2 ms per change: batches reached about
+17,500 changes and queries waited about 50 seconds, 85% of it in the
+callback. Splitting the batch to answer sooner was rejected for the reason
+above. The kernel holds at most 16,384 unread events
+(`fs.inotify.max_queued_events`) and they are read between batches, so a
+batch long enough for more to pile up loses events, and every query then
+raises "the OS dropped file events, so the index no longer matches the
+files; rebuild it". The user-facing version, with what keeps the wait short,
+is [How long a query waits](https://dirsql.dev/reference/cli#how-long-a-query-waits).
 
 - **Linux.** Events are applied in the order the kernel reports them, so a
   writer that creates a parent file and then its child does not make a query

@@ -560,10 +560,13 @@ A config's named tables are indexed by one walk of the directory, when
 `dirsql` starts: the one-shot query, the REPL and the server all build the
 same way. A file watcher starts before that walk, and the changes it sees
 during the walk are applied once, before the build finishes. From then until
-`dirsql` exits, changes update the index as they arrive. A query only reads
-the index, so a query issued right after a write may read the old rows.
-[Path-tables](./path-tables.md) are not watched; the statement that names one
-scans it.
+`dirsql` exits, changes update the index as they arrive, a batch at a time. A
+query that arrives while a batch is being applied waits for it; see
+[How long a query waits](#how-long-a-query-waits). A query issued right after
+a write may still read the old rows; see
+[A query can miss a file you just wrote](#a-query-can-miss-a-file-you-just-wrote).
+[Path-tables](./path-tables.md) are not watched; the statement
+that names one scans it.
 
 - **Linux.** `dirsql` reads inotify directly and applies changes in the
   order the kernel reports them. A file is read when its writer closes it or
@@ -577,6 +580,95 @@ A row whose foreign key matches nothing fails the build. After the build, the
 index keeps its last consistent state and every query raises that violation
 until the parent appears or the child is removed; see
 [Foreign keys](./config.md#foreign-keys).
+
+### How long a query waits
+
+A query waits for the freshest index it can get. This applies wherever
+`dirsql` keeps running over named tables: the server, the REPL, and an
+[embedded instance](./sdk.md#query).
+
+- **Nothing is being applied:** the query is answered at once.
+- **A batch of changes is being applied:** the query waits for that batch and
+  is answered as soon as it ends.
+
+A **batch** is every change that was waiting when applying started. Changes
+that arrive while it is being applied form the next batch, and the waiting
+query does not wait for that one.
+
+A batch is applied whole and is never split.
+[Foreign keys](./config.md#foreign-keys) are checked once per batch, across
+all tables. Half a batch could hold a child row whose parent is in the other
+half, and the check would report a violation the files do not have. So a
+query sees whole batches only: every change in a batch, or none of them.
+
+How long a batch takes depends on the table's hook:
+
+| Table | Work per batch |
+| --- | --- |
+| `[[table]]` with an [`on-file` command](./hooks.md) | The command runs once for each table with a change, over all of that table's files, however many changed. |
+| SDK `Table` with an [`on_file` callback](./sdk.md#table) | The callback runs once per change the watcher reports, so the work grows with the batch. |
+
+For example, with an SDK callback that takes 2 ms:
+
+| Changes in the batch | A query arriving as it starts waits about |
+| --- | --- |
+| 1 | 2 ms |
+| 500 | 1 s |
+| 5,000 | 10 s |
+
+And a `[[table]]` whose command takes 3 seconds over its files holds a query
+for up to 3 seconds, whether one file changed or a thousand.
+
+#### A query can miss a file you just wrote
+
+A query waits only for the batch being applied when it arrives. It does not
+wait for:
+
+- changes that are queued for the next batch, and
+- changes the operating system has not reported to `dirsql` yet.
+
+So a write followed at once by a query can return the old rows. The new rows
+appear in a later query, once the batch holding that change has been applied.
+
+A row's event on the [change stream](./http-api.md#get-events) is sent after
+the batch holding it has been applied, so a query made after the event
+arrives reads that row.
+
+#### The limit: a writer that never pauses
+
+When changes arrive faster than they are applied, each batch gathers more
+changes than the last, and a query waits as long as one such batch takes.
+This is the accepted cost of never splitting a batch.
+
+Measured in a stress test on Linux, with one writer rewriting files in a
+loop and an SDK callback taking 2 ms per change: batches reached about 17,500
+changes and queries waited about 50 seconds. 85% of that time was spent in
+the callback.
+
+On Linux there is a second limit. The kernel holds at most 16,384 changes
+that `dirsql` has not yet read (`fs.inotify.max_queued_events`), and
+`dirsql` reads them between batches. When more than that pile up during one
+batch, the kernel drops the rest, the index can no longer be trusted, and
+every query from then on fails until `dirsql` is restarted:
+
+```text
+the OS dropped file events, so the index no longer matches the files; rebuild it
+```
+
+What keeps the wait short:
+
+- **A fast hook.** In the stress test above it was 85% of the wait.
+- **A writer that pauses.** A batch is only what was waiting when applying
+  started, so any gap in the writing lets the batches shrink again.
+- **A glob that matches only the files you query.** A change to a file no
+  table matches runs no hook.
+- **A [path-table](./path-tables.md), when the tree is small enough to scan
+  per query.** With no named tables there is no watcher and nothing to wait
+  for.
+
+Over HTTP, the time a query waits counts toward the server's 30-second
+per-query timeout, so a query that waits longer is answered
+[`408`](./http-api.md#post-query).
 
 ### The watch limit (Linux)
 

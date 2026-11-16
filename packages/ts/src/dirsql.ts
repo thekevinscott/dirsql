@@ -256,6 +256,13 @@ export class DirSQL {
    * Awaits the initial scan if it has not yet finished. The query runs on the libuv threadpool, so the JS event loop
    * stays responsive even for large result sets or long-running queries.
    *
+   * A query that arrives while a batch of file changes is being applied
+   * waits for that batch and resolves as soon as it ends. A batch is every
+   * change that was waiting when applying started, and it is never split, so
+   * a query reads whole batches only. `onFile` runs once per change: under a
+   * writer that never pauses, a slow `onFile` lets one batch grow large, and
+   * the query waits as long as that batch takes.
+   *
    * `params` binds to the statement's placeholders through SQLite, so the
    * values never enter the SQL text:
    *

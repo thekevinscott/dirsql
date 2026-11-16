@@ -231,7 +231,10 @@ at once with no binding changes and no public-surface change.
 no SDK drift.** The tree is walked once, when the instance is built, with the
 watcher already running. The changes it saw during the walk are applied once,
 before the build finishes; later changes update the index as they arrive, on
-a thread the instance owns. A query only reads the index. A real orphan after
+a thread the instance owns, a batch at a time. A query that arrives while a
+batch is being applied waits for it and is answered as soon as it ends; a
+batch is never split, so under a writer that never pauses a query waits as
+long as one batch takes, in every SDK. A real orphan after
 the build makes every query raise its foreign-key violation until the parent
 appears or the child is removed. All of it lives in the shared core, so the
 three SDKs and the CLI change at once. The drift is by platform: Linux reads
