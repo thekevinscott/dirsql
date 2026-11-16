@@ -340,7 +340,7 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 ### Query execution
 
 1. Python calls `db.query(sql)`
-2. The watcher's queued file events are applied, foreign keys checked only once the queue is empty; on Linux the inotify queue is drained first, so a write that returned before the call is read
+2. The query reads the index as it stands; a background applier thread applies the watcher's events as they arrive and hands their row events to `watch()` streams and `poll_events`
 3. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
 4. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
 5. Rust executes the prepared statement

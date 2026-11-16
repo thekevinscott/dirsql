@@ -1,7 +1,5 @@
 //! A watch refresh updates a keyed row in place, so its generated id holds.
 
-#[cfg(target_os = "linux")]
-use dirsql::watcher::FileEvent;
 use dirsql::{DirSQL, RowEvent, Value};
 use std::fs;
 use std::path::Path;
@@ -68,6 +66,7 @@ fn renaming_an_experiment_keeps_its_id_and_emits_one_update() {
         .build()
         .unwrap();
     let alpha = id_of(&db, "a");
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
     write_experiment(root.path(), "0", "Zero");
@@ -119,10 +118,11 @@ fn renaming_a_per_file_experiment_keeps_its_id_and_emits_one_update() {
     write_experiment(&root, "a", "Alpha");
     write_experiment(&root, "b", "Beta");
     let db = DirSQL::new(&root, vec![per_file_experiments()]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     let alpha = id_of(&db, "a");
 
     write_experiment(&root, "a", "Renamed");
-    let events = db.apply_file_events(vec![FileEvent::Modified(root.join("a.json"))]);
+    let events = poll_until(&db, |seen| names_seen(seen, "Renamed"));
 
     match events.as_slice() {
         [

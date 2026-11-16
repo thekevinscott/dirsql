@@ -1,13 +1,16 @@
 //! A tree, the instance over it, and the readings the freshness tests assert:
-//! a declared table must read exactly what a fresh scan of the disk reads.
+//! once the watcher's events are applied, a declared table must read exactly
+//! what a fresh scan of the disk reads.
 
 #![allow(dead_code)]
 
 use dirsql::{DirSQL, Row, Table, Value};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 
 /// `recs` is a config table, so its hook runs once over every matched file.
@@ -182,13 +185,42 @@ pub fn recs_of(db: &DirSQL, k: &str) -> Vec<String> {
         .collect()
 }
 
-/// The oracle: what a fresh scan of the disk reads right now.
-pub fn assert_matches_fresh_scan(db: &DirSQL, tree: &Tree, context: &str) {
-    let fresh = tree.open();
-    assert_eq!(
-        snapshot(db),
-        snapshot(&fresh),
-        "the long-lived instance disagrees with a fresh scan after {context}"
+/// Wait for `read` to return `expected`, failing with `context` after ten
+/// seconds: the watcher's events reach the index after the change returns.
+pub fn await_eq<T: PartialEq + Debug>(mut read: impl FnMut() -> T, expected: T, context: &str) {
+    let mut last = read();
+    for _ in 0..1000 {
+        if last == expected {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+        last = read();
+    }
+    assert_eq!(last, expected, "{context}");
+}
+
+fn owned<S: AsRef<str>>(items: &[S]) -> Vec<String> {
+    items.iter().map(|s| s.as_ref().to_string()).collect()
+}
+
+/// Wait for the `notes` lines of `file` to be `expected`.
+pub fn await_lines<S: AsRef<str>>(db: &DirSQL, file: &str, expected: &[S]) {
+    await_eq(|| lines_of(db, file), owned(expected), file);
+}
+
+/// Wait for the `recs` values of key `k` to be `expected`.
+pub fn await_recs<S: AsRef<str>>(db: &DirSQL, k: &str, expected: &[S]) {
+    await_eq(|| recs_of(db, k), owned(expected), k);
+}
+
+/// The oracle: wait for the instance to read what a fresh scan of the disk
+/// reads now.
+pub fn await_fresh_scan(db: &DirSQL, tree: &Tree, context: &str) {
+    let fresh = snapshot(&tree.open());
+    await_eq(
+        || snapshot(db),
+        fresh,
+        &format!("the long-lived instance disagrees with a fresh scan after {context}"),
     );
 }
 

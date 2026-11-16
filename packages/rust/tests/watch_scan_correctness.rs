@@ -53,6 +53,7 @@ fn paths(db: &DirSQL) -> Vec<String> {
 fn mkdir_under_root_inserts_no_row() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::create_dir(dir.path().join("subdir")).unwrap();
@@ -84,6 +85,7 @@ fn rename_out_deletes_rows() {
     fs::write(dir.path().join("a.txt"), "alpha").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     assert!(
         paths(&db).iter().any(|p| p == "a.txt"),
         "initial scan should index a.txt; rows: {:?}",
@@ -127,6 +129,7 @@ fn dir_moved_into_root_indexes_its_files() {
     fs::write(stage.path().join("moved/a.txt"), "alpha").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();
@@ -160,6 +163,7 @@ fn dir_moved_into_root_indexes_nested_files() {
     fs::write(stage.path().join("moved/one/two/deep.txt"), "deep").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
     fs::rename(stage.path().join("moved"), dir.path().join("moved")).unwrap();
@@ -199,6 +203,7 @@ fn dir_moved_out_of_root_deletes_its_rows() {
     fs::write(dir.path().join("keep.txt"), "keep").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     let under_leaving = |db: &DirSQL| -> Vec<String> {
         let mut rows: Vec<String> = paths(db)
             .into_iter()
@@ -261,6 +266,7 @@ fn dir_renamed_within_root_deletes_rows_under_old_name() {
     fs::write(dir.path().join("a/x.txt"), "x").unwrap();
 
     let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    db.poll_events(Duration::ZERO).unwrap();
     assert!(
         paths(&db).iter().any(|p| p == "a/x.txt"),
         "initial scan should index a/x.txt; rows: {:?}",

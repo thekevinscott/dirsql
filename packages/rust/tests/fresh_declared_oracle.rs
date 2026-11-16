@@ -6,7 +6,7 @@
 #[path = "common/fresh.rs"]
 mod fresh;
 
-use fresh::{Rng, Tree, assert_matches_fresh_scan};
+use fresh::{Rng, Tree, await_fresh_scan};
 use std::fs;
 use std::time::Duration;
 
@@ -134,7 +134,7 @@ fn random_operations_read_what_a_fresh_scan_reads() {
         let db = tree.open();
         for op in 0..150 {
             let done = step(&tree, &mut rng);
-            assert_matches_fresh_scan(&db, &tree, &format!("seed {seed} op {op}: {done}"));
+            await_fresh_scan(&db, &tree, &format!("seed {seed} op {op}: {done}"));
         }
     }
 }
@@ -148,7 +148,7 @@ fn a_long_lived_instance_reads_what_a_fresh_scan_reads_across_idle_gaps_and_burs
         std::thread::sleep(Duration::from_millis(250 * (cycle % 4)));
         for op in 0..25 {
             let done = step(&tree, &mut rng);
-            assert_matches_fresh_scan(&db, &tree, &format!("cycle {cycle} op {op}: {done}"));
+            await_fresh_scan(&db, &tree, &format!("cycle {cycle} op {op}: {done}"));
         }
     }
 }
