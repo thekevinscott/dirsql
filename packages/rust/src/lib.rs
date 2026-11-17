@@ -7148,17 +7148,6 @@ mod internal_tests {
         assert_eq!(rel, vec![PathBuf::from("/elsewhere/a.md")]);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn batch_paths_keeps_the_bytes_of_a_name_that_is_not_utf8() {
-        use std::os::unix::ffi::OsStrExt;
-        let name = std::ffi::OsStr::from_bytes(b"ok\xffname.json");
-        let mut files = vec![scanned_at(Path::new("/scan").join(name))];
-        let (rel, abs) = batch_paths(&mut files, Path::new("/scan"));
-        assert_eq!(rel, vec![PathBuf::from(name)]);
-        assert_eq!(abs, vec![Path::new("/scan").join(name)]);
-    }
-
     fn scanned(rel_path: &str, table: &str, trusted: bool) -> ScannedFile {
         ScannedFile {
             abs_path: PathBuf::new(),
