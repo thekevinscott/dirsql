@@ -3,7 +3,7 @@ declared public names and that each resolves to a real value. Imports are
 relative so the barrel under test is the unit, not an external collaborator.
 """
 
-from . import DirSQL, RowEvent, ScanFailure, Table, __all__, __version__
+from . import DirSQL, RowEvent, Table, __all__, __version__
 
 
 def describe_public_barrel():
@@ -12,7 +12,6 @@ def describe_public_barrel():
             "DirSQL",
             "Table",
             "RowEvent",
-            "ScanFailure",
             "__version__",
         }
 
@@ -20,5 +19,4 @@ def describe_public_barrel():
         assert DirSQL is not None
         assert Table is not None
         assert RowEvent is not None
-        assert ScanFailure is not None
         assert isinstance(__version__, str)

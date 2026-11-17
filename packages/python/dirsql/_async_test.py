@@ -36,7 +36,6 @@ class _FakeRustDirSQL:
         self.suppress_config_extensions = suppress_config_extensions
         self.query_calls = []
         self.query_params = []
-        self.scan_failures_value = []
         self.watchers_started = 0
 
     def _start_watcher(self):
@@ -46,9 +45,6 @@ class _FakeRustDirSQL:
         self.query_calls.append(sql)
         self.query_params.append(params)
         return [{"sql": sql}]
-
-    def scan_failures(self):
-        return self.scan_failures_value
 
 
 class _FakeWatcherDb:
@@ -65,14 +61,6 @@ class _FakeWatcherDb:
         if self.events:
             return self.events.pop(0)
         return []
-
-
-class _Failure:
-    """Stand-in for the core's ScanFailure; the wrapper only passes it along."""
-
-    def __init__(self, path, message):
-        self.path = path
-        self.message = message
 
 
 class _ReadyOwner:
@@ -151,27 +139,6 @@ def describe_DirSQL_async():
                 await db.ready()
 
                 assert db._db.no_ignore is False
-
-        @pytest.mark.asyncio
-        async def it_awaits_ready_then_forwards_scan_failures():
-            # Awaiting ready first is the point: reading before the scan
-            # finishes would report an empty list for a scan that had simply
-            # not reached the failing file yet.
-            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-                db = async_mod.DirSQL("/tmp/root")
-                await db.ready()
-                db._db.scan_failures_value = [_Failure("bad.json", "boom")]
-
-                (failure,) = await db.scan_failures()
-
-                assert failure.path == "bad.json"
-                assert failure.message == "boom"
-
-        @pytest.mark.asyncio
-        async def it_reports_no_scan_failures_for_a_clean_scan():
-            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-                db = async_mod.DirSQL("/tmp/root")
-                assert await db.scan_failures() == []
 
         @pytest.mark.asyncio
         async def it_passes_no_extensions_through_unresolved():
