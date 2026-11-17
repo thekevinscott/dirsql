@@ -11,7 +11,7 @@ If any PR, test, or agent report implies something fails on `main`, stop. Flag i
 Put these rules into every agent brief:
 
 - **Base `main`.** No stacked PRs.
-- **Merge `main` into a branch only to resolve a conflict.** `main` doesn't require up-to-date branches, and every new head reruns CI. That includes mutation, which takes an hour on a large PR.
+- **Keep every open PR branch up to date with `main`.** When `main` moves, merge it into each open branch, without asking. Every new head reruns CI, so push once per move, together with any pending fix.
 - **Never run mutation locally.** That includes plain `just preflight`.
 - **Never merge.**
 - **Batch fixes into one push.**
