@@ -5992,6 +5992,17 @@ mod internal_tests {
     }
 
     #[test]
+    fn watch_after_its_stream_is_dropped_attaches_a_fresh_stream() {
+        let (_dir, db) = simple_db();
+        drop(db.watch().unwrap());
+
+        let mut stream = db.watch().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
+    }
+
+    #[test]
     fn apply_file_events_processes_create_then_delete() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");

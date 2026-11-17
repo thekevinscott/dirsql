@@ -13,6 +13,7 @@ the Rust core's own suites.
 """
 
 import asyncio
+import gc
 import os
 from typing import ClassVar
 from unittest.mock import patch
@@ -71,6 +72,9 @@ class _FakeRustDirSQL:
 
     def _start_watcher(self):
         self.started = True
+
+    def _stop_watcher(self):
+        self.started = False
 
     def _poll_events(self, timeout_ms):
         self.poll_calls.append(timeout_ms)
@@ -292,6 +296,60 @@ def describe_binding_layer():
                 asyncio.gather(take_two(first), take_two(second)), timeout=2.0
             )
             assert got == [["a", "b"], ["a", "b"]]
+
+        @pytest.mark.asyncio
+        async def it_closes_the_stream_on_leaving_async_with(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a", "b"]]
+
+            async with db.watch() as events:
+                seen = [await events.__anext__()]
+
+            assert seen == ["a"]
+            assert [event async for event in events] == []
+            assert fake.started is False
+
+        @pytest.mark.asyncio
+        async def it_keeps_feeding_the_streams_left_open(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a"], ["b"]]
+            kept = db.watch()
+
+            async with db.watch() as closing:
+                assert await closing.__anext__() == "a"
+
+            assert fake.started is True
+            assert [await kept.__anext__(), await kept.__anext__()] == ["a", "b"]
+
+        @pytest.mark.asyncio
+        async def it_starts_a_fresh_stream_after_the_last_one_closed(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+            fake = _FakeRustDirSQL.instances[0]
+            await db.watch().aclose()
+            fake.poll_batches = [["later"]]
+
+            async with db.watch() as events:
+                assert fake.started is True
+                assert await events.__anext__() == "later"
+
+        @pytest.mark.asyncio
+        async def it_stops_the_core_when_the_last_stream_is_dropped(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a"]]
+            stream = db.watch()
+            await stream.__anext__()
+
+            del stream
+            gc.collect()
+
+            assert fake.started is False
 
     def describe_config_kwarg():
         # Feature: DirSQL(config=path) forwards to the Rust core. See
