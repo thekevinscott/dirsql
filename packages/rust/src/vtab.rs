@@ -990,8 +990,7 @@ mod tests {
 
     #[cfg(unix)]
     fn mkfifo(path: &Path) {
-        use std::os::unix::ffi::OsStrExt;
-        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let name = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
         #[expect(
             unsafe_code,
             reason = "no safe API makes a FIFO on every unix: rustix has none on macOS"
