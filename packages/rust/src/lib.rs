@@ -1300,6 +1300,15 @@ impl DirSQL {
     /// Route one event: per-file tables are updated in place; a per-table
     /// hook's table is marked in `pending` for one re-run after the batch.
     fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+        // Windows reports a file replaced by a rename as removed, then as
+        // renamed into place: applied as a deletion, the first half reports
+        // rows gone that the file still holds.
+        let event = match event {
+            FileEvent::Deleted(p) if self.inner.fs.is_file(&p).unwrap_or(false) => {
+                FileEvent::Modified(p)
+            }
+            other => other,
+        };
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
             FileEvent::Rescan | FileEvent::Fault(_) => return Vec::new(),
@@ -4599,6 +4608,10 @@ mod internal_tests {
     }
 
     fn subtree_db(fake: FakeFs, root: &Path, ignore: Vec<&str>) -> DirSQL {
+        subtree_db_on(Arc::new(fake), root, ignore)
+    }
+
+    fn subtree_db_on(fake: Arc<FakeFs>, root: &Path, ignore: Vec<&str>) -> DirSQL {
         DirSQL::with_ignore_and_fs(
             root,
             vec![Table::new(
@@ -4613,7 +4626,7 @@ mod internal_tests {
                 },
             )],
             ignore,
-            Arc::new(fake),
+            fake,
         )
         .unwrap()
     }
@@ -5999,10 +6012,14 @@ mod internal_tests {
 
     #[test]
     fn apply_file_events_processes_create_then_delete() {
-        let (_dir, db, abs, _rel) = upsert_fixture();
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let fake = Arc::new(FakeFs::with_stat(abs.clone(), fake_stat()));
+        let db = subtree_db_on(fake.clone(), dir.path(), Vec::new());
         let created = db.apply_file_events(vec![FileEvent::Created(abs.clone())]);
         assert_eq!(created.len(), 1, "expected one insert: {created:?}");
         assert!(matches!(&created[0], RowEvent::Insert { .. }));
+        fake.remove(&abs);
 
         let deleted = db.apply_file_events(vec![FileEvent::Deleted(abs)]);
         assert_eq!(deleted.len(), 1, "expected one delete: {deleted:?}");
@@ -7697,6 +7714,7 @@ mod internal_tests {
             FileEvent::Created(a.clone()),
         ]);
         db.apply_file_events(vec![FileEvent::Modified(a.clone())]);
+        fake.remove(&a);
         db.apply_file_events(vec![FileEvent::Deleted(a.clone())]);
 
         assert_eq!(
@@ -7708,6 +7726,30 @@ mod internal_tests {
             *calls.lock().unwrap(),
             vec![vec![a.clone(), b.clone()], vec![a, b.clone()], vec![b]]
         );
+    }
+
+    #[test]
+    fn apply_file_events_keeps_a_file_reported_deleted_that_is_still_there_in_its_per_table_hook() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = Arc::new(FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        ));
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake).unwrap();
+        db.apply_file_events(vec![
+            FileEvent::Created(b.clone()),
+            FileEvent::Created(a.clone()),
+        ]);
+
+        let events = db.apply_file_events(vec![FileEvent::Deleted(a.clone())]);
+
+        assert_eq!(events, vec![]);
+        assert_eq!(calls.lock().unwrap().last(), Some(&vec![a, b]));
     }
 
     /// A per-table hook that answers `answer`'s name, ends its output, and
@@ -9005,16 +9047,22 @@ mod internal_tests {
     /// A db over `/ws` that knows `/ws/link` resolves to `/ws/real`, holding
     /// `real/x.txt` and `link/x.txt`.
     fn linked_db() -> DirSQL {
+        linked_db_and_fs().0
+    }
+
+    fn linked_db_and_fs() -> (DirSQL, Arc<FakeFs>) {
         let root = PathBuf::from("/ws");
-        let fake = FakeFs::default()
-            .with_canonical_root(&root, "/ws")
-            .with_canonical_root("/ws/link", "/ws/real")
-            .with_subtree("/ws/link", vec![("/ws/link/x.txt".into(), "items".into())])
-            .with_subtree("/ws/real", vec![("/ws/real/x.txt".into(), "items".into())]);
-        let db = subtree_db(fake, &root, Vec::new());
+        let fake = Arc::new(
+            FakeFs::default()
+                .with_canonical_root(&root, "/ws")
+                .with_canonical_root("/ws/link", "/ws/real")
+                .with_subtree("/ws/link", vec![("/ws/link/x.txt".into(), "items".into())])
+                .with_subtree("/ws/real", vec![("/ws/real/x.txt".into(), "items".into())]),
+        );
+        let db = subtree_db_on(fake.clone(), &root, Vec::new());
         db.process_file_event(FileEvent::Created("/ws/real".into()));
         db.process_file_event(FileEvent::Created("/ws/link".into()));
-        db
+        (db, fake)
     }
 
     fn known_links(db: &DirSQL) -> Vec<Link> {
@@ -9029,7 +9077,9 @@ mod internal_tests {
 
     #[test]
     fn a_change_at_the_target_reaches_the_rows_under_the_link() {
-        let db = linked_db();
+        let (db, fake) = linked_db_and_fs();
+        fake.remove(Path::new("/ws/real/x.txt"));
+        fake.remove(Path::new("/ws/link/x.txt"));
 
         let events = db.process_file_event(FileEvent::Deleted("/ws/real/x.txt".into()));
 
