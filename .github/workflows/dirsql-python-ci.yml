@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   python-sdk:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@510d40bf719bbf83a0590a99760526fd8782fd67
     with:
       languages: '["python"]'
       source: packages/python/dirsql

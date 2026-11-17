@@ -15,6 +15,6 @@ def _plan_entry_path(entry):
     """
     if entry.path is not None:
         return entry.path
-    if os.path.isfile(entry.shadow):
+    if os.path.isfile(entry.shadow) is True:
         return entry.shadow
     return _resolve_package(entry.package)
