@@ -988,6 +988,18 @@ mod tests {
         assert!(open_regular(&path).is_ok());
     }
 
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        #[expect(
+            unsafe_code,
+            reason = "no safe API makes a FIFO on every unix: rustix has none on macOS"
+        )]
+        let made = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
+        assert_eq!(made, 0, "mkfifo {}", path.display());
+    }
+
     #[test]
     fn open_regular_refuses_what_is_not_a_regular_file() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -998,14 +1010,7 @@ mod tests {
         #[cfg(unix)]
         {
             let fifo = dir.path().join("fifo");
-            rustix::fs::mknodat(
-                rustix::fs::CWD,
-                &fifo,
-                rustix::fs::FileType::Fifo,
-                rustix::fs::Mode::from_raw_mode(0o644),
-                0,
-            )
-            .unwrap();
+            mkfifo(&fifo);
             entries.push(fifo);
         }
 
