@@ -88,8 +88,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+    Arc, Condvar, LockResult, Mutex, MutexGuard, OnceLock, PoisonError, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -506,7 +506,11 @@ struct DirSqlInner {
     /// Held across every change to the index and every query, so a query
     /// never reads a batch half applied.
     fresh: Mutex<FreshState>,
-    /// Signalled when [`DirSQL::unlock_index`] releases the index.
+    /// How many times the index has been asked for. Each caller's count is
+    /// its turn.
+    arrivals: AtomicU64,
+    /// Signalled when [`DirSQL::unlock_index`] releases the index and when
+    /// the turn passes on.
     unlocked: Condvar,
     /// The symlinked directories the index reaches files through. The watcher
     /// reports a change only at the link's target, so each is restated here.
@@ -566,6 +570,14 @@ struct FreshState {
     /// Set by [`DirSQL::lock_index`]: nothing changes the index until
     /// [`DirSQL::unlock_index`].
     locked: bool,
+    /// The turn the index goes to next.
+    serving: u64,
+}
+
+impl FreshState {
+    fn must_wait(&self, turn: u64) -> bool {
+        self.locked || self.serving != turn
+    }
 }
 
 /// The watcher the build keeps, given how starting it went.
@@ -733,6 +745,13 @@ impl DirSQL {
     /// with [`DirSqlError::WriteForbidden`] before any rows are produced. This
     /// keeps the ephemeral index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
+    ///
+    /// A query that arrives while a batch of file changes is being applied
+    /// waits for that batch and is answered as soon as it ends. A batch is
+    /// every change that was waiting when applying started, and it is never
+    /// split, so a query reads whole batches only. `on_file` runs once per
+    /// change: under a writer that never pauses, a slow callback lets one
+    /// batch grow large, and the query waits as long as that batch takes.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
         self.query_ordered(sql).map(|result| result.rows)
     }
@@ -789,12 +808,41 @@ impl DirSQL {
         Ok(())
     }
 
+    /// How many times the index has been asked for, by a query, a watch
+    /// batch or [`lock_index`](Self::lock_index), answered or still waiting.
+    #[doc(hidden)]
+    pub fn index_arrivals(&self) -> u64 {
+        self.inner.arrivals.load(Ordering::SeqCst)
+    }
+
     fn unlocked_fresh(&self) -> Result<MutexGuard<'_, FreshState>> {
-        let state = self.inner.fresh.lock().map_err(DirSqlError::lock)?;
-        self.inner
+        self.take_turn().map_err(DirSqlError::lock)
+    }
+
+    /// The index, in the order it was asked for and once no lock holds it.
+    /// The mutex alone lets the thread that released it take it again ahead
+    /// of one already waiting, so a query could wait through batch after
+    /// batch.
+    fn take_turn(&self) -> LockResult<MutexGuard<'_, FreshState>> {
+        let turn = self.inner.arrivals.fetch_add(1, Ordering::SeqCst);
+        let state = self
+            .inner
+            .fresh
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut state = self
+            .inner
             .unlocked
-            .wait_while(state, |state| state.locked)
-            .map_err(DirSqlError::lock)
+            .wait_while(state, |state| state.must_wait(turn))
+            .unwrap_or_else(PoisonError::into_inner);
+        // Passed on even when poisoned: a turn never passed on would leave
+        // every later caller waiting.
+        state.serving += 1;
+        self.inner.unlocked.notify_all();
+        if self.inner.fresh.is_poisoned() {
+            return Err(PoisonError::new(state));
+        }
+        Ok(state)
     }
 
     /// Hold the index still until the returned guard drops. A watch batch
@@ -1001,15 +1049,7 @@ impl DirSQL {
 
     /// The index, once no lock holds it.
     fn hold_index(&self) -> MutexGuard<'_, FreshState> {
-        let fresh = self
-            .inner
-            .fresh
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.inner
-            .unlocked
-            .wait_while(fresh, |state| state.locked)
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.take_turn().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn apply_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
@@ -1081,8 +1121,39 @@ impl DirSQL {
     /// Route `events` into the open transaction. Returns the row events and
     /// every file event routed.
     fn route_batch(&self, events: Vec<FileEvent>) -> (Vec<RowEvent>, Vec<FileEvent>) {
-        let mut applied = Vec::new();
         let mut pending = PendingRefresh::default();
+        let routed = self.route_events(events, &mut pending);
+        self.after_walks(routed, pending)
+    }
+
+    /// Finish routing: after every walk, route what the watcher queued
+    /// during it, until that starts no further walk; then re-run the
+    /// per-table hooks `pending` names. The open transaction's foreign keys
+    /// are checked after this, so each walk's result is checked together
+    /// with the changes that raced it.
+    fn after_walks(
+        &self,
+        (mut out, mut applied): (Vec<RowEvent>, Vec<FileEvent>),
+        mut pending: PendingRefresh,
+    ) -> (Vec<RowEvent>, Vec<FileEvent>) {
+        while std::mem::take(&mut pending.walked) {
+            // Only what is already queued, once per walk: waiting for the
+            // queue to empty would never end under a writer that never pauses.
+            let (queued_out, queued) = self.route_events(self.queued_file_events(), &mut pending);
+            out.extend(queued_out);
+            applied.extend(queued);
+        }
+        out.extend(self.refresh_pending(pending));
+        (out, applied)
+    }
+
+    /// Route each event in order, then walk again after an overflow.
+    fn route_events(
+        &self,
+        events: Vec<FileEvent>,
+        pending: &mut PendingRefresh,
+    ) -> (Vec<RowEvent>, Vec<FileEvent>) {
+        let mut applied = Vec::new();
         let mut out = Vec::new();
         let mut rescan = false;
         for fe in events {
@@ -1100,13 +1171,12 @@ impl DirSQL {
                 _ => {}
             }
             for fe in self.through_links(fe) {
-                out.extend(self.route_file_event(fe, &mut pending));
+                out.extend(self.route_file_event(fe, pending));
             }
         }
         if rescan {
-            out.extend(self.rescan(&mut pending));
+            out.extend(self.rescan(pending));
         }
-        out.extend(self.refresh_pending(pending));
         (out, applied)
     }
 
@@ -1373,7 +1443,7 @@ impl DirSQL {
     /// Re-run every per-table hook `pending` names, once each, over the files
     /// its glob matches now, and replace that table's rows.
     fn refresh_pending(&self, pending: PendingRefresh) -> Vec<RowEvent> {
-        let mut pending = pending.0;
+        let mut pending = pending.tables;
         pending.sort_by_key(|(table, _)| declared_position(&self.inner.declared, table));
         let mut events = Vec::new();
         for (table, trigger) in pending {
@@ -1576,6 +1646,7 @@ impl DirSQL {
         } else {
             &group.anchor
         };
+        pending.walked = true;
         if dir.starts_with(&group.watch_anchor) && !self.below_a_link(dir) {
             self.register_link(dir.to_path_buf());
         }
@@ -2298,6 +2369,7 @@ impl DirSQL {
                 poll_interval,
                 fs,
                 fresh: Mutex::new(FreshState::default()),
+                arrivals: AtomicU64::new(0),
                 unlocked: Condvar::new(),
                 links: Mutex::new(links),
                 failed_files: Mutex::new(BTreeMap::new()),
@@ -2307,10 +2379,14 @@ impl DirSQL {
         Ok(built)
     }
 
-    /// Apply what the watcher queued while the build walked, once, inside the
+    /// Apply what the watcher queued while the build walked, inside the
     /// build's transaction, then commit it with one foreign-key check.
     fn apply_queued_at_build(&self) -> Result<()> {
-        let (out, _) = self.route_batch(self.queued_file_events());
+        let walked = PendingRefresh {
+            walked: true,
+            ..PendingRefresh::default()
+        };
+        let (out, _) = self.after_walks((Vec::new(), Vec::new()), walked);
         if let Some(RowEvent::Error {
             table,
             file_path,
@@ -3144,12 +3220,17 @@ fn map_db_error(e: DbError) -> DirSqlError {
 /// path that touched it. Marked once per table however many events arrive,
 /// which is what keeps a burst of writes to one re-run.
 #[derive(Default)]
-struct PendingRefresh(Vec<(String, String)>);
+struct PendingRefresh {
+    tables: Vec<(String, String)>,
+    /// Whether a walk ran: its result is checked only together with the
+    /// events the watcher queued during it.
+    walked: bool,
+}
 
 impl PendingRefresh {
     fn mark(&mut self, table: &str, trigger: &str) {
-        if !self.0.iter().any(|(t, _)| t == table) {
-            self.0.push((table.to_string(), trigger.to_string()));
+        if !self.tables.iter().any(|(t, _)| t == table) {
+            self.tables.push((table.to_string(), trigger.to_string()));
         }
     }
 }
@@ -4831,7 +4912,10 @@ mod internal_tests {
 
         db.delete_subtree(group, "moved", &mut pending);
 
-        assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+        assert_eq!(
+            pending.tables,
+            vec![("held".to_string(), "moved".to_string())]
+        );
     }
 
     #[test]
@@ -5710,6 +5794,107 @@ mod internal_tests {
         while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
             held.extend(db.queued_file_events());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn real_items_db(root: &Path) -> DirSQL {
+        let table = Table::new(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            |path| {
+                vec![Row::from_iter([(
+                    "name".to_string(),
+                    Value::Text(path.to_string()),
+                )])]
+            },
+        );
+        DirSQL::with_ignore_and_fs(root, vec![table], Vec::<String>::new(), Arc::new(RealFs))
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_batch_that_walks_a_new_folder_applies_what_was_queued_during_the_walk() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = real_items_db(&root);
+        std::fs::create_dir(root.join("new")).unwrap();
+        std::fs::write(root.join("queued.txt"), "x").unwrap();
+
+        db.apply_file_events(vec![FileEvent::Created(root.join("new"))]);
+
+        assert_eq!(
+            row_names(&db),
+            vec![root.join("queued.txt").to_string_lossy().to_string()]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_batch_that_walks_nothing_leaves_what_is_queued_for_the_next() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = real_items_db(&root);
+        std::fs::write(root.join("queued.txt"), "x").unwrap();
+
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("gone.txt"))]);
+
+        assert!(row_names(&db).is_empty());
+        assert!(
+            db.queued_file_events()
+                .contains(&FileEvent::Created(root.join("queued.txt")))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_walk_a_queued_event_starts_applies_what_was_queued_during_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("advices")).unwrap();
+        let advice = Table::new(
+            "advice",
+            "CREATE TABLE advice (id TEXT PRIMARY KEY)",
+            "advices/*.txt",
+            |_| {
+                vec![Row::from_iter([(
+                    "id".to_string(),
+                    Value::Text("a".into()),
+                )])]
+            },
+        );
+        let advices = root.join("advices");
+        let turn = Table::new(
+            "turn",
+            "CREATE TABLE turn (advice TEXT NOT NULL REFERENCES advice(id))",
+            "turns/*.txt",
+            move |_| {
+                std::fs::write(advices.join("a.txt"), "x").unwrap();
+                vec![Row::from_iter([(
+                    "advice".to_string(),
+                    Value::Text("a".into()),
+                )])]
+            },
+        );
+        let db = DirSQL::with_ignore_and_fs(
+            &root,
+            vec![advice, turn],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("new")).unwrap();
+        std::fs::create_dir(root.join("turns")).unwrap();
+        std::fs::write(root.join("turns/1.txt"), "x").unwrap();
+
+        let events = db.apply_file_events(vec![FileEvent::Created(root.join("new"))]);
+
+        assert_eq!(error_count(&events), 0, "got: {events:?}");
+        let pairs = db
+            .query("SELECT count(*) AS n FROM turn JOIN advice ON advice.id = turn.advice")
+            .unwrap();
+        assert_eq!(pairs[0]["n"], Value::Integer(1));
     }
 
     #[test]
@@ -8449,6 +8634,65 @@ mod internal_tests {
         assert!(db.inner.fresh.try_lock().is_err());
         drop(held);
         assert!(db.inner.fresh.try_lock().is_ok());
+    }
+
+    #[test]
+    fn index_arrivals_counts_each_query_and_each_batch() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        let before = db.index_arrivals();
+        row_names(&db);
+        db.apply_file_events(Vec::new());
+        assert_eq!(db.index_arrivals(), before + 2);
+    }
+
+    #[test]
+    fn a_caller_waits_while_the_index_is_locked_or_the_turn_is_not_its_own() {
+        let state = |locked, serving| FreshState { locked, serving };
+        assert!(!state(false, 3).must_wait(3));
+        assert!(state(true, 3).must_wait(3));
+        assert!(state(false, 3).must_wait(4));
+        assert!(state(false, 4).must_wait(3));
+    }
+
+    #[test]
+    fn the_index_goes_to_callers_in_the_order_they_asked() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        let held = db.hold_index();
+        let order = Mutex::new(Vec::new());
+        thread::scope(|scope| {
+            for caller in 1..=3 {
+                let (db, order) = (&db, &order);
+                scope.spawn(move || {
+                    let _held = db.hold_index();
+                    order.lock().unwrap().push(caller);
+                });
+                while db.index_arrivals() == caller {
+                    thread::yield_now();
+                }
+            }
+            assert_eq!(held.serving, 1);
+            drop(held);
+        });
+        assert_eq!(order.into_inner().unwrap(), vec![1, 2, 3]);
+        assert_eq!(db.inner.fresh.lock().unwrap().serving, 4);
+    }
+
+    #[test]
+    fn a_poisoned_index_fails_each_query_and_still_passes_the_turn_on() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        let poisoner = db.clone();
+        let _ = thread::spawn(move || {
+            let _held = poisoner.hold_index();
+            panic!("poison the index");
+        })
+        .join();
+        for _ in 0..2 {
+            assert!(matches!(
+                db.query("SELECT name FROM items"),
+                Err(DirSqlError::Lock(_))
+            ));
+        }
+        assert_eq!(db.hold_index().serving, 4);
     }
 
     #[test]

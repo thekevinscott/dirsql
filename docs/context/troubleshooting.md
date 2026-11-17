@@ -61,3 +61,15 @@ dirsql is read-only. Mutations belong in a script that consumes the query's JSON
 ### A table appeared, not JSON
 
 `--format json` was not passed and stdout was a terminal. Pass it.
+
+### A query to `dirsql server` or the REPL is slow while files are changing
+
+A long-running dirsql applies file changes to declared tables a batch at a time. A query that arrives while a batch is being applied waits for it and is answered as soon as it ends. A batch is every change that was waiting when applying started, and it is never split. Under a writer that never pauses, with a slow `on-file` command, one batch can take long enough to reach the server's 30-second timeout (HTTP `408`). Run the query again once the writing pauses. A one-shot path-table query (`FROM './**'`) reads the files as it runs and waits for nothing. See [how long a query waits](https://dirsql.dev/reference/cli#how-long-a-query-waits).
+
+### A query to `dirsql server` or the REPL doesn't show a file I just wrote
+
+A query waits only for the batch of file changes being applied when it arrives. It does not wait for changes still queued for the next batch, or for changes the operating system has not reported yet. A write followed at once by a query can return the old rows; a later query returns the new ones. A one-shot `dirsql "..."` query builds its index when it starts, so it reads a file written before it started. See [a query can miss a file you just wrote](https://dirsql.dev/reference/cli#a-query-can-miss-a-file-you-just-wrote).
+
+### `the OS dropped file events, so the index no longer matches the files; rebuild it`
+
+Files changed faster than a long-running dirsql could apply them: on Linux the kernel holds 16,384 unread changes and drops the rest. Every later query fails the same way. Restart dirsql.

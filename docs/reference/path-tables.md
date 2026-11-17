@@ -247,10 +247,12 @@ choice is stated as one trade in
 
 ## Skip rules
 
-A path-table scan applies the same [`ignore`](/reference/config) patterns your
-declared tables use — matched against root-relative paths under the same
-[glob rule](/reference/config#glob-rule) as the path itself, `*` one level and
-`**` any depth — plus one built-in default, `**/.git/**`, which applies at any depth.
+A path-table scan applies one built-in default, `**/.git/**`, at any depth.
+A config's [`ignore`](/reference/config) patterns do not apply: they cover only
+that config's own `[[table]]` entries. The SDK constructor's
+[`ignore`](/reference/sdk#constructor) parameter does apply, matched against
+root-relative paths under the same [glob rule](/reference/config#glob-rule) as
+the path itself, `*` one level and `**` any depth.
 `node_modules` is an ordinary directory: a `.gitignore` that lists it hides it,
 as it hides any other.
 
@@ -278,7 +280,7 @@ applies, including those above the directory a scan starts in, so
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
 determinism switch for scripted use, since results otherwise depend on
 `.gitignore` state. It disables only the `.gitignore` respect; the built-in
-default and configured `ignore` patterns still apply.
+default still applies.
 
 ### Naming a skipped directory
 
