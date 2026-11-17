@@ -22,15 +22,6 @@ def _stop_unwatched(owner):
         db._stop_watcher()
 
 
-async def _poll(owner, db):
-    events = await asyncio.to_thread(db._poll_events, 200)
-    streams = list(owner._watch_streams)
-    for stream in streams:
-        stream._buffer.extend(events)
-    if not streams:
-        db._stop_watcher()
-
-
 class _WatchStream:
     """Async iterator of file events.
 
@@ -52,6 +43,15 @@ class _WatchStream:
         owner._watch_streams.add(self)
         self._dropped = weakref.finalize(self, _stop_unwatched, owner)
         self._dropped.atexit = False
+
+    @staticmethod
+    async def _poll(owner, db):
+        events = await asyncio.to_thread(db._poll_events, 200)
+        streams = list(owner._watch_streams)
+        for stream in streams:
+            stream._buffer.extend(events)
+        if not streams:
+            db._stop_watcher()
 
     def __aiter__(self):
         return self
@@ -97,7 +97,9 @@ class _WatchStream:
                 return self._buffer.pop(0)
             poll = owner._watch_poll
             if poll is None or poll.done():
-                poll = owner._watch_poll = asyncio.ensure_future(_poll(owner, self._db))
+                poll = owner._watch_poll = asyncio.ensure_future(
+                    self._poll(owner, self._db)
+                )
             self._waiter = asyncio.get_running_loop().create_future()
             # wait() leaves the poll running when this consumer is cancelled,
             # so the other streams still get its batch.
