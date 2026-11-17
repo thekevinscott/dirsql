@@ -1020,6 +1020,18 @@ impl DirSQL {
         Ok(())
     }
 
+    /// Undo [`attach_poll`](Self::attach_poll): the batches still waiting for
+    /// [`poll_events`](Self::poll_events) are dropped, and none are kept until
+    /// the next attach.
+    #[doc(hidden)]
+    pub fn detach_poll(&self) -> Result<()> {
+        let mut polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        if polled.take().is_some() {
+            *self.inner.stream.lock().map_err(DirSqlError::lock)? = None;
+        }
+        Ok(())
+    }
+
     /// Apply a batch of raw file events through the on_file/DB update
     /// pipeline.
     #[doc(hidden)]
@@ -1227,8 +1239,10 @@ impl DirSQL {
 
     /// Channel-based watch API. The returned stream receives the [`RowEvent`]s
     /// of every change applied from now on. Intended for long-running Rust
-    /// consumers (e.g. a CLI `watch` command). Can only be called once per
-    /// `DirSQL` instance.
+    /// consumers (e.g. a CLI `watch` command). A `DirSQL` instance has one
+    /// stream at a time: a call while the last stream is alive is an error.
+    /// Dropping the stream releases the events it holds, and a later call
+    /// returns a new stream.
     ///
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
@@ -1238,13 +1252,17 @@ impl DirSQL {
                 "poll_events() already in use; cannot call watch()",
             ));
         }
-        if self.inner.watch_thread_started.swap(true, Ordering::SeqCst) {
-            return Err(DirSqlError::WatchAlreadyStarted);
-        }
         self.attach_watcher()?;
 
+        let mut stream = self.inner.stream.lock().map_err(DirSqlError::lock)?;
+        if matches!(stream.as_ref(), Some(Sink::Stream(live)) if !live.is_closed()) {
+            return Err(DirSqlError::WatchAlreadyStarted);
+        }
+        self.inner
+            .watch_thread_started
+            .store(true, Ordering::SeqCst);
         let (tx, rx) = unbounded();
-        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Stream(tx));
+        *stream = Some(Sink::Stream(tx));
         Ok(rx)
     }
 
@@ -5679,6 +5697,53 @@ mod internal_tests {
         db.deliver(Vec::new());
         let polled = db.inner.polled.lock().unwrap();
         assert!(polled.as_ref().unwrap().try_recv().is_err());
+    }
+
+    #[test]
+    fn detach_poll_drops_the_queue_and_keeps_no_later_batch() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "b", "x".into())]);
+
+        assert!(db.inner.polled.lock().unwrap().is_none());
+        assert!(db.inner.stream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn poll_events_after_detach_poll_returns_only_later_batches() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "before", "x".into())]);
+        db.detach_poll().unwrap();
+
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "after", "x".into())]);
+
+        let events = db.poll_events(Duration::ZERO).unwrap();
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        assert!(format!("{:?}", events[0]).contains("after"));
+    }
+
+    #[test]
+    fn detach_poll_leaves_a_watch_stream_attached() {
+        let (_dir, db) = simple_db();
+        let mut stream = db.watch().unwrap();
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
+    }
+
+    #[test]
+    fn detach_poll_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.polled);
+        let err = db.detach_poll().unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
     #[test]
