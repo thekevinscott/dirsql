@@ -4,9 +4,10 @@ and one equality lookup on `path` over that prefix.
 A deep, wide tree of markdown files mixed with other files, dotfiles and
 dot-named directories that globstar with dotglob off must not return. A
 quarter of it sits under `a/b`, the rest beside it, so a prefixed glob that
-walked the whole tree would read four times what it needs. Natives are `find`
-pruning dot-named entries, `fd` and `rg --files`. No mocks: real
-console script, real process, real filesystem.
+walked the whole tree would read four times what it needs. The tree grows
+until `find` over `a/b` alone takes a second, so the smallest case is timed
+well above process startup. Natives are `find` pruning dot-named entries, `fd`
+and `rg --files`. No mocks: real console script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -116,7 +117,7 @@ def describe_recursive_glob_speed_of_light():
         try:
             n = grow_until_native_takes_a_second(
                 lambda lo, hi: build_tree(root, lo, hi),
-                baseline(shell_natives(root, ALL_NATIVE)),
+                baseline(shell_natives(root, PREFIX_NATIVE)),
                 start=100_000,
                 ceiling=2**22,
             )
