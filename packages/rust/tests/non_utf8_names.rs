@@ -1,11 +1,12 @@
 //! Integration tests for file names that are not valid Unicode, through the
 //! SDK: each keeps its own bytes in a path-table's path columns, and a
-//! table's `on-file` command receives it as it is on disk. Real filesystem,
-//! real SQLite, a real Python hook.
+//! table's `on-file` command receives it as it is on disk. A per-file
+//! callback takes its path as a string, so under one such a file is a
+//! per-file error. Real filesystem, real SQLite, a real Python hook.
 
 use std::ffi::OsString;
 
-use dirsql::{DirSQL, Value};
+use dirsql::{DirSQL, Table, Value};
 use tempfile::TempDir;
 
 /// A file name holding `unit` where a character should be: a byte that is
@@ -170,4 +171,76 @@ fn files_created_under_a_watch_keep_each_name_distinct() {
             format!("1:{}", hex(&names[1])),
         ],
     );
+}
+
+#[cfg(unix)]
+const UNDER_A_CALLBACK: &str =
+    "table `seen`, file `ok\u{FFFD}name.json`: file name is not valid UTF-8";
+
+#[cfg(unix)]
+fn seen_table() -> Table {
+    Table::new("seen", "CREATE TABLE seen (name TEXT)", "*.json", |path| {
+        let name = std::path::Path::new(path).file_name().unwrap();
+        vec![
+            [(
+                "name".to_string(),
+                Value::Text(name.to_str().unwrap().to_string()),
+            )]
+            .into(),
+        ]
+    })
+}
+
+#[cfg(unix)]
+fn seen(db: &DirSQL) -> Result<Vec<String>, String> {
+    db.query("SELECT name FROM seen ORDER BY name")
+        .map(|rows| {
+            rows.iter()
+                .map(|row| match &row["name"] {
+                    Value::Text(s) => s.clone(),
+                    other => panic!("name was not text: {other:?}"),
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn await_seen(db: &DirSQL, expected: &Result<Vec<String>, String>) {
+    let mut last = seen(db);
+    for _ in 0..1000 {
+        if last == *expected {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        last = seen(db);
+    }
+    assert_eq!(last, *expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn such_a_name_under_a_per_file_callback_fails_the_build() {
+    let root = TempDir::new().unwrap();
+    std::fs::write(root.path().join(not_unicode(0xff)), "A").unwrap();
+    let error = DirSQL::new(root.path(), vec![seen_table()])
+        .err()
+        .expect("the build must fail");
+    assert_eq!(error.to_string(), UNDER_A_CALLBACK);
+}
+
+#[cfg(unix)]
+#[test]
+fn such_a_name_created_under_a_per_file_callback_fails_queries_until_it_leaves() {
+    let root = TempDir::new().unwrap();
+    std::fs::write(root.path().join("plain.json"), "A").unwrap();
+    let db = DirSQL::new(root.path(), vec![seen_table()]).unwrap();
+    assert_eq!(seen(&db), Ok(vec!["plain.json".to_string()]));
+
+    let named = root.path().join(not_unicode(0xff));
+    std::fs::write(&named, "B").unwrap();
+    await_seen(&db, &Err(UNDER_A_CALLBACK.to_string()));
+
+    std::fs::remove_file(&named).unwrap();
+    await_seen(&db, &Ok(vec!["plain.json".to_string()]));
 }
