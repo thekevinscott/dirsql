@@ -231,23 +231,25 @@ fn over_detects_events_in_every_directory() {
     fs::write(second.path().join("b.txt"), "b").unwrap();
 
     // FSEvents reports each path with its symlinks resolved, and macOS's
-    // temp dir sits behind one (/var -> /private/var).
-    let first = first.path().canonicalize().unwrap();
-    let second = second.path().canonicalize().unwrap();
+    // temp dir sits behind one (/var -> /private/var); elsewhere the event
+    // carries the directory as it was supplied.
+    let under = |p: &std::path::Path, dir: &std::path::Path| {
+        p.starts_with(dir) || p.starts_with(dir.canonicalize().unwrap())
+    };
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
         let created = |dir: &std::path::Path| {
             seen.iter().any(|e| match e {
-                FileEvent::Created(p) => p.starts_with(dir),
+                FileEvent::Created(p) => under(p, dir),
                 _ => false,
             })
         };
-        created(&first) && created(&second)
+        created(first.path()) && created(second.path())
     });
-    for dir in [&first, &second] {
+    for dir in [first.path(), second.path()] {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir))),
+                .any(|e| matches!(e, FileEvent::Created(p) if under(p, dir))),
             "no Created event under {dir:?}, saw: {events:?}"
         );
     }
