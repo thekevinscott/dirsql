@@ -658,7 +658,7 @@ fn builder_appends_programmatic_tables_to_config_tables() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = "printf '{}'"
+on-file = '''sh -c "printf '{}'"'''
 "#,
     )
     .unwrap();

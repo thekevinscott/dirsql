@@ -230,6 +230,10 @@ fn over_detects_events_in_every_directory() {
     fs::write(first.path().join("a.txt"), "a").unwrap();
     fs::write(second.path().join("b.txt"), "b").unwrap();
 
+    // FSEvents reports each path with its symlinks resolved, and macOS's
+    // temp dir sits behind one (/var -> /private/var).
+    let first = first.path().canonicalize().unwrap();
+    let second = second.path().canonicalize().unwrap();
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
         let created = |dir: &std::path::Path| {
             seen.iter().any(|e| match e {
@@ -237,9 +241,9 @@ fn over_detects_events_in_every_directory() {
                 _ => false,
             })
         };
-        created(first.path()) && created(second.path())
+        created(&first) && created(&second)
     });
-    for dir in [first.path(), second.path()] {
+    for dir in [&first, &second] {
         assert!(
             events
                 .iter()

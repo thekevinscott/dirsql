@@ -6660,7 +6660,7 @@ mod internal_tests {
             "name = \"a\"\n",
             "ddl = \"CREATE TABLE a (x TEXT)\"\n",
             "glob = \"*.a\"\n",
-            "on-file = \"printf '{\\\"x\\\":1}'\"\n\n",
+            "on-file = '''sh -c \"printf '{\\\"x\\\":1}'\"'''\n\n",
             "[[table]]\n",
             "name = \"b\"\n",
             "ddl = \"CREATE TABLE b (y TEXT)\"\n",
@@ -6861,7 +6861,7 @@ mod internal_tests {
     fn run_on_files_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
         let rows = collect_on_files(
-            "printf '{\"n\":1}'",
+            r#"sh -c "printf '{\"n\":1}'""#,
             &[dir.path().join("f.txt")],
             dir.path(),
             dir.path(),

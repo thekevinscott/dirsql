@@ -157,7 +157,7 @@ fn a_timeout_wrapped_hook_in_one_config_fails_the_build_under_its_table() {
 name = "slow"
 ddl = "CREATE TABLE slow (v TEXT)"
 glob = "a.json"
-on-file = "timeout 0.5 sh ./slow.sh"
+on-file = '''perl -e 'alarm shift; exec @ARGV' 1 sh ./slow.sh'''
 "#,
     );
 
