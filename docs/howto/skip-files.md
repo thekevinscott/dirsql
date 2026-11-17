@@ -28,8 +28,10 @@ glob    = "notes/**/*"
 on-file = '''sh -c 'for p; do printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 ```
 
-Patterns match against root-relative paths, the same way table globs do. An
-ignored file never reaches any table — even one whose glob would match it.
+Patterns match against paths relative to the config file's directory, the
+same way table globs do. An ignored file never reaches this config's tables —
+even one whose glob would match it. Path-tables and other configs' tables do
+not apply these patterns.
 
 ## 2. Confirm what made it in
 

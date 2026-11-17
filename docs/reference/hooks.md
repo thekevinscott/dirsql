@@ -154,6 +154,11 @@ With `CREATE TABLE experiments (id INTEGER PRIMARY KEY, folder_name TEXT UNIQUE,
 and a command that emits `folder_name` and `name`, renaming an experiment keeps
 its `id`, so a table that stores that `id` still points at it.
 
+A query that arrives during that re-run waits for it, so a command that takes
+3 seconds over the table's files holds a query for up to 3 seconds. The
+command runs once per batch of changes, not once per changed file: see
+[How long a query waits](./cli.md#how-long-a-query-waits).
+
 The same command is attachable two ways, over the same contract: the
 `on-file` config key on a `[[table]]`, and the
 [`--on-file <command>`](./cli.md#on-file-command) flag on `dirsql query`,

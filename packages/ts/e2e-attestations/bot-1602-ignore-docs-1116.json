@@ -1,0 +1,7 @@
+{
+  "command": "sh -c '/tmp/target-1602/release/dirsql --help | grep -q \"never applies to path-tables\"'",
+  "ran_at": 1794856028,
+  "exit_code": 0,
+  "commit": "dfa75c187f02572b2fd6caa34a1747411498c982",
+  "branch": "bot/1602-ignore-docs-1116"
+}

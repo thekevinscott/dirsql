@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fresh-declared-repros root-at-construction fanout",
+  "ran_at": 1794871582,
+  "exit_code": 0,
+  "commit": "9d76ecc876d25b6e439a763b46af9ce1767a2e5b",
+  "branch": "bot/1723-new-folder-walk-1116"
+}
