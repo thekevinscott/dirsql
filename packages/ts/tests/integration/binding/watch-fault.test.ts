@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DirSQL } from "dirsql";
@@ -33,7 +33,15 @@ describe.runIf(unwatchable)("a directory the watcher cannot watch", () => {
     await db.ready;
     expect(await db.query("SELECT name FROM items")).toEqual([]);
 
+    const stream = db.watch();
     await mkdir(join(dir, "locked"), { mode: 0o000 });
+    // Changes are applied in order, so this file's event follows the fault.
+    await writeFile(join(dir, "after.md"), "");
+    for await (const event of stream) {
+      if (event.action === "insert") {
+        break;
+      }
+    }
 
     for (let i = 0; i < 2; i++) {
       await expect(db.query("SELECT name FROM items")).rejects.toThrow(
