@@ -1350,7 +1350,7 @@ impl DirSQL {
                         events.extend(self.handle_delete(&m.table_name, &rel_path));
                     }
                     FileEvent::Created(_) | FileEvent::Modified(_) => {
-                        events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
+                        events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path_buf));
                     }
                     FileEvent::Rescan | FileEvent::Fault(_) => {}
                 }
@@ -1671,13 +1671,12 @@ impl DirSQL {
         let mut events = Vec::new();
         for (path, table) in found {
             let rel = path.strip_prefix(base).unwrap_or(&path);
-            let rel_path = scanner::to_slash(rel);
             if self.is_per_table(&table) {
                 self.track_batch_file(&table, &path, rel, false);
-                pending.mark(&table, &rel_path);
+                pending.mark(&table, &scanner::to_slash(rel));
                 continue;
             }
-            events.extend(self.upsert(&table, &path, &rel_path, !fresh));
+            events.extend(self.upsert(&table, &path, rel, !fresh));
         }
         events
     }
@@ -1708,8 +1707,8 @@ impl DirSQL {
         differ::diff(table, Some(&old_rows), None, rel_path)
     }
 
-    fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
-        self.upsert(table, abs_path, rel_path, true)
+    fn handle_upsert(&self, table: &str, abs_path: &Path, rel: impl AsRef<Path>) -> Vec<RowEvent> {
+        self.upsert(table, abs_path, rel.as_ref(), true)
     }
 
     /// [`handle_upsert`](Self::handle_upsert), reporting a parse failure only
@@ -1718,17 +1717,18 @@ impl DirSQL {
         &self,
         table: &str,
         abs_path: &Path,
-        rel_path: &str,
+        rel: &Path,
         report_parse_error: bool,
     ) -> Vec<RowEvent> {
-        match self.read_file_rows(table, abs_path, rel_path, report_parse_error) {
+        let rel_path = scanner::to_slash(rel);
+        match self.read_file_rows(table, abs_path, rel, &rel_path, report_parse_error) {
             Ok(events) => {
-                self.record_read(table, rel_path, None);
+                self.record_read(table, &rel_path, None);
                 events
             }
             Err(message) => {
-                self.record_read(table, rel_path, Some(&message));
-                vec![error_event(Some(table), rel_path, message)]
+                self.record_read(table, &rel_path, Some(&message));
+                vec![error_event(Some(table), &rel_path, message)]
             }
         }
     }
@@ -1739,6 +1739,7 @@ impl DirSQL {
         &self,
         table: &str,
         abs_path: &Path,
+        rel: &Path,
         rel_path: &str,
         report_parse_error: bool,
     ) -> std::result::Result<Vec<RowEvent>, String> {
@@ -1757,7 +1758,7 @@ impl DirSQL {
             return Ok(Vec::new());
         };
 
-        let raw_rows = match on_file(&abs_path.to_string_lossy()) {
+        let raw_rows = match run_on_file(on_file.as_ref(), abs_path, rel) {
             Ok(r) => r,
             Err(_) if !report_parse_error => return Ok(Vec::new()),
             Err(e) => return Err(e.to_string()),
@@ -2228,6 +2229,7 @@ impl DirSQL {
         }
         for (
             ScannedFile {
+                abs_path: scanned_path,
                 rel_path,
                 table_name,
                 stat,
@@ -2239,14 +2241,16 @@ impl DirSQL {
             progress.update(done, Some(total_files));
             done += 1;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let abs_path = anchors.of(&table_name).join(&rel_path);
+            let anchor = anchors.of(&table_name);
+            let abs_path = anchor.join(&rel_path);
+            let rel = scanned_path.strip_prefix(anchor).unwrap_or(&scanned_path);
             let failed = |message: String| DirSqlError::OnFile {
                 table: table_name.clone(),
                 path: rel_path.clone(),
                 message,
             };
             let raw_rows =
-                on_file(&abs_path.to_string_lossy()).map_err(|e| failed(e.to_string()))?;
+                run_on_file(on_file.as_ref(), &abs_path, rel).map_err(|e| failed(e.to_string()))?;
 
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
@@ -3492,6 +3496,20 @@ fn run_applier(inner: Weak<DirSqlInner>) {
         };
         db.apply_and_deliver();
     }
+}
+
+/// Run a per-file callback over the file at `abs_path`. The callback takes
+/// its path as a string, which cannot name a file whose path under its
+/// anchor, `rel`, is not UTF-8, so that file fails without a call.
+fn run_on_file(
+    on_file: &OnFileFn,
+    abs_path: &Path,
+    rel: &Path,
+) -> std::result::Result<Vec<Row>, BoxError> {
+    if rel.to_str().is_none() {
+        return Err("file name is not valid UTF-8".into());
+    }
+    on_file(&abs_path.to_string_lossy())
 }
 
 /// Each per-file hook's file paired with its hook, then each per-table
@@ -8582,6 +8600,83 @@ mod internal_tests {
         fails.store(false, Ordering::SeqCst);
         db.handle_upsert("items", &abs, "a.txt");
         assert_eq!(failing_paths(&db), vec![]);
+    }
+
+    /// `ok`, an unpaired surrogate's WTF-8 bytes, then `.txt`: not UTF-8 on
+    /// Unix, not Unicode on Windows.
+    #[expect(
+        unsafe_code,
+        reason = "std offers no checked conversion from encoded bytes to an OsStr"
+    )]
+    fn not_unicode() -> PathBuf {
+        // SAFETY: WTF-8 between ASCII, which the conversion accepts on
+        // every platform.
+        PathBuf::from(unsafe {
+            std::ffi::OsStr::from_encoded_bytes_unchecked(b"ok\xED\xA3\xBF.txt")
+        })
+    }
+
+    #[test]
+    fn run_on_file_hands_the_callback_the_path_as_text() {
+        let rows = run_on_file(
+            &|path| {
+                Ok(vec![Row::from_iter([(
+                    "p".to_string(),
+                    Value::Text(path.into()),
+                )])])
+            },
+            Path::new("/root/a.txt"),
+            Path::new("a.txt"),
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![Row::from_iter([(
+                "p".to_string(),
+                Value::Text("/root/a.txt".into())
+            )])]
+        );
+    }
+
+    #[test]
+    fn run_on_file_fails_a_name_that_is_not_utf8_without_a_call() {
+        let rel = not_unicode();
+        let error = run_on_file(
+            &|_| panic!("the callback was called"),
+            &Path::new("/root").join(&rel),
+            &rel,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "file name is not valid UTF-8");
+    }
+
+    #[test]
+    fn handle_upsert_fails_a_name_that_is_not_utf8() {
+        let dir = TempDir::new().unwrap();
+        let rel = not_unicode();
+        let abs = dir.path().join(&rel);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| vec![],
+            )],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::with_stat(abs.clone(), fake_stat())),
+        )
+        .unwrap();
+        let shown = rel.to_string_lossy().into_owned();
+        let events = db.handle_upsert("items", &abs, &rel);
+        assert!(
+            matches!(events.as_slice(), [RowEvent::Error { table: Some(table), file_path, error }]
+                if table == "items"
+                    && *file_path == shown
+                    && error == "file name is not valid UTF-8"),
+            "got: {events:?}"
+        );
+        assert_eq!(failing_paths(&db), vec![("items".to_string(), shown)]);
     }
 
     #[test]
