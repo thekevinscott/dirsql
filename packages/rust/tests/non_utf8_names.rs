@@ -80,11 +80,9 @@ fn reading_such_a_path_as_text_fails_naming_the_column() {
     );
 }
 
-#[test]
-fn an_on_file_command_receives_each_name_as_it_is_on_disk() {
-    let (root, names) = fixture();
+fn found_table(root: &std::path::Path) -> DirSQL {
     std::fs::write(
-        root.path().join("hook.py"),
+        root.join("hook.py"),
         "import json, os, sys\n\
          for p in sys.argv[1:]:\n    \
          print(json.dumps({\"found\": os.path.isfile(p), \
@@ -92,7 +90,7 @@ fn an_on_file_command_receives_each_name_as_it_is_on_disk() {
     )
     .unwrap();
     std::fs::write(
-        root.path().join("dirsql.toml"),
+        root.join("dirsql.toml"),
         format!(
             "[[table]]\nname = \"found\"\nddl = \"CREATE TABLE found (found INTEGER, name TEXT)\"\n\
              glob = \"*.json\"\non-file = \"{} hook.py\"\n",
@@ -100,20 +98,76 @@ fn an_on_file_command_receives_each_name_as_it_is_on_disk() {
         ),
     )
     .unwrap();
-    let db = DirSQL::builder()
-        .root(root.path())
-        .config(root.path().join("dirsql.toml"))
+    DirSQL::builder()
+        .root(root)
+        .config(root.join("dirsql.toml"))
         .build()
-        .unwrap();
+        .unwrap()
+}
+
+fn found(db: &DirSQL) -> Vec<String> {
+    texts(
+        db,
+        "SELECT found || ':' || name AS f FROM found ORDER BY name DESC",
+        "f",
+    )
+}
+
+#[cfg(unix)]
+fn await_found(db: &DirSQL, expected: &[String]) {
+    let mut last = found(db);
+    for _ in 0..1000 {
+        if last == expected {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        last = found(db);
+    }
+    assert_eq!(last, expected);
+}
+
+#[test]
+fn an_on_file_command_receives_each_name_as_it_is_on_disk() {
+    let (root, names) = fixture();
+    let db = found_table(root.path());
     assert_eq!(
-        texts(
-            &db,
-            "SELECT found || ':' || name AS f FROM found ORDER BY name DESC",
-            "f"
-        ),
+        found(&db),
         [
             format!("1:{}", hex(&names[0])),
             format!("1:{}", hex(&names[1]))
         ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_watched_change_reruns_the_command_over_each_name_as_it_is_on_disk() {
+    let (root, names) = fixture();
+    let db = found_table(root.path());
+    std::fs::write(root.path().join("later.json"), "C").unwrap();
+    await_found(
+        &db,
+        &[
+            format!("1:{}", hex(&names[0])),
+            format!("1:{}", hex(&names[1])),
+            format!("1:{}", hex(&OsString::from("later.json"))),
+        ],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn files_created_under_a_watch_keep_each_name_distinct() {
+    let root = TempDir::new().unwrap();
+    let db = found_table(root.path());
+    let names = [not_unicode(0xff), not_unicode(0xfe)];
+    std::fs::write(root.path().join(&names[0]), "A").unwrap();
+    std::fs::write(root.path().join(&names[1]), "BB").unwrap();
+    await_found(
+        &db,
+        &[
+            format!("1:{}", hex(&names[0])),
+            format!("1:{}", hex(&names[1])),
+        ],
     );
 }
