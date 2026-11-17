@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/parent_then_child_server_test.py -q -p no:randomly",
+  "ran_at": 1794857257,
+  "exit_code": 0,
+  "commit": "6d6e143514eb9be8b91740d8ffcd1d84bfaf89a7",
+  "branch": "bot/1730-spar-tests-adapt-1116"
+}
