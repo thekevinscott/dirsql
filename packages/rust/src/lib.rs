@@ -6010,6 +6010,44 @@ mod internal_tests {
     }
 
     #[test]
+    fn apply_file_events_rereads_a_file_reported_deleted_that_is_still_there() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        std::fs::write(&abs, "Alpha").unwrap();
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, slug TEXT UNIQUE, name TEXT)",
+                "*.txt",
+                |path| {
+                    vec![Row::from_iter([
+                        ("slug".to_string(), Value::Text("a".into())),
+                        (
+                            "name".to_string(),
+                            Value::Text(std::fs::read_to_string(path).unwrap()),
+                        ),
+                    ])]
+                },
+            )],
+            Vec::<String>::new(),
+            Arc::new(RealFs),
+        )
+        .unwrap();
+        std::fs::write(&abs, "Renamed").unwrap();
+
+        let events = db.apply_file_events(vec![FileEvent::Deleted(abs.clone())]);
+
+        match events.as_slice() {
+            [RowEvent::Update { new_row, .. }] => {
+                assert_eq!(new_row["name"], Value::Text("Renamed".into()));
+            }
+            other => panic!("expected one update, got: {other:?}"),
+        }
+        assert_eq!(db.apply_file_events(vec![FileEvent::Created(abs)]), vec![]);
+    }
+
+    #[test]
     fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
         let events = db.handle_upsert("items", &abs, &rel);
