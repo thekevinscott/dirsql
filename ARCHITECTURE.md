@@ -327,9 +327,11 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
    injected); rows are the hook's output alone
 7. Rows are inserted into SQLite with tracking metadata
 8. File-to-rows mapping is stored for later diffing
-9. The events the watcher queued during the walk are applied once, and
-   foreign keys are checked once, as the build commits. A row whose foreign
-   key matches nothing fails the build
+9. The events the watcher queued during the walk are applied. If one of
+   them is a new directory, it is walked and the events queued during that
+   walk are applied too, until a walk brings in no new directory. Foreign
+   keys are then checked once, as the build commits. A row whose foreign key
+   matches nothing fails the build
 10. The instance's applier thread starts; from then on it applies the
     watcher's events as they arrive
 
@@ -347,7 +349,12 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
    table takes none of these per-file steps: any event under its glob marks
    it for one re-run of its `on-file` command after the batch, which replaces
    the table's rows
-6. Foreign keys are checked once, as the batch commits, and the batch's
+6. A new directory is walked. After every walk, the events the watcher
+   queued during it are applied in the same batch, as at build; if one of
+   them is another new directory, it is walked and treated the same way.
+   Only events already queued when a walk ends are read: nothing waits for a
+   writer to pause
+7. Foreign keys are checked once, as the batch commits, and the batch's
    `RowEvent` objects are handed to the `watch()` stream or `poll_events()`
    attached at that moment
 
@@ -391,6 +398,12 @@ batch long enough for more to pile up loses events, and every query then
 raises "the OS dropped file events, so the index no longer matches the
 files; rebuild it". The user-facing version, with what keeps the wait short,
 is [How long a query waits](https://dirsql.dev/reference/cli#how-long-a-query-waits).
+
+**A second accepted limit is a writer that creates directories faster than
+they are walked.** Every walk is followed by the events queued during it,
+and a new directory among them starts another walk in the same batch. The
+batch ends when a walk brings in no new directory, so queries wait until the
+walking catches up.
 
 - **Linux.** Events are applied in the order the kernel reports them, so a
   writer that creates a parent file and then its child does not make a query

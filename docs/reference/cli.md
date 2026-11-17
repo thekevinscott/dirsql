@@ -670,6 +670,21 @@ Over HTTP, the time a query waits counts toward the server's 30-second
 per-query timeout, so a query that waits longer is answered
 [`408`](./http-api.md#post-query).
 
+#### The limit: folders created faster than they are walked
+
+A folder created while `dirsql` runs is walked in the batch that holds its
+creation. When the walk ends, `dirsql` applies the changes that arrived
+during it, in the same batch, and only then checks foreign keys. This is the
+one case where a batch takes in changes that arrived after it started.
+
+If one of those changes is another new folder, that folder is walked and
+treated the same way. The batch ends when a walk brings in no new folder.
+
+`dirsql` applies only the changes already waiting when a walk ends. It never
+waits for a writer to pause. But a writer that creates folders faster than
+`dirsql` walks them keeps the batch open, and queries wait until `dirsql`
+catches up.
+
 ### The watch limit (Linux)
 
 Each directory the walk enters costs one inotify watch. A tree with more

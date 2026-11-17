@@ -1,0 +1,1 @@
+**Fixed** A folder created while the index is open no longer fails queries with a false foreign-key violation when it gathers rows that reference rows written elsewhere. Its walk is checked together with the changes that arrived during it, as the startup walk is.
