@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract fresh-declared-repros",
+  "ran_at": 1794857621,
+  "exit_code": 0,
+  "commit": "a7deccde0fd7c08e918e175f1d0c77ddb4072566",
+  "branch": "bot/1630-utf8-reads-1116"
+}

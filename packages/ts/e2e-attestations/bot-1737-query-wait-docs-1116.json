@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794862238,
+  "exit_code": 0,
+  "commit": "5abdf1213de4d986f51714e042efb9bc41dc49e1",
+  "branch": "bot/1737-query-wait-docs-1116"
+}
