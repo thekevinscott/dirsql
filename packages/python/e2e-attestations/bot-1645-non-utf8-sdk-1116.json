@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/fanout_test.py tests/e2e/on_file_failure_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/on_file_query_test.py tests/e2e/written_during_build_test.py tests/e2e/on_file_value_types_test.py tests/e2e/parent_then_child_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1794876353,
+  "exit_code": 0,
+  "commit": "eeb14c176a2d40ba049bd37285f3c78ab1e5a104",
+  "branch": "bot/1645-non-utf8-sdk-1116"
+}

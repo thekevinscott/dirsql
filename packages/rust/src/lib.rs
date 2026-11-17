@@ -481,7 +481,7 @@ struct DirSqlInner {
     /// The root-relative paths each per-table hook was last run over. Rows
     /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
     /// deleted directory is traced back to the tables it fed.
-    batch_files: Mutex<HashMap<String, Vec<String>>>,
+    batch_files: Mutex<HashMap<String, Vec<PathBuf>>>,
     /// The watch batches a foreign key rejected, replayed with every later
     /// batch until one lands them.
     held: Mutex<Held>,
@@ -1341,7 +1341,7 @@ impl DirSQL {
             for m in matches {
                 if self.is_per_table(&m.table_name) {
                     let deleted = matches!(event, FileEvent::Deleted(_));
-                    self.track_batch_file(&m.table_name, &abs_path, &rel_path, deleted);
+                    self.track_batch_file(&m.table_name, &abs_path, &rel_path_buf, deleted);
                     pending.mark(&m.table_name, &rel_path);
                     continue;
                 }
@@ -1360,7 +1360,7 @@ impl DirSQL {
             // event naming the directory and none for the files beneath it. It is
             // already gone, so the rows are the only record of what it held.
             if matches!(event, FileEvent::Deleted(_)) {
-                events.extend(self.delete_subtree(group, &rel_path, pending));
+                events.extend(self.delete_subtree(group, &rel_path_buf, pending));
             }
         }
         events
@@ -1532,15 +1532,15 @@ impl DirSQL {
     /// files its per-table hook runs over. The set stays in walk order
     /// (component-wise byte order), so the hook sees the same argument list a
     /// walk of the tree would give it.
-    fn track_batch_file(&self, table: &str, abs_path: &Path, rel_path: &str, deleted: bool) {
+    fn track_batch_file(&self, table: &str, abs_path: &Path, rel_path: &Path, deleted: bool) {
         let present = !deleted && self.inner.fs.is_file(abs_path).unwrap_or(false);
         let Ok(mut batch_files) = self.inner.batch_files.lock() else {
             return;
         };
         let files = batch_files.entry(table.to_string()).or_default();
-        let at = files.binary_search_by(|file| Path::new(file).cmp(Path::new(rel_path)));
+        let at = files.binary_search_by(|file| file.as_path().cmp(rel_path));
         match (present, at) {
-            (true, Err(at)) => files.insert(at, rel_path.to_string()),
+            (true, Err(at)) => files.insert(at, rel_path.to_path_buf()),
             (false, Ok(at)) => {
                 files.remove(at);
             }
@@ -1553,18 +1553,20 @@ impl DirSQL {
     fn delete_subtree(
         &self,
         group: &AnchorGroup,
-        rel_dir: &str,
+        rel_dir: &Path,
         pending: &mut PendingRefresh,
     ) -> Vec<RowEvent> {
-        let prefix = format!("{rel_dir}/");
+        let beneath = |file: &PathBuf| !rel_dir.as_os_str().is_empty() && file.starts_with(rel_dir);
+        let rel_dir = scanner::to_slash(rel_dir);
+        let rel_dir = rel_dir.as_str();
         let in_group = |table: &str| group.tables.iter().any(|name| name == table);
         for table in &group.tables {
             self.forget_failures_under(table, rel_dir);
         }
         if let Ok(mut batch_files) = self.inner.batch_files.lock() {
             for (table, files) in batch_files.iter_mut() {
-                if in_group(table) && files.iter().any(|file| file.starts_with(&prefix)) {
-                    files.retain(|file| !file.starts_with(&prefix));
+                if in_group(table) && files.iter().any(beneath) {
+                    files.retain(|file| !beneath(file));
                     pending.mark(table, rel_dir);
                 }
             }
@@ -1668,9 +1670,10 @@ impl DirSQL {
         }
         let mut events = Vec::new();
         for (path, table) in found {
-            let rel_path = scanner::to_slash(path.strip_prefix(base).unwrap_or(&path));
+            let rel = path.strip_prefix(base).unwrap_or(&path);
+            let rel_path = scanner::to_slash(rel);
             if self.is_per_table(&table) {
-                self.track_batch_file(&table, &path, &rel_path, false);
+                self.track_batch_file(&table, &path, rel, false);
                 pending.mark(&table, &rel_path);
                 continue;
             }
@@ -2183,7 +2186,7 @@ impl DirSQL {
         }
 
         let snapshot_ns = now_ns();
-        let mut batch_files: HashMap<String, Vec<String>> = HashMap::new();
+        let mut batch_files: HashMap<String, Vec<PathBuf>> = HashMap::new();
 
         // Grouping walks every scanned file, so it runs beside the early
         // hooks' inserts instead of ahead of them, and settles the early
@@ -2191,8 +2194,11 @@ impl DirSQL {
         let early_tables: HashSet<String> = early.iter().map(|(name, _)| name.clone()).collect();
         let (grouped, streamed) = std::thread::scope(|scope| {
             let grouping = scope.spawn(|| {
-                group_scanned(scanned_files.into_files(), &on_file_map)
-                    .map(|(per_file, batches)| (per_file, split_streamed(batches, &early_tables)))
+                group_scanned(scanned_files.into_files(), &on_file_map).map(
+                    |(per_file, batches)| {
+                        (per_file, split_streamed(batches, &early_tables, &anchors))
+                    },
+                )
             });
             let streamed = stream_early(&db, early, &strict_map);
             (
@@ -2275,7 +2281,7 @@ impl DirSQL {
             progress.update(done, Some(total_files));
             done += files.len() as u64;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let (rel_paths, abs_paths) = batch_paths(&mut files, persist_ready.is_some());
+            let (rel_paths, abs_paths) = batch_paths(&mut files, anchors.of(&table_name));
             // A cached table is current only when every file it was run over
             // is, and none has gone: the command saw them all at once, so any
             // change re-runs it over all of them.
@@ -3488,10 +3494,6 @@ fn run_applier(inner: Weak<DirSqlInner>) {
     }
 }
 
-/// The relative and absolute paths a per-table hook runs over, in file order.
-/// The absolute path is the one the scan found. Relative paths are cloned
-/// when `keep_rel` (the files are still read afterwards) and moved out
-/// otherwise.
 /// Each per-file hook's file paired with its hook, then each per-table
 /// hook's table with its files, in scan order.
 #[allow(clippy::type_complexity)]
@@ -3570,15 +3572,17 @@ fn declared_position(declared: &[String], table: &str) -> Option<usize> {
 fn split_streamed(
     batches: Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)>,
     streamed: &HashSet<String>,
+    anchors: &TableAnchors,
 ) -> (
     Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)>,
-    Vec<(String, Vec<String>)>,
+    Vec<(String, Vec<PathBuf>)>,
 ) {
     let mut rest = Vec::new();
     let mut done = Vec::new();
     for (table_name, hook, mut files) in batches {
         if streamed.contains(&table_name) {
-            done.push((table_name, batch_paths(&mut files, false).0));
+            let rel = batch_paths(&mut files, anchors.of(&table_name)).0;
+            done.push((table_name, rel));
         } else {
             rest.push((table_name, hook, files));
         }
@@ -3586,16 +3590,15 @@ fn split_streamed(
     (rest, done)
 }
 
-fn batch_paths(files: &mut [ScannedFile], keep_rel: bool) -> (Vec<String>, Vec<PathBuf>) {
+/// The paths a per-table hook runs over, in file order: each as the scan
+/// found it, and the same path relative to `anchor`.
+fn batch_paths(files: &mut [ScannedFile], anchor: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut rel = Vec::with_capacity(files.len());
     let mut abs = Vec::with_capacity(files.len());
     for file in files {
-        abs.push(std::mem::take(&mut file.abs_path));
-        rel.push(if keep_rel {
-            file.rel_path.clone()
-        } else {
-            std::mem::take(&mut file.rel_path)
-        });
+        let path = std::mem::take(&mut file.abs_path);
+        rel.push(path.strip_prefix(anchor).unwrap_or(&path).to_path_buf());
+        abs.push(path);
     }
     (rel, abs)
 }
@@ -4899,6 +4902,7 @@ mod internal_tests {
         let tables = vec![
             anchored_table("held", "*.txt", "/one"),
             anchored_table("bare", "*.txt", "/one"),
+            anchored_table("sibling", "*.txt", "/one"),
         ];
         let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
         let group = &groups[0];
@@ -4906,15 +4910,40 @@ mod internal_tests {
             let mut files = db.inner.batch_files.lock().unwrap();
             files.insert("held".into(), vec!["moved/x".into()]);
             files.insert("bare".into(), vec!["elsewhere/y".into()]);
+            files.insert("sibling".into(), vec!["moved2/x".into()]);
             files.insert("foreign".into(), vec!["moved/z".into()]);
         }
         let mut pending = PendingRefresh::default();
 
-        db.delete_subtree(group, "moved", &mut pending);
+        db.delete_subtree(group, Path::new("moved"), &mut pending);
 
         assert_eq!(
             pending.tables,
             vec![("held".to_string(), "moved".to_string())]
+        );
+        let files = db.inner.batch_files.lock().unwrap();
+        assert_eq!(files["held"], Vec::<PathBuf>::new());
+        assert_eq!(files["sibling"], vec![PathBuf::from("moved2/x")]);
+    }
+
+    #[test]
+    fn delete_subtree_at_the_anchor_itself_keeps_every_file() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        let tables = vec![anchored_table("held", "*.txt", "/one")];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        db.inner
+            .batch_files
+            .lock()
+            .unwrap()
+            .insert("held".into(), vec!["moved/x".into()]);
+        let mut pending = PendingRefresh::default();
+
+        db.delete_subtree(&groups[0], Path::new(""), &mut pending);
+
+        assert!(pending.tables.is_empty());
+        assert_eq!(
+            db.inner.batch_files.lock().unwrap()["held"],
+            vec![PathBuf::from("moved/x")]
         );
     }
 
@@ -4926,7 +4955,11 @@ mod internal_tests {
         db.record_read("held", "moved/x", Some("broken"));
         db.record_read("foreign", "moved/z", Some("broken"));
 
-        db.delete_subtree(&groups[0], "moved", &mut PendingRefresh::default());
+        db.delete_subtree(
+            &groups[0],
+            Path::new("moved"),
+            &mut PendingRefresh::default(),
+        );
 
         assert_eq!(
             failing_paths(&db),
@@ -4974,8 +5007,11 @@ mod internal_tests {
     fn delete_subtree_surfaces_db_poison() {
         let (_dir, db, _abs, _rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events =
-            db.delete_subtree(&db.inner.groups[0], "moved", &mut PendingRefresh::default());
+        let events = db.delete_subtree(
+            &db.inner.groups[0],
+            Path::new("moved"),
+            &mut PendingRefresh::default(),
+        );
         assert_single_lock_error(&events);
     }
 
@@ -4989,8 +5025,11 @@ mod internal_tests {
             .conn()
             .execute("DROP TABLE _dirsql_internal_rows", [])
             .unwrap();
-        let events =
-            db.delete_subtree(&db.inner.groups[0], "moved", &mut PendingRefresh::default());
+        let events = db.delete_subtree(
+            &db.inner.groups[0],
+            Path::new("moved"),
+            &mut PendingRefresh::default(),
+        );
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         assert!(
             matches!(&events[0], RowEvent::Error { table: None, file_path, error }
@@ -7072,26 +7111,27 @@ mod internal_tests {
         }
     }
 
+    fn scanned_at(abs_path: PathBuf) -> ScannedFile {
+        ScannedFile {
+            abs_path,
+            rel_path: String::new(),
+            table_name: "t".into(),
+            stat: None,
+            trusted: false,
+        }
+    }
+
     #[test]
     fn batch_paths_hands_the_hook_the_paths_the_scan_found() {
         let mut files = vec![
-            ScannedFile {
-                abs_path: PathBuf::from("/scan/a/one.md"),
-                rel_path: "a/one.md".into(),
-                table_name: "t".into(),
-                stat: None,
-                trusted: false,
-            },
-            ScannedFile {
-                abs_path: PathBuf::from("/scan/b/two.md"),
-                rel_path: "b/two.md".into(),
-                table_name: "t".into(),
-                stat: None,
-                trusted: false,
-            },
+            scanned_at(PathBuf::from("/scan/a/one.md")),
+            scanned_at(PathBuf::from("/scan/b/two.md")),
         ];
-        let (rel, abs) = batch_paths(&mut files, true);
-        assert_eq!(rel, vec!["a/one.md", "b/two.md"]);
+        let (rel, abs) = batch_paths(&mut files, Path::new("/scan"));
+        assert_eq!(
+            rel,
+            vec![PathBuf::from("a/one.md"), PathBuf::from("b/two.md")]
+        );
         assert_eq!(
             abs,
             vec![
@@ -7102,31 +7142,10 @@ mod internal_tests {
     }
 
     #[test]
-    fn batch_paths_leaves_the_relative_paths_in_place_when_asked_to_keep_them() {
-        let mut files = vec![ScannedFile {
-            abs_path: PathBuf::from("/scan/a.md"),
-            rel_path: "a.md".into(),
-            table_name: "t".into(),
-            stat: None,
-            trusted: false,
-        }];
-        let (rel, _) = batch_paths(&mut files, true);
-        assert_eq!(rel, vec!["a.md"]);
-        assert_eq!(files[0].rel_path, "a.md");
-    }
-
-    #[test]
-    fn batch_paths_moves_the_relative_paths_out_when_not_kept() {
-        let mut files = vec![ScannedFile {
-            abs_path: PathBuf::from("/scan/a.md"),
-            rel_path: "a.md".into(),
-            table_name: "t".into(),
-            stat: None,
-            trusted: false,
-        }];
-        let (rel, _) = batch_paths(&mut files, false);
-        assert_eq!(rel, vec!["a.md"]);
-        assert!(files[0].rel_path.is_empty());
+    fn batch_paths_keeps_a_path_outside_the_anchor_whole() {
+        let mut files = vec![scanned_at(PathBuf::from("/elsewhere/a.md"))];
+        let (rel, _) = batch_paths(&mut files, Path::new("/scan"));
+        assert_eq!(rel, vec![PathBuf::from("/elsewhere/a.md")]);
     }
 
     fn scanned(rel_path: &str, table: &str, trusted: bool) -> ScannedFile {
