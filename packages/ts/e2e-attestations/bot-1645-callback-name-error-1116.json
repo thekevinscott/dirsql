@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fanout on-file-value-types declared-table-name query-contract",
+  "ran_at": 1794879919,
+  "exit_code": 0,
+  "commit": "16c98bcb0008eb3dc87915416f0f2067f54c9880",
+  "branch": "bot/1645-callback-name-error-1116"
+}
