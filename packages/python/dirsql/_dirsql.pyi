@@ -74,6 +74,7 @@ class DirSQL:
         persist_path: str | PathLike[str] | None = None,
         extensions: list[ExtensionSpec] | None = None,
         suppress_config_extensions: bool = False,
+        watch: bool = True,
     ) -> None: ...
     def query(
         self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None

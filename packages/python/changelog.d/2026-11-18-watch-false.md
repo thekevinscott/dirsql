@@ -1,0 +1,1 @@
+**Added** `DirSQL(..., watch=False)` builds the index from one walk and never starts a watcher; every query reads that walk, and `watch()` raises `RuntimeError` ("watching is off"). For trees nothing writes to while the instance lives. Defaults to `True`.

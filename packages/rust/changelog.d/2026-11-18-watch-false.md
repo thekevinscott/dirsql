@@ -1,0 +1,1 @@
+**Added** A hidden builder option, `.no_watch(bool)`, behind the Python `watch=False` and TypeScript `watch: false` options: the build walks once and no watcher starts; `watch()` and `poll_events()` on such an instance fail with "watching is off".
