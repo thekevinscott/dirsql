@@ -646,6 +646,8 @@ impl Db {
         let conn = open_temp_connection(file.path())?;
         // The database dies with the process, so durability buys nothing.
         conn.pragma_update(None, "synchronous", "OFF")?;
+        conn.pragma_update(None, "journal_mode", "MEMORY")?;
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
         ensure_internal_rows_table(&conn)?;
         Self::with_connection(conn, file.path().to_path_buf(), Some(file))
     }
@@ -692,10 +694,13 @@ impl Db {
     /// path-table settings, extensions and declared functions (sharing their
     /// workers). It reads a snapshot while this connection writes.
     ///
-    /// The first reader switches the database to WAL, which needs every
-    /// other connection closed and no transaction open; until then the
-    /// rollback journal keeps a bulk build from writing each page twice.
+    /// The first reader switches the database to WAL and shared locking,
+    /// which needs every other connection closed and no transaction open.
+    /// Until then the writer keeps its rollback journal in memory and holds
+    /// the file lock, so a bulk build writes each page once and a small
+    /// commit costs about what it did on an anonymous temp database.
     pub fn reader(&self) -> Result<Self> {
+        self.conn.pragma_update(None, "locking_mode", "NORMAL")?;
         let _mode: String = self
             .conn
             .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
@@ -3877,19 +3882,26 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn new_is_disk_backed_not_memory() {
-        // An in-memory SQLite database is pinned to journal_mode=memory; a
-        // file-backed one defaults to journal_mode=delete.
-        assert_eq!(journal_mode(&Db::new().unwrap()), "delete");
+    fn locking_mode(db: &Db) -> String {
+        db.conn()
+            .query_row("PRAGMA locking_mode", [], |row| row.get(0))
+            .unwrap()
     }
 
     #[test]
-    fn the_first_reader_switches_the_database_to_wal() {
+    fn new_keeps_its_journal_in_memory_and_its_lock_until_a_reader_opens() {
+        let db = Db::new().unwrap();
+        assert_eq!(journal_mode(&db), "memory");
+        assert_eq!(locking_mode(&db), "exclusive");
+    }
+
+    #[test]
+    fn the_first_reader_switches_the_database_to_wal_and_shared_locks() {
         let db = Db::new().unwrap();
         let reader = db.reader().unwrap();
         assert_eq!(journal_mode(&db), "wal");
         assert_eq!(journal_mode(&reader), "wal");
+        assert_eq!(locking_mode(&db), "normal");
     }
 
     #[test]
