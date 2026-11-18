@@ -65,10 +65,7 @@ impl Watcher {
         Self::scoped(
             paths
                 .iter()
-                .map(|root| WatchScope {
-                    root: root.clone(),
-                    ignore: everything.clone(),
-                })
+                .map(|root| WatchScope::new(root.clone(), everything.clone()))
                 .collect(),
         )
     }
@@ -389,10 +386,10 @@ fn os_error(raw_os_error: i32) -> io::Error {
 
 #[cfg(test)]
 fn everything(root: &str) -> WatchScope {
-    WatchScope {
-        root: PathBuf::from(root),
-        ignore: crate::matcher::TableMatcher::new(&[], &[]).unwrap(),
-    }
+    WatchScope::new(
+        PathBuf::from(root),
+        crate::matcher::TableMatcher::new(&[], &[]).unwrap(),
+    )
 }
 
 #[cfg(test)]

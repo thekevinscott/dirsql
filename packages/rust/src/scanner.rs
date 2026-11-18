@@ -129,19 +129,37 @@ fn found_in(matcher: &TableMatcher, rel_path: &Path, dir: &Path) -> Vec<Found> {
 }
 
 /// `start` and every directory below it that [`scan_subtree`] would enter,
-/// judged relative to `root`. These are the directories whose entries can
-/// change what the index holds.
+/// judged relative to `root`: those a table glob can reach, and the ones on
+/// the way to them. These are the directories whose entries can change what
+/// the index holds. One reached through a symlink is listed at its target,
+/// and only when that lies under `root`.
 pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBuf> {
+    scan_dirs_linked(root, start, ignore).0
+}
+
+/// [`scan_dirs`], and each symlinked directory the walk entered, paired with
+/// its target.
+pub(crate) fn scan_dirs_linked(
+    root: &Path,
+    start: &Path,
+    ignore: &TableMatcher,
+) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
+    let entered = std::sync::Mutex::new(Vec::new());
+    let on_link = |path: &Path| {
+        if let Ok(mut entered) = entered.lock() {
+            entered.push(path.to_path_buf());
+        }
+    };
     let walker = Walk {
         ignore,
-        glob: None,
+        glob: dirs_glob(ignore),
         gitignore: false,
         in_repo: false,
         frames: Vec::new(),
         dirs: true,
-        on_link: &ignore_link,
+        on_link: &on_link,
     };
-    let mut dirs = vec![start.to_path_buf()];
+    let mut walked = vec![start.to_path_buf()];
     walk(
         root,
         start,
@@ -149,9 +167,67 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         &|_| true,
         &|_| false,
         &|rel_path, parent| parent.join(rel_path.file_name().unwrap_or_default()),
-        &mut |dir| dirs.push(dir),
+        &mut |dir| walked.push(dir),
     );
-    dirs
+    let links: Vec<(PathBuf, PathBuf)> = entered
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|link| {
+            std::fs::canonicalize(&link)
+                .ok()
+                .map(|target| (link, target))
+        })
+        .collect();
+    let mut aliases = links.clone();
+    if under_a_link(root, start) {
+        aliases.extend(
+            std::fs::canonicalize(start)
+                .ok()
+                .map(|target| (start.to_path_buf(), target)),
+        );
+    }
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut seen = std::collections::HashSet::new();
+    let mut dirs = Vec::new();
+    for dir in walked {
+        let real = resolve_aliases(&dir, &aliases);
+        let inside = real == dir || real.starts_with(root) || real.starts_with(&canonical_root);
+        if inside && seen.insert(real.clone()) {
+            dirs.push(real);
+        }
+    }
+    (dirs, links)
+}
+
+/// Whether `start`, or a directory between it and `root`, is a symlink.
+fn under_a_link(root: &Path, start: &Path) -> bool {
+    start
+        .ancestors()
+        .take_while(|dir| *dir != root && dir.starts_with(root))
+        .any(|dir| dir.is_symlink())
+}
+
+/// `dir` with its longest `(alias, target)` alias prefix made the target.
+fn resolve_aliases(dir: &Path, aliases: &[(PathBuf, PathBuf)]) -> PathBuf {
+    aliases
+        .iter()
+        .filter_map(|(alias, target)| {
+            dir.strip_prefix(alias)
+                .ok()
+                .map(|rest| (alias, target, rest))
+        })
+        .max_by_key(|(alias, _, _)| alias.components().count())
+        .map_or_else(
+            || dir.to_path_buf(),
+            |(_, target, rest)| target.components().chain(rest.components()).collect(),
+        )
+}
+
+/// The glob a directory walk prunes by; none for a matcher with no tables,
+/// which keeps every directory.
+fn dirs_glob(matcher: &TableMatcher) -> Option<&PathGlob> {
+    Some(matcher.walk_glob()).filter(|glob| glob.has_components())
 }
 
 fn scan_below(
@@ -1088,13 +1164,22 @@ fn should_descend(is_dir: bool, rel_path: &Path, ignore: &TableMatcher) -> bool 
 }
 
 /// Whether a walk from the root enters the directory at `rel_path`: every
-/// directory on the way, itself included, survives [`should_descend`].
+/// directory on the way, itself included, survives [`should_descend`], and a
+/// table glob can still reach it.
 pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
     let mut prefix = PathBuf::new();
     rel_path.components().all(|component| {
         prefix.push(component);
         should_descend(true, &prefix, ignore)
-    })
+    }) && dirs_glob(ignore).is_none_or(|glob| glob_reaches_dir(glob, rel_path))
+}
+
+/// Whether some component of `glob` can enter the directory at `rel_path`.
+fn glob_reaches_dir(glob: &PathGlob, rel_path: &Path) -> bool {
+    let states = rel_path.components().fold(glob.start(), |states, c| {
+        glob.step(&states, c.as_os_str(), Kind::Dir)
+    });
+    glob.reaches(&states, Kind::Dir)
 }
 
 /// Whether `rel_path` matches `glob`.
@@ -1340,17 +1425,89 @@ mod tests {
     }
 
     #[test]
-    fn scan_dirs_lists_the_start_and_every_directory_the_scan_enters() {
+    fn scan_dirs_lists_only_the_directories_a_table_glob_can_reach() {
+        let root = tempfile::tempdir().unwrap();
+        for n in 0..50 {
+            fs::create_dir_all(root.path().join("src").join(n.to_string()).join("deep")).unwrap();
+        }
+        fs::create_dir_all(root.path().join("docs").join("guide")).unwrap();
+        fs::create_dir_all(root.path().join("docs").join("node_modules").join("pkg")).unwrap();
+        fs::create_dir_all(root.path().join("docs").join(".cache")).unwrap();
+        fs::create_dir_all(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[("docs/**/*.md", "t")], &["**/node_modules/**"]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
+        dirs.sort();
+        let docs = root.path().join("docs");
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), docs.clone(), docs.join("guide")]
+        );
+    }
+
+    #[test]
+    fn scan_dirs_enters_a_dot_named_directory_a_glob_spells() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join("b")).unwrap();
-        fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
-        fs::create_dir_all(root.path().join("a").join(".dirsql")).unwrap();
-        fs::write(root.path().join("a").join("f.md"), "").unwrap();
-        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &["**/node_modules/**"]).unwrap();
-        let a = root.path().join("a");
-        let mut dirs = scan_dirs(root.path(), &a, &ignore);
+        fs::create_dir_all(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &[]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
         dirs.sort();
-        assert_eq!(dirs, vec![a.clone(), a.join(".dirsql"), a.join("b")]);
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), root.path().join(".dirsql")]
+        );
+    }
+
+    #[test]
+    fn under_a_link_is_false_for_a_plain_directory_and_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("a")).unwrap();
+        assert!(!under_a_link(root.path(), &root.path().join("a")));
+        assert!(!under_a_link(root.path(), root.path()));
+    }
+
+    #[test]
+    fn resolve_aliases_maps_an_alias_itself_to_its_target() {
+        let aliases = [(PathBuf::from("/r/link"), PathBuf::from("/r/real"))];
+        let got = resolve_aliases(Path::new("/r/link"), &aliases);
+        assert_eq!(got, PathBuf::from("/r/real"));
+        assert!(
+            !got.to_string_lossy().ends_with(std::path::is_separator),
+            "got: {got:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_aliases_takes_the_longest_alias_prefix() {
+        let aliases = [
+            (PathBuf::from("/r/link"), PathBuf::from("/r/real")),
+            (PathBuf::from("/r/link/in"), PathBuf::from("/r/other")),
+        ];
+        assert_eq!(
+            resolve_aliases(Path::new("/r/link/a"), &aliases),
+            PathBuf::from("/r/real/a")
+        );
+        assert_eq!(
+            resolve_aliases(Path::new("/r/link/in/b"), &aliases),
+            PathBuf::from("/r/other/b")
+        );
+        assert_eq!(
+            resolve_aliases(Path::new("/r/plain"), &aliases),
+            PathBuf::from("/r/plain")
+        );
+    }
+
+    #[test]
+    fn scan_dirs_with_no_table_glob_enters_every_directory() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), root.path().join(".dirsql")]
+        );
     }
 
     #[test]
@@ -1536,6 +1693,15 @@ mod tests {
         assert!(reaches_dir(Path::new(""), &ignore));
         assert!(reaches_dir(Path::new("src/deep"), &ignore));
         assert!(reaches_dir(Path::new("a/.dirsql"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_enters_only_directories_a_table_glob_can_reach() {
+        let matcher = TableMatcher::new(&[("docs/**/*.md", "t")], &[]).unwrap();
+        assert!(reaches_dir(Path::new(""), &matcher));
+        assert!(reaches_dir(Path::new("docs/guide"), &matcher));
+        assert!(!reaches_dir(Path::new("src"), &matcher));
+        assert!(!reaches_dir(Path::new("docs/.cache"), &matcher));
     }
 
     #[test]
