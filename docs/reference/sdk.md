@@ -59,6 +59,7 @@ DirSQL(
     persist: bool = False,
     persist_path: str | None = None,
     extensions: list[dict] | None = None,  # [{ "path": str, "entrypoint"?: str }]
+    watch: bool = True,
 )
 ```
 
@@ -74,6 +75,7 @@ new DirSQL({
     persist?: boolean,
     persistPath?: string,
     extensions?: ExtensionSpec[],  // [{ path: string, entrypoint?: string }]
+    watch?: boolean,               // default true
 })
 ```
 
@@ -128,6 +130,10 @@ shortcut was removed in #603 — use
   [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by
   default; the built-in `.git` skip and the `ignore` parameter's patterns
   still apply. The CLI's [`--no-ignore`](./cli.md#flags).
+- `watch` — Pass `False` (TypeScript: `false`) for a tree nothing writes to
+  while the instance lives. The index is built from one walk, no watcher ever
+  starts, and every query reads that walk. Calling `watch()` (TypeScript also
+  `startWatcher()` and `pollEvents()`) then raises `watching is off`.
 - `config` — Path to a [`.dirsql.toml`](./config.md). Its `[[table]]`
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The
