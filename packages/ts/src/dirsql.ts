@@ -74,6 +74,13 @@ export interface DirSQLOptions {
    * `.git`) and any `ignore` patterns still apply.
    */
   noIgnore?: boolean;
+  /**
+   * Set `false` for a tree nothing writes to while the instance lives: the
+   * index is built from one walk, no watcher ever starts, and every query
+   * reads that walk. {@link DirSQL.watch}, {@link DirSQL.startWatcher} and
+   * {@link DirSQL.pollEvents} then throw. Defaults to `true`.
+   */
+  watch?: boolean;
 }
 
 /** A row-level event emitted by the file watcher. */
@@ -230,6 +237,7 @@ export class DirSQL {
           merged,
           configExtensions !== null,
           options.noIgnore ?? null,
+          options.watch ?? null,
         );
       })
       .then((inner) => {
@@ -398,6 +406,11 @@ export class DirSQL {
    * {@link pollEvents} was called, which keeps them for {@link pollEvents}.
    */
   watch(): AsyncGenerator<RowEvent, void, unknown> {
+    if (this._options.watch === false) {
+      throw new Error(
+        "watching is off: this instance was built with watch disabled",
+      );
+    }
     if (this._inner !== undefined) {
       this._ensureWatcher();
     }

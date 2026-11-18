@@ -9,6 +9,8 @@ from dirsql._dirsql import DirSQL as _RustDirSQL
 from dirsql.resolve_configs_extension_specs import resolve_configs_extension_specs
 from dirsql.resolve_extension import resolve_extension_path
 
+_WATCHING_OFF = "watching is off: this instance was built with watch disabled"
+
 
 def _stop_unwatched(owner):
     """Have the core stop holding events once ``owner`` has no stream left."""
@@ -164,6 +166,10 @@ class DirSQL:
     config-file) may be a bare **package name**, resolved from the installed
     package in the runtime env. A relative programmatic ``path`` resolves
     against the cwd when ``DirSQL()`` is called.
+
+    Pass ``watch=False`` for a tree nothing writes to while the instance
+    lives: the index is built from one walk, no watcher ever starts, and
+    every query reads that walk. :meth:`watch` then raises.
     """
 
     def __init__(
@@ -177,6 +183,7 @@ class DirSQL:
         persist=False,
         persist_path=None,
         extensions=None,
+        watch=True,
     ):
         # Read now: the core is built on a worker thread after the first
         # await, and a chdir in between must not move the root or a relative
@@ -204,6 +211,7 @@ class DirSQL:
         self._persist = persist
         self._persist_path = persist_path
         self._extensions = extensions
+        self._watch = watch
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
@@ -260,6 +268,7 @@ class DirSQL:
             persist_path=self._persist_path,
             extensions=extensions,
             suppress_config_extensions=suppress,
+            watch=self._watch,
         )
 
     def _new_core(self, root, **kwargs):
@@ -353,7 +362,11 @@ class DirSQL:
         being closed is released when Python collects it. While no stream
         is open, no events are held, and the next ``watch()`` sees only
         changes made after it.
+
+        Raises ``RuntimeError`` on an instance built with ``watch=False``.
         """
+        if not self._watch:
+            raise RuntimeError(_WATCHING_OFF)
         stream = _WatchStream(self)
         if self._db is not None:
             self._db._start_watcher()

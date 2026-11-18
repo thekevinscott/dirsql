@@ -75,6 +75,7 @@ describe("DirSQL construction", () => {
       null,
       false,
       null,
+      null,
     );
   });
 
@@ -106,6 +107,7 @@ describe("DirSQL construction", () => {
       "/cache.db",
       null,
       false,
+      null,
       null,
     );
   });
@@ -141,6 +143,16 @@ describe("DirSQL construction", () => {
     ]);
   });
 
+  it("forwards watch: false and refuses to watch", async () => {
+    const inner = makeInner();
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data", watch: false });
+    await db.ready;
+    expect(openAsync.mock.calls[0]?.[9]).toBe(false);
+    expect(() => db.watch()).toThrow(/watching is off/);
+    expect(inner.startWatcher).not.toHaveBeenCalled();
+  });
+
   it("forwards noIgnore as openAsync's ninth arg (#746)", async () => {
     openAsync.mockResolvedValue(makeInner());
     const db = new DirSQL({ root: "/data", noIgnore: true });
@@ -155,6 +167,7 @@ describe("DirSQL construction", () => {
       null,
       false,
       true,
+      null,
     );
   });
 

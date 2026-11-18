@@ -33,6 +33,7 @@ export interface NativeDirSQLConstructor {
     // entries; set by the wrapper after resolving them itself.
     suppressConfigExtensions: boolean | null,
     noIgnore: boolean | null,
+    watch: boolean | null,
   ): Promise<NativeDirSQL>;
 }
 

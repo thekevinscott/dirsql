@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/written_during_build_test.py tests/e2e/parent_then_child_test.py tests/e2e/parent_then_child_server_test.py tests/e2e/declared_table_name_test.py tests/e2e/on_file_query_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/orphan_query_test.py tests/e2e/use_case_join_test.py -x -q",
+  "ran_at": 1795019809,
+  "exit_code": 0,
+  "commit": "5fda45aef3e36dd9760a3332c70d47ef0ba69b7f",
+  "branch": "bot/1755-watch-false-1118"
+}

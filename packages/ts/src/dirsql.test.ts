@@ -92,6 +92,7 @@ describe("DirSQL", () => {
         null,
         false,
         null,
+        null,
       );
       expect(resolveConfigsExtensionSpecs).not.toHaveBeenCalled();
     });
@@ -118,6 +119,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
         null,
       );
     });
@@ -149,6 +151,7 @@ describe("DirSQL", () => {
           { path: "R:/ext/spellfix.so", entrypoint: undefined },
         ],
         false,
+        null,
         null,
       );
     });
@@ -202,6 +205,7 @@ describe("DirSQL", () => {
         null,
         false,
         true,
+        null,
       );
     });
 
@@ -219,6 +223,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
         null,
       );
       expect(db._options).toEqual({ config: "/cfg.toml" });
@@ -243,6 +248,7 @@ describe("DirSQL", () => {
         null,
         false,
         null,
+        null,
       );
     });
 
@@ -260,6 +266,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
         null,
       );
     });
@@ -306,6 +313,7 @@ describe("DirSQL", () => {
         ],
         true,
         null,
+        null,
       );
     });
 
@@ -325,6 +333,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "/env/pkg/ext.so", entrypoint: undefined }],
         true,
+        null,
         null,
       );
     });
@@ -346,6 +355,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "R:ext/a.so", entrypoint: undefined }],
         false,
+        null,
         null,
       );
     });
@@ -433,6 +443,23 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
+    it("forwards watch: false as openAsync's tenth arg", async () => {
+      const openAsync = installFakeCore(makeInner());
+      const db = new DirSQL({ root: "/data", watch: false });
+      await db.ready;
+      expect(openAsync.mock.calls[0]?.[9]).toBe(false);
+    });
+
+    it("throws on watch() without starting the watcher when built unwatched", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({ watch: false });
+      expect(() => db.watch()).toThrow(/watching is off/);
+      await db.ready;
+      expect(() => db.watch()).toThrow(/watching is off/);
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+    });
+
     it("starts the watcher before returning once ready", async () => {
       const inner = makeInner();
       installFakeCore(inner);
