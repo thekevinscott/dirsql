@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/watch_speed_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/many_dirs_speed_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1795019409,
+  "exit_code": 0,
+  "commit": "09c605e4bfeb6c79e37b12a8ea189dac8cffa39f",
+  "branch": "bot/1756-glob-scoped-watch-1118"
+}
