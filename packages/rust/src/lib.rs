@@ -59,6 +59,7 @@ pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
 mod table_refs;
+mod temp_db_file;
 mod tree_walk;
 #[doc(hidden)]
 pub mod vtab;

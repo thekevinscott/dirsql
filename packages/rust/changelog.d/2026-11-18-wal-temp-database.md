@@ -1,0 +1,3 @@
+**Changed**
+
+The default index database is now a SQLite file of its own in SQLite's temp directory (`SQLITE_TMPDIR`, then `TMPDIR`, then `/var/tmp`, `/usr/tmp`, `/tmp`), deleted with its journal, `-wal` and `-shm` files on shutdown, instead of an anonymous temp database. Memory still does not grow with the index. `Db::reader()` opens another connection to it with the same path-table settings, extensions and declared functions, switching the file to WAL mode so that connection can read while the writer writes. A process killed before shutdown leaves `dirsql-<pid>-<n>.db` and its companion files behind in that directory.

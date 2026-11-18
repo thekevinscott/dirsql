@@ -2,6 +2,9 @@
 //! read on one connection neither waits for nor is torn by a write committing
 //! on another, and the file is gone once the last connection closes.
 
+mod common;
+
+use common::build_fixture_extension;
 use dirsql::db::Db;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -52,20 +55,20 @@ fn count(conn: &Connection) -> i64 {
 #[test]
 fn a_write_and_a_cheap_read_finish_while_a_slow_read_runs_and_the_slow_read_is_not_torn() {
     let db = populated();
-    let path = database_file(&db);
+    let slow_reader = db.reader().unwrap();
+    let cheap_reader = db.reader().unwrap();
 
     let slow_done = Arc::new(AtomicBool::new(false));
     let (pinned_tx, pinned_rx) = mpsc::channel();
     let slow = {
-        let path = path.clone();
         let slow_done = Arc::clone(&slow_done);
         thread::spawn(move || {
-            let conn = Connection::open(&path).unwrap();
+            let conn = slow_reader.conn();
             conn.execute_batch("BEGIN").unwrap();
-            let before = count(&conn);
+            let before = count(conn);
             pinned_tx.send(()).unwrap();
             let _: i64 = conn.query_row(SLOW, [], |row| row.get(0)).unwrap();
-            let after = count(&conn);
+            let after = count(conn);
             conn.execute_batch("COMMIT").unwrap();
             slow_done.store(true, Ordering::SeqCst);
             (before, after)
@@ -76,8 +79,7 @@ fn a_write_and_a_cheap_read_finish_while_a_slow_read_runs_and_the_slow_read_is_n
     db.conn()
         .execute("INSERT INTO t VALUES (-1, 'x')", [])
         .unwrap();
-    let cheap = Connection::open(&path).unwrap();
-    let seen = count(&cheap);
+    let seen = count(cheap_reader.conn());
     let still_running = !slow_done.load(Ordering::SeqCst);
 
     let (before, after) = slow.join().unwrap();
@@ -94,7 +96,7 @@ fn a_write_and_a_cheap_read_finish_while_a_slow_read_runs_and_the_slow_read_is_n
 }
 
 fn leftovers(path: &Path) -> Vec<PathBuf> {
-    ["", "-wal", "-shm"]
+    ["", "-journal", "-wal", "-shm"]
         .iter()
         .map(|suffix| PathBuf::from(format!("{}{suffix}", path.display())))
         .filter(|file| file.exists())
@@ -105,9 +107,30 @@ fn leftovers(path: &Path) -> Vec<PathBuf> {
 fn the_database_files_are_deleted_once_the_last_connection_closes() {
     let db = populated();
     let path = database_file(&db);
+    let reader = db.reader().unwrap();
     assert!(path.exists(), "the database file is missing while open");
 
     drop(db);
+    assert!(
+        path.exists(),
+        "the database file went while a reader had it open"
+    );
+    drop(reader);
 
     assert_eq!(leftovers(&path), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn a_reader_has_the_extensions_the_writer_loaded() {
+    let ext = build_fixture_extension();
+    let mut db = Db::new().unwrap();
+    db.load_extension(&ext, None).unwrap();
+
+    let reader = db.reader().unwrap();
+
+    let answer: i64 = reader
+        .conn()
+        .query_row("SELECT dirsql_testext_answer()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(answer, 42);
 }
