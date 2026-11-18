@@ -1,7 +1,7 @@
 {
   "command": "pnpm exec vitest run --dir tests/e2e fresh-declared-repros fanout",
-  "ran_at": 1795019509,
+  "ran_at": 1795025754,
   "exit_code": 0,
-  "commit": "89052041a2d9cebb6151ce1af186d12914c81a71",
+  "commit": "c8c1a50d9198a447eae92665f2073f1ab83659ab",
   "branch": "bot/1756-glob-scoped-watch-1118"
 }
