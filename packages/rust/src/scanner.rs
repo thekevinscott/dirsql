@@ -876,7 +876,7 @@ impl Walk<'_> {
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
-        let kind = kind_of(seen, self.glob.is_some() && !self.dirs, &|follow| {
+        let kind = kind_of(seen, self.follows_links(), &|follow| {
             stat_of(&dir.join(name), follow)
         })?;
         let linked = linked || kind == Kind::LinkedDir;
@@ -922,6 +922,12 @@ impl Walk<'_> {
             && (self.frames.is_empty()
                 || self.glob.is_some_and(|glob| glob.names(rel))
                 || !is_gitignored(&self.frames, path, is_dir))
+    }
+
+    /// Whether a symlink is followed: only by a file walk with a glob, so a
+    /// directory walk never lists a directory through a link.
+    fn follows_links(&self) -> bool {
+        self.glob.is_some() && !self.dirs
     }
 
     /// Whether an entry, `dot_named` or not, passes the dot-name rule given
@@ -1839,6 +1845,20 @@ mod tests {
             dirs: false,
             on_link: &ignore_link,
         }
+    }
+
+    #[test]
+    fn follows_links_only_in_a_file_walk_with_a_glob() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("**").unwrap();
+        let files = walk_with(&ignore, Some(&glob), Vec::new());
+        let dirs = Walk {
+            dirs: true,
+            ..files.clone()
+        };
+        assert!(files.follows_links());
+        assert!(!dirs.follows_links());
+        assert!(!walk_with(&ignore, None, Vec::new()).follows_links());
     }
 
     #[test]
