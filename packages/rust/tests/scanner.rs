@@ -348,3 +348,19 @@ fn scan_dirs_starts_below_the_root_under_the_root_s_rules() {
 
     assert_eq!(dirs, vec![root.join("src"), root.join("src/lib")]);
 }
+
+#[cfg(unix)]
+#[test]
+fn scan_dirs_from_a_directory_under_a_link_lists_it_at_its_target() {
+    let dir = TempDir::new().unwrap();
+    let root = &fs::canonicalize(dir.path()).unwrap();
+    fs::create_dir_all(root.join("real/sub")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+    let matcher = TableMatcher::new(&[("link/**/*.txt", "t")], &[]).unwrap();
+
+    assert_eq!(
+        scan_dirs(root, &root.join("link/sub"), &matcher),
+        vec![root.join("real/sub")]
+    );
+}

@@ -180,12 +180,13 @@ pub(crate) fn scan_dirs_linked(
         })
         .collect();
     let mut aliases = links.clone();
-    aliases.extend(
-        std::fs::canonicalize(start)
-            .ok()
-            .filter(|target| target != start)
-            .map(|target| (start.to_path_buf(), target)),
-    );
+    if under_a_link(root, start) {
+        aliases.extend(
+            std::fs::canonicalize(start)
+                .ok()
+                .map(|target| (start.to_path_buf(), target)),
+        );
+    }
     let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut seen = std::collections::HashSet::new();
     let mut dirs = Vec::new();
@@ -199,6 +200,14 @@ pub(crate) fn scan_dirs_linked(
     (dirs, links)
 }
 
+/// Whether `start`, or a directory between it and `root`, is a symlink.
+fn under_a_link(root: &Path, start: &Path) -> bool {
+    start
+        .ancestors()
+        .take_while(|dir| *dir != root && dir.starts_with(root))
+        .any(|dir| dir.is_symlink())
+}
+
 /// `dir` with its longest `(alias, target)` alias prefix made the target.
 fn resolve_aliases(dir: &Path, aliases: &[(PathBuf, PathBuf)]) -> PathBuf {
     aliases
@@ -209,7 +218,10 @@ fn resolve_aliases(dir: &Path, aliases: &[(PathBuf, PathBuf)]) -> PathBuf {
                 .map(|rest| (alias, target, rest))
         })
         .max_by_key(|(alias, _, _)| alias.components().count())
-        .map_or_else(|| dir.to_path_buf(), |(_, target, rest)| target.join(rest))
+        .map_or_else(
+            || dir.to_path_buf(),
+            |(_, target, rest)| target.components().chain(rest.components()).collect(),
+        )
 }
 
 /// The glob a directory walk prunes by; none for a matcher with no tables,
@@ -1443,6 +1455,23 @@ mod tests {
         assert_eq!(
             dirs,
             vec![root.path().to_path_buf(), root.path().join(".dirsql")]
+        );
+    }
+
+    #[test]
+    fn under_a_link_is_false_for_a_plain_directory_and_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("a")).unwrap();
+        assert!(!under_a_link(root.path(), &root.path().join("a")));
+        assert!(!under_a_link(root.path(), root.path()));
+    }
+
+    #[test]
+    fn resolve_aliases_maps_an_alias_itself_to_its_target() {
+        let aliases = [(PathBuf::from("/r/link"), PathBuf::from("/r/real"))];
+        assert_eq!(
+            resolve_aliases(Path::new("/r/link"), &aliases).as_os_str(),
+            "/r/real"
         );
     }
 
