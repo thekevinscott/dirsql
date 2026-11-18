@@ -20,6 +20,8 @@ Scope each task on its merits. Never shrink it, or plan early stopping points, a
 
 ## Targeted mutation recheck
 
+PR CI does not run mutation, so this applies only if it is turned back on.
+
 The orchestrator only may make one exception to "no local mutation". After CI reports survivors and a fix is ready, check just the lines changed since that CI run, before pushing:
 
 ```bash

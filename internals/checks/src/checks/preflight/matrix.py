@@ -102,7 +102,9 @@ def parse_gate_matrix(text: str) -> list[Root]:
                 job=job,
                 source=inputs["source"],
                 languages=json.loads(inputs.get("languages") or "[]"),
-                gates=json.loads(inputs["gates"]) if inputs.get("gates") else list(ROOT_GATES),
+                gates=[g for g in json.loads(inputs["gates"]) if g in GATES]
+                if inputs.get("gates")
+                else list(ROOT_GATES),
                 config=inputs.get("config", ""),
             )
         )
