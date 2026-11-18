@@ -47,6 +47,7 @@ describe.each([false, true])("DirSQL build heap (persist: %s)", (persist) => {
     const db = new DirSQL({
       root,
       persist,
+      ...(persist && { persistPath: join(dir, `${files}.db`) }),
       tables: [
         {
           name: "t",
