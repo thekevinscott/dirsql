@@ -604,9 +604,11 @@ impl From<&WatchFault> for DirSqlError {
 fn build_watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
     groups
         .iter()
-        .map(|group| WatchScope {
-            root: PathBuf::from(canonical_root(&group.anchor)),
-            ignore: group.matcher.clone(),
+        .map(|group| {
+            WatchScope::new(
+                PathBuf::from(canonical_root(&group.anchor)),
+                group.matcher.clone(),
+            )
         })
         .collect()
 }
@@ -614,10 +616,7 @@ fn build_watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
 fn watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
     groups
         .iter()
-        .map(|group| WatchScope {
-            root: group.watch_anchor.clone(),
-            ignore: group.matcher.clone(),
-        })
+        .map(|group| WatchScope::new(group.watch_anchor.clone(), group.matcher.clone()))
         .collect()
 }
 

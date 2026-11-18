@@ -131,8 +131,25 @@ fn found_in(matcher: &TableMatcher, rel_path: &Path, dir: &Path) -> Vec<Found> {
 /// `start` and every directory below it that [`scan_subtree`] would enter,
 /// judged relative to `root`: those a table glob can reach, and the ones on
 /// the way to them. These are the directories whose entries can change what
-/// the index holds. Symlinked directories are not entered.
+/// the index holds. One reached through a symlink is listed at its target,
+/// and only when that lies under `root`.
 pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBuf> {
+    scan_dirs_linked(root, start, ignore).0
+}
+
+/// [`scan_dirs`], and each symlinked directory the walk entered, paired with
+/// its target.
+pub(crate) fn scan_dirs_linked(
+    root: &Path,
+    start: &Path,
+    ignore: &TableMatcher,
+) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
+    let entered = std::sync::Mutex::new(Vec::new());
+    let on_link = |path: &Path| {
+        if let Ok(mut entered) = entered.lock() {
+            entered.push(path.to_path_buf());
+        }
+    };
     let walker = Walk {
         ignore,
         glob: dirs_glob(ignore),
@@ -140,9 +157,9 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         in_repo: false,
         frames: Vec::new(),
         dirs: true,
-        on_link: &ignore_link,
+        on_link: &on_link,
     };
-    let mut dirs = vec![start.to_path_buf()];
+    let mut walked = vec![start.to_path_buf()];
     walk(
         root,
         start,
@@ -150,9 +167,49 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         &|_| true,
         &|_| false,
         &|rel_path, parent| parent.join(rel_path.file_name().unwrap_or_default()),
-        &mut |dir| dirs.push(dir),
+        &mut |dir| walked.push(dir),
     );
-    dirs
+    let links: Vec<(PathBuf, PathBuf)> = entered
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|link| {
+            std::fs::canonicalize(&link)
+                .ok()
+                .map(|target| (link, target))
+        })
+        .collect();
+    let mut aliases = links.clone();
+    aliases.extend(
+        std::fs::canonicalize(start)
+            .ok()
+            .filter(|target| target != start)
+            .map(|target| (start.to_path_buf(), target)),
+    );
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut seen = std::collections::HashSet::new();
+    let mut dirs = Vec::new();
+    for dir in walked {
+        let real = resolve_aliases(&dir, &aliases);
+        let inside = real == dir || real.starts_with(root) || real.starts_with(&canonical_root);
+        if inside && seen.insert(real.clone()) {
+            dirs.push(real);
+        }
+    }
+    (dirs, links)
+}
+
+/// `dir` with its longest `(alias, target)` alias prefix made the target.
+fn resolve_aliases(dir: &Path, aliases: &[(PathBuf, PathBuf)]) -> PathBuf {
+    aliases
+        .iter()
+        .filter_map(|(alias, target)| {
+            dir.strip_prefix(alias)
+                .ok()
+                .map(|rest| (alias, target, rest))
+        })
+        .max_by_key(|(alias, _, _)| alias.components().count())
+        .map_or_else(|| dir.to_path_buf(), |(_, target, rest)| target.join(rest))
 }
 
 /// The glob a directory walk prunes by; none for a matcher with no tables,
@@ -876,7 +933,7 @@ impl Walk<'_> {
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
-        let kind = kind_of(seen, self.follows_links(), &|follow| {
+        let kind = kind_of(seen, self.glob.is_some(), &|follow| {
             stat_of(&dir.join(name), follow)
         })?;
         let linked = linked || kind == Kind::LinkedDir;
@@ -922,12 +979,6 @@ impl Walk<'_> {
             && (self.frames.is_empty()
                 || self.glob.is_some_and(|glob| glob.names(rel))
                 || !is_gitignored(&self.frames, path, is_dir))
-    }
-
-    /// Whether a symlink is followed: only by a file walk with a glob, so a
-    /// directory walk never lists a directory through a link.
-    fn follows_links(&self) -> bool {
-        self.glob.is_some() && !self.dirs
     }
 
     /// Whether an entry, `dot_named` or not, passes the dot-name rule given
@@ -1396,6 +1447,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_aliases_takes_the_longest_alias_prefix() {
+        let aliases = [
+            (PathBuf::from("/r/link"), PathBuf::from("/r/real")),
+            (PathBuf::from("/r/link/in"), PathBuf::from("/r/other")),
+        ];
+        assert_eq!(
+            resolve_aliases(Path::new("/r/link/a"), &aliases),
+            PathBuf::from("/r/real/a")
+        );
+        assert_eq!(
+            resolve_aliases(Path::new("/r/link/in/b"), &aliases),
+            PathBuf::from("/r/other/b")
+        );
+        assert_eq!(
+            resolve_aliases(Path::new("/r/plain"), &aliases),
+            PathBuf::from("/r/plain")
+        );
+    }
+
+    #[test]
     fn scan_dirs_with_no_table_glob_enters_every_directory() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join(".dirsql")).unwrap();
@@ -1845,20 +1916,6 @@ mod tests {
             dirs: false,
             on_link: &ignore_link,
         }
-    }
-
-    #[test]
-    fn follows_links_only_in_a_file_walk_with_a_glob() {
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let glob = compile_glob("**").unwrap();
-        let files = walk_with(&ignore, Some(&glob), Vec::new());
-        let dirs = Walk {
-            dirs: true,
-            ..files.clone()
-        };
-        assert!(files.follows_links());
-        assert!(!dirs.follows_links());
-        assert!(!walk_with(&ignore, None, Vec::new()).follows_links());
     }
 
     #[test]

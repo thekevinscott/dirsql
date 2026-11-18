@@ -250,10 +250,10 @@ fn over_detects_events_in_every_directory() {
 }
 
 fn scoped(root: &std::path::Path, ignore: &[&str]) -> Watcher {
-    Watcher::scoped(vec![WatchScope {
-        root: root.to_path_buf(),
-        ignore: TableMatcher::new(&[], ignore).unwrap(),
-    }])
+    Watcher::scoped(vec![WatchScope::new(
+        root.to_path_buf(),
+        TableMatcher::new(&[], ignore).unwrap(),
+    )])
     .unwrap()
 }
 
@@ -289,10 +289,10 @@ fn scoped_watcher_puts_no_watch_on_an_ignored_subtree() {
 }
 
 fn globbed(root: &std::path::Path, glob: &str) -> Watcher {
-    Watcher::scoped(vec![WatchScope {
-        root: root.to_path_buf(),
-        ignore: TableMatcher::new(&[(glob, "t")], &[]).unwrap(),
-    }])
+    Watcher::scoped(vec![WatchScope::new(
+        root.to_path_buf(),
+        TableMatcher::new(&[(glob, "t")], &[]).unwrap(),
+    )])
     .unwrap()
 }
 

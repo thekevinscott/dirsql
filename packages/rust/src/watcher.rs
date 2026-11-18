@@ -1,8 +1,9 @@
 use crate::matcher::TableMatcher;
-use crate::scanner::{reaches_dir, scan_dirs};
+use crate::scanner::{reaches_dir, scan_dirs_linked};
 use notify::ErrorKind;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 pub use crate::inotify_watch::Watcher;
@@ -49,6 +50,45 @@ impl WatchFault {
 pub struct WatchScope {
     pub root: PathBuf,
     pub ignore: TableMatcher,
+    /// Each symlinked directory a walk entered, with its target.
+    links: Mutex<Vec<(PathBuf, PathBuf)>>,
+}
+
+impl WatchScope {
+    pub fn new(root: PathBuf, ignore: TableMatcher) -> Self {
+        Self {
+            root,
+            ignore,
+            links: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn remember(&self, links: Vec<(PathBuf, PathBuf)>) {
+        if let Ok(mut known) = self.links.lock() {
+            known.retain(|(link, _)| !links.iter().any(|(found, _)| found == link));
+            known.extend(links);
+        }
+    }
+
+    /// The directories to walk from once `dir` exists: `dir` when the scan
+    /// enters it, and `dir` reached through each known link whose target
+    /// holds it, when the scan enters that.
+    fn walk_starts(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut starts: Vec<PathBuf> = self.entered(dir).into_iter().collect();
+        if let Ok(links) = self.links.lock() {
+            for (link, target) in links.iter() {
+                if let Ok(rest) = dir.strip_prefix(target) {
+                    starts.extend(self.entered(&link.join(rest)));
+                }
+            }
+        }
+        starts
+    }
+
+    fn entered(&self, dir: &Path) -> Option<PathBuf> {
+        let rel = dir.strip_prefix(&self.root).ok()?;
+        reaches_dir(rel, &self.ignore).then(|| dir.to_path_buf())
+    }
 }
 
 /// [`watch_tree`] from a directory that appeared after the watcher started.
@@ -91,7 +131,9 @@ pub(crate) fn watch_tree(
 }
 
 pub(crate) fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
-    scan_dirs(&scope.root, dir, &scope.ignore)
+    let (dirs, links) = scan_dirs_linked(&scope.root, dir, &scope.ignore);
+    scope.remember(links);
+    dirs
 }
 
 #[cfg(any(test, not(target_os = "linux")))]
@@ -132,15 +174,11 @@ fn dirs_to_watch(
     let mut seen = HashSet::new();
     let mut dirs = Vec::new();
     for scope in scopes {
-        let Ok(rel) = dir.strip_prefix(&scope.root) else {
-            continue;
-        };
-        if !reaches_dir(rel, &scope.ignore) {
-            continue;
-        }
-        for found in walk(scope, dir) {
-            if seen.insert(found.clone()) {
-                dirs.push(found);
+        for start in scope.walk_starts(dir) {
+            for found in walk(scope, &start) {
+                if seen.insert(found.clone()) {
+                    dirs.push(found);
+                }
             }
         }
     }
@@ -190,10 +228,7 @@ mod tests {
     // tested here.
 
     fn scope(root: &str, ignore: &[&str]) -> WatchScope {
-        WatchScope {
-            root: PathBuf::from(root),
-            ignore: TableMatcher::new(&[], ignore).unwrap(),
-        }
+        WatchScope::new(PathBuf::from(root), TableMatcher::new(&[], ignore).unwrap())
     }
 
     #[test]
@@ -222,13 +257,48 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("a").join("b")).unwrap();
         std::fs::create_dir(root.path().join("skip")).unwrap();
-        let scope = WatchScope {
-            root: root.path().to_path_buf(),
-            ignore: TableMatcher::new(&[], &["skip/**"]).unwrap(),
-        };
+        let scope = WatchScope::new(
+            root.path().to_path_buf(),
+            TableMatcher::new(&[], &["skip/**"]).unwrap(),
+        );
         let mut dirs = walk_scope(&scope, &root.path().join("a"));
         dirs.sort();
         assert_eq!(dirs, vec![root.path().join("a"), root.path().join("a/b")]);
+    }
+
+    fn linked(glob: &str) -> WatchScope {
+        let scope = WatchScope::new(
+            PathBuf::from("/r"),
+            TableMatcher::new(&[(glob, "t")], &[]).unwrap(),
+        );
+        scope.remember(vec![(PathBuf::from("/r/link"), PathBuf::from("/r/real"))]);
+        scope
+    }
+
+    #[test]
+    fn walk_starts_reaches_a_directory_under_a_link_target_through_the_link() {
+        let scope = linked("link/**/*.txt");
+        assert_eq!(
+            scope.walk_starts(Path::new("/r/real/sub")),
+            vec![PathBuf::from("/r/link/sub")]
+        );
+    }
+
+    #[test]
+    fn walk_starts_is_empty_when_neither_path_is_entered() {
+        let scope = linked("other/*.txt");
+        assert!(scope.walk_starts(Path::new("/r/real/sub")).is_empty());
+    }
+
+    #[test]
+    fn remember_replaces_a_link_s_old_target() {
+        let scope = linked("link/**/*.txt");
+        scope.remember(vec![(PathBuf::from("/r/link"), PathBuf::from("/r/moved"))]);
+        assert!(scope.walk_starts(Path::new("/r/real/sub")).is_empty());
+        assert_eq!(
+            scope.walk_starts(Path::new("/r/moved/sub")),
+            vec![PathBuf::from("/r/link/sub")]
+        );
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
