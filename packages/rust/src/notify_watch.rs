@@ -38,10 +38,7 @@ impl Watcher {
         Self::scoped(
             paths
                 .iter()
-                .map(|root| WatchScope {
-                    root: root.clone(),
-                    ignore: everything.clone(),
-                })
+                .map(|root| WatchScope::new(root.clone(), everything.clone()))
                 .collect(),
         )
     }
