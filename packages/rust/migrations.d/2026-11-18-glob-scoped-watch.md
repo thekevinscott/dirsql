@@ -14,7 +14,7 @@ _None._
 
 #### Behavior changes without code changes
 
-On Linux, a tree whose table globs reach few of its directories uses that many inotify watches, not one per directory, so a build that failed with `inotify watch limit reached` may now succeed without raising `fs.inotify.max_user_watches`.
+On Linux, a tree whose table globs reach few of its directories uses that many inotify watches, not one per directory, so a build that failed with `inotify watch limit reached` may now succeed without raising `fs.inotify.max_user_watches`. A symlinked directory a glob reaches is watched once, at its target, when that target lies under the root.
 
 #### Verification
 
