@@ -569,7 +569,7 @@ describe("DirSQL", () => {
       try {
         expect((await second.next()).value).toEqual(event);
         expect((await second.next()).value).toEqual(event);
-        expect(deref).toHaveBeenCalledOnce();
+        expect(deref).toHaveBeenCalledTimes(2);
         await second.return();
       } finally {
         deref.mockRestore();
@@ -583,6 +583,7 @@ describe("DirSQL", () => {
       });
       installFakeCore(inner);
       const db = new DirSQL({});
+      await db.ready;
       db.watch();
       const kept = db.watch();
       const deref = vi
@@ -590,9 +591,9 @@ describe("DirSQL", () => {
         .mockReturnValueOnce(undefined);
       try {
         expect((await kept.next()).value).toEqual(event);
-        expect(deref).toHaveBeenCalledTimes(2);
-        expect((await kept.next()).value).toEqual(event);
         expect(deref).toHaveBeenCalledTimes(3);
+        expect((await kept.next()).value).toEqual(event);
+        expect(deref).toHaveBeenCalledTimes(5);
         await kept.return();
       } finally {
         deref.mockRestore();

@@ -445,6 +445,13 @@ twice is harmless. A stream dropped without being closed is released when
 Python collects it. While no stream is open no events are held, and the
 next `watch()` sees only the changes made after it.
 
+TypeScript: a stream holds the events it has not returned yet. Leaving the
+`for await` loop closes the stream and releases those events at once. A
+stream dropped without being closed is released when it is garbage-collected.
+While no stream is open no events are held, and the next `watch()` sees only
+the changes made after it. Calling `startWatcher()` or `pollEvents()`
+directly keeps the events for `pollEvents()` instead.
+
 Rust: an instance has one stream at a time, and `watch()` is mutually
 exclusive with the polling API below — a second `watch()` while the stream
 is alive, or mixing the two, returns an error. Dropping the stream releases

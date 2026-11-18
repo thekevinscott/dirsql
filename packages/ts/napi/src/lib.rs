@@ -10,7 +10,8 @@
 //!   reference) so it can be handed to [`dirsql::Table`]
 //! - converts row values and events between Rust and the napi shapes exposed
 //!   to JS (BLOB columns cross as Node `Buffer`s via [`JsRowValue`])
-//! - forwards `openAsync` / `query` / `startWatcher` / `pollEvents` to the
+//! - forwards `openAsync` / `query` / `startWatcher` / `stopWatcher` /
+//!   `pollEvents` to the
 //!   corresponding `DirSQL` methods
 //!
 //! `openAsync` is the single construction entry point. It accepts an optional
@@ -364,6 +365,16 @@ impl DirSQL {
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner.attach_poll().map_err(to_napi_err)
+    }
+
+    /// Undo startWatcher: the events waiting for pollEvents are dropped, and
+    /// none are kept until the next attach. A closed instance holds none.
+    #[napi(js_name = "stopWatcher")]
+    pub fn stop_watcher(&self) -> Result<()> {
+        match self.inner.borrow().as_ref() {
+            Some(inner) => inner.detach_poll().map_err(to_napi_err),
+            None => Ok(()),
+        }
     }
 
     /// Poll for file events with a timeout (in milliseconds).

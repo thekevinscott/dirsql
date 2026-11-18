@@ -161,6 +161,12 @@ export class DirSQL {
   private readonly _watchStreams = new Set<WeakRef<RowEvent[]>>();
   private _watchPoll?: Promise<void>;
   private _watcherStarted = false;
+  // Set once the caller attaches directly, through startWatcher() or
+  // pollEvents(): their events must outlive every watch() stream.
+  private _directlyAttached = false;
+  private readonly _droppedStreams = new FinalizationRegistry<null>(() =>
+    this._stopUnwatched(),
+  );
   // Constructor options preserved verbatim; public-by-design.
   readonly _options: DirSQLOptions;
 
@@ -235,6 +241,8 @@ export class DirSQL {
             // A watcher that cannot start is the stream's error, not init's:
             // the stream's first next() retries the start and throws there.
           }
+          // Every stream may have been collected before the core was built.
+          this._stopUnwatched();
         }
       });
     this._ready.catch(() => {});
@@ -294,6 +302,7 @@ export class DirSQL {
    */
   async startWatcher(): Promise<void> {
     await this.ready;
+    this._directlyAttached = true;
     this._ensureWatcher();
   }
 
@@ -302,6 +311,48 @@ export class DirSQL {
       this._inner.startWatcher();
       this._watcherStarted = true;
     }
+  }
+
+  private _stopUnwatched(): void {
+    // A poll in flight runs this check itself when it ends: stopping under it
+    // would be undone, since a poll attaches the core again.
+    if (
+      this._watchPoll !== undefined ||
+      this._directlyAttached ||
+      !this._watcherStarted
+    ) {
+      return;
+    }
+    for (const reference of this._watchStreams) {
+      if (reference.deref() !== undefined) {
+        return;
+      }
+      this._watchStreams.delete(reference);
+    }
+    this._inner.stopWatcher();
+    this._watcherStarted = false;
+  }
+
+  private _pollWatch(): Promise<void> {
+    this._watchPoll ??= this._inner
+      .pollEvents(200)
+      .then((events) => {
+        for (const reference of this._watchStreams) {
+          const stream = reference.deref();
+          if (stream) {
+            for (const event of events) {
+              stream.push(event);
+            }
+          } else {
+            this._watchStreams.delete(reference);
+          }
+        }
+      })
+      .finally(() => {
+        this._watchPoll = undefined;
+        this._stopUnwatched();
+      });
+    return this._watchPoll;
   }
 
   /**
@@ -314,6 +365,7 @@ export class DirSQL {
    */
   async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     await this.ready;
+    this._directlyAttached = true;
     return this._inner.pollEvents(timeoutMs);
   }
 
@@ -337,46 +389,85 @@ export class DirSQL {
    * `for await` loop to stop.
    * Each stream receives every event observed after its creation, even
    * while another stream is consuming events on the same instance.
+   *
+   * A stream holds the events it has not returned yet. Leaving the
+   * `for await` loop closes the stream and releases them at once. A stream
+   * dropped without being closed is released when it is garbage-collected.
+   * While no stream is open no events are held, and the next `watch()` sees
+   * only the changes made after it, unless {@link startWatcher} or
+   * {@link pollEvents} was called, which keeps them for {@link pollEvents}.
    */
   watch(): AsyncGenerator<RowEvent, void, unknown> {
     if (this._inner !== undefined) {
       this._ensureWatcher();
     }
+    const owner = this;
     const buffer: RowEvent[] = [];
     const reference = new WeakRef(buffer);
+    const wakers = new Set<() => void>();
+    let started = false;
+    let closed = false;
     this._watchStreams.add(reference);
-    const owner = this;
-    return (async function* () {
-      try {
-        await owner.ready;
-        owner._ensureWatcher();
-        while (true) {
-          while (buffer.length === 0) {
-            owner._watchPoll ??= owner._inner
-              .pollEvents(200)
-              .then((events) => {
-                for (const reference of owner._watchStreams) {
-                  const stream = reference.deref();
-                  if (stream) {
-                    for (const event of events) {
-                      stream.push(event);
-                    }
-                  } else {
-                    owner._watchStreams.delete(reference);
-                  }
-                }
-              })
-              .finally(() => {
-                owner._watchPoll = undefined;
-              });
-            await owner._watchPoll;
-          }
-          yield buffer.shift() as RowEvent;
-        }
-      } finally {
-        owner._watchStreams.delete(reference);
+    this._droppedStreams.register(buffer, null, buffer);
+    const done: IteratorReturnResult<void> = { value: undefined, done: true };
+    const close = () => {
+      if (closed) {
+        return;
       }
-    })();
+      closed = true;
+      owner._droppedStreams.unregister(buffer);
+      buffer.length = 0;
+      owner._watchStreams.delete(reference);
+      for (const wake of wakers) {
+        wake();
+      }
+      owner._stopUnwatched();
+    };
+    const stream: AsyncGenerator<RowEvent, void, unknown> = {
+      async next() {
+        try {
+          if (!started && !closed) {
+            await owner.ready;
+            if (!closed) {
+              owner._ensureWatcher();
+              started = true;
+            }
+          }
+          while (!closed) {
+            const event = buffer.shift();
+            if (event !== undefined) {
+              return { value: event, done: false };
+            }
+            let wake!: () => void;
+            const woken = new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+            wakers.add(wake);
+            try {
+              await Promise.race([owner._pollWatch(), woken]);
+            } finally {
+              wakers.delete(wake);
+            }
+          }
+          return done;
+        } catch (error) {
+          close();
+          throw error;
+        }
+      },
+      async return() {
+        close();
+        return done;
+      },
+      async throw(error: unknown) {
+        close();
+        throw error;
+      },
+      [Symbol.asyncIterator]() {
+        return stream;
+      },
+    };
+    return stream;
   }
 
   /**

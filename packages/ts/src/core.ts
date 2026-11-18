@@ -15,6 +15,7 @@ export interface NativeDirSQL {
   queryOrdered(sql: string, params?: QueryParams): Promise<QueryResult>;
   // Synchronous so that `watch()` can return a stream whose watcher is live.
   startWatcher(): void;
+  stopWatcher(): void;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
   close(): void;
 }
