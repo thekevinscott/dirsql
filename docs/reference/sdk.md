@@ -405,8 +405,9 @@ integers always enumerate first.
 ::: code-group
 
 ```python [Python]
-async for event in db.watch():   # AsyncIterator[RowEvent]
-    ...
+async with db.watch() as events:   # AsyncIterator[RowEvent]
+    async for event in events:
+        ...
 ```
 
 ```typescript [TypeScript]
@@ -442,8 +443,19 @@ Python/TypeScript: each `watch()` call returns an independent stream, and every 
 on one instance receives every event observed after it was created, so
 several consumers (one per client, say) can share one instance.
 
-Rust: `watch()` may be called once per instance and is mutually exclusive
-with the polling API below — mixing them returns an error.
+Python: a stream holds the events it has not returned yet. `async with`
+closes the stream when the block exits, and `await stream.aclose()` closes
+it directly; either releases those events at once. Iterating a closed
+stream ends, including an iteration waiting in another task, and closing
+twice is harmless. A stream dropped without being closed is released when
+Python collects it. While no stream is open no events are held, and the
+next `watch()` sees only the changes made after it.
+
+Rust: an instance has one stream at a time, and `watch()` is mutually
+exclusive with the polling API below — a second `watch()` while the stream
+is alive, or mixing the two, returns an error. Dropping the stream releases
+the events it holds, and a later `watch()` returns a new stream that sees
+only the changes made after it.
 
 ### Low-level watch primitives
 

@@ -4,7 +4,8 @@
 //! - wraps a Python `on_file` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
-//! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
+//! - forwards `new` / `query` / `_start_watcher` / `_stop_watcher` /
+//!   `_poll_events` to the
 //!   corresponding `DirSQL` methods
 //!
 //! The Python-side async wrapper (`dirsql._async.DirSQL`) drives this binding
@@ -195,6 +196,11 @@ mod python {
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
             let db = self.inner.clone();
             py.detach(move || db.attach_poll()).map_err(to_py_err)
+        }
+
+        fn _stop_watcher(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.detach_poll()).map_err(to_py_err)
         }
 
         fn _lock(&self, py: Python<'_>) -> PyResult<()> {

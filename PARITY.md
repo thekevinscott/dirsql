@@ -99,6 +99,7 @@ core, so all three SDKs change at once. **No drift.**
 | Attach to the watcher (it runs from instantiation) | `db._start_watcher()` (attaches)  | **N** (`watch()` / `poll_events()` attach)           | `await db.startWatcher()` (optional: attaches on the JS thread; `pollEvents()` attaches on its own) |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
+| Close a watch stream       | `async with db.watch() as events:` / `await stream.aclose()` | **N** (drop the `WatchStream`)            | **N** (leave the `for await` loop)                      |
 | Hold the index still during a multi-file write | `with db.lock:` | **N** (core `lock_index` / `unlock_index` are `#[doc(hidden)]` binding plumbing) | **N** |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
@@ -107,7 +108,8 @@ core, so all three SDKs change at once. **No drift.**
 **Multiple watch streams — TypeScript restored to Python parity.** Every
 `watch()` stream on one instance receives all events observed after its
 creation. Both SDKs share one poll and buffer events per live stream. Rust
-retains its documented single-stream, mutually exclusive watch/poll API.
+retains its documented single-stream, mutually exclusive watch/poll API; a
+new stream may be taken once the previous one is dropped.
 
 **Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /
