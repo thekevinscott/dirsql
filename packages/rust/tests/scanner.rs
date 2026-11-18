@@ -304,6 +304,21 @@ fn scan_dirs_lists_the_directories_the_scan_enters() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn scan_dirs_does_not_enter_a_symlinked_directory_a_glob_reaches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join("real")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+    let matcher = TableMatcher::new(&[("*/*.txt", "t")], &[]).unwrap();
+    let mut dirs = scan_dirs(root, root, &matcher);
+    dirs.sort();
+
+    assert_eq!(dirs, vec![root.to_path_buf(), root.join("real")]);
+}
+
 #[test]
 fn scan_dirs_starts_below_the_root_under_the_root_s_rules() {
     let dir = TempDir::new().unwrap();

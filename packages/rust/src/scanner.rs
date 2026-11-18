@@ -129,12 +129,13 @@ fn found_in(matcher: &TableMatcher, rel_path: &Path, dir: &Path) -> Vec<Found> {
 }
 
 /// `start` and every directory below it that [`scan_subtree`] would enter,
-/// judged relative to `root`. These are the directories whose entries can
-/// change what the index holds.
+/// judged relative to `root`: those a table glob can reach, and the ones on
+/// the way to them. These are the directories whose entries can change what
+/// the index holds. Symlinked directories are not entered.
 pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBuf> {
     let walker = Walk {
         ignore,
-        glob: None,
+        glob: dirs_glob(ignore),
         gitignore: false,
         in_repo: false,
         frames: Vec::new(),
@@ -152,6 +153,12 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         &mut |dir| dirs.push(dir),
     );
     dirs
+}
+
+/// The glob a directory walk prunes by; none for a matcher with no tables,
+/// which keeps every directory.
+fn dirs_glob(matcher: &TableMatcher) -> Option<&PathGlob> {
+    Some(matcher.walk_glob()).filter(|glob| glob.has_components())
 }
 
 fn scan_below(
@@ -869,7 +876,7 @@ impl Walk<'_> {
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
-        let kind = kind_of(seen, self.glob.is_some(), &|follow| {
+        let kind = kind_of(seen, self.glob.is_some() && !self.dirs, &|follow| {
             stat_of(&dir.join(name), follow)
         })?;
         let linked = linked || kind == Kind::LinkedDir;
@@ -1088,13 +1095,22 @@ fn should_descend(is_dir: bool, rel_path: &Path, ignore: &TableMatcher) -> bool 
 }
 
 /// Whether a walk from the root enters the directory at `rel_path`: every
-/// directory on the way, itself included, survives [`should_descend`].
+/// directory on the way, itself included, survives [`should_descend`], and a
+/// table glob can still reach it.
 pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
     let mut prefix = PathBuf::new();
     rel_path.components().all(|component| {
         prefix.push(component);
         should_descend(true, &prefix, ignore)
-    })
+    }) && dirs_glob(ignore).is_none_or(|glob| glob_reaches_dir(glob, rel_path))
+}
+
+/// Whether some component of `glob` can enter the directory at `rel_path`.
+fn glob_reaches_dir(glob: &PathGlob, rel_path: &Path) -> bool {
+    let states = rel_path.components().fold(glob.start(), |states, c| {
+        glob.step(&states, c.as_os_str(), Kind::Dir)
+    });
+    glob.reaches(&states, Kind::Dir)
 }
 
 /// Whether `rel_path` matches `glob`.
@@ -1365,6 +1381,19 @@ mod tests {
         fs::create_dir_all(root.path().join("a").join("b")).unwrap();
         fs::create_dir_all(root.path().join(".dirsql")).unwrap();
         let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &[]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), root.path().join(".dirsql")]
+        );
+    }
+
+    #[test]
+    fn scan_dirs_with_no_table_glob_enters_every_directory() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
         let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
         dirs.sort();
         assert_eq!(
