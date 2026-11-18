@@ -215,6 +215,9 @@ pub enum DirSqlError {
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
 
+    #[error("root directory {} does not exist", .0.display())]
+    MissingRoot(PathBuf),
+
     #[error("config error: {message}")]
     Config {
         message: String,
@@ -565,6 +568,16 @@ struct FreshState {
 impl FreshState {
     fn must_wait(&self, turn: u64) -> bool {
         self.locked || self.serving != turn
+    }
+}
+
+/// Fails when `exists` says the index root is missing: nothing above it is
+/// watched, so it could never be seen to appear.
+fn check_root(root: &Path, exists: &dyn Fn(&Path) -> bool) -> Result<()> {
+    if exists(root) {
+        Ok(())
+    } else {
+        Err(DirSqlError::MissingRoot(root.to_path_buf()))
     }
 }
 
@@ -1824,9 +1837,10 @@ impl DirSQL {
     }
 
     /// Test-seam build path: identical to [`build_from_resolved`] but stores
-    /// the supplied [`FileSystem`] double on the resulting instance. The
-    /// prepare phase still uses [`RealFs`] (it has no instance yet), so
-    /// callers must build over an empty temp dir.
+    /// the supplied [`FileSystem`] double on the resulting instance, and it
+    /// skips the root check, so a double may stand in for a root that is not
+    /// on disk. The prepare phase still uses [`RealFs`] (it has no instance
+    /// yet), so callers must build over an empty or missing directory.
     #[cfg(test)]
     pub(crate) fn with_ignore_and_fs<I, S>(
         root: impl Into<PathBuf>,
@@ -1851,7 +1865,7 @@ impl DirSQL {
             path_table_parser: None,
             no_ignore: false,
         };
-        let prepared = Self::prepare_resolved(resolved)?;
+        let prepared = Self::prepare_resolved_with(resolved, &scan_directory_reporting)?;
         Self::finish_build_with_fs(prepared, fs, Progress::indexing())
     }
 
@@ -1866,6 +1880,7 @@ impl DirSQL {
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
     pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
+        check_root(&resolved.root, &|root| root.exists())?;
         Self::prepare_resolved_with(resolved, &scan_directory_reporting)
     }
 
@@ -8181,6 +8196,18 @@ mod internal_tests {
             Err(e) => e,
         };
         assert_eq!(err.to_string(), "watcher error: denied");
+    }
+
+    #[test]
+    fn check_root_names_a_missing_root() {
+        let err = check_root(Path::new("/gone"), &|_| false).unwrap_err();
+
+        assert_eq!(err.to_string(), "root directory /gone does not exist");
+    }
+
+    #[test]
+    fn check_root_passes_an_existing_root() {
+        assert!(check_root(Path::new("/here"), &|root| root == Path::new("/here")).is_ok());
     }
 
     #[test]

@@ -53,6 +53,7 @@ def describe_root_at_construction():
         db = DirSQL(str(missing))
 
         with pytest.raises(
-            Exception, match=rf"^root directory {re.escape(str(missing))} does not exist$"
+            Exception,
+            match=rf"^root directory {re.escape(str(missing))} does not exist$",
         ):
             await db.ready()

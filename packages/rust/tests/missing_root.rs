@@ -39,4 +39,3 @@ fn a_missing_root_fails_the_build_with_no_tables() {
         format!("root directory {} does not exist", missing.display())
     );
 }
-
