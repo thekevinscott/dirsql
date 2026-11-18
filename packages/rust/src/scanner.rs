@@ -1469,9 +1469,11 @@ mod tests {
     #[test]
     fn resolve_aliases_maps_an_alias_itself_to_its_target() {
         let aliases = [(PathBuf::from("/r/link"), PathBuf::from("/r/real"))];
-        assert_eq!(
-            resolve_aliases(Path::new("/r/link"), &aliases).as_os_str(),
-            "/r/real"
+        let got = resolve_aliases(Path::new("/r/link"), &aliases);
+        assert_eq!(got, PathBuf::from("/r/real"));
+        assert!(
+            !got.to_string_lossy().ends_with(std::path::is_separator),
+            "got: {got:?}"
         );
     }
 
