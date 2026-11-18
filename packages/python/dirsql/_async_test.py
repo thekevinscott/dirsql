@@ -479,6 +479,12 @@ def describe_DirSQL_async():
             assert fake_db.stopped == 1
 
         @pytest.mark.asyncio
+        async def it_leaves_the_core_alone_at_interpreter_exit():
+            stream = async_mod._WatchStream(_ReadyOwner(_FakeWatcherDb(events=[])))
+
+            assert stream._dropped.atexit is False
+
+        @pytest.mark.asyncio
         async def it_keeps_the_core_attached_while_another_stream_lives():
             fake_db = _FakeWatcherDb(events=[["event-a"]])
             owner = _ReadyOwner(fake_db)
