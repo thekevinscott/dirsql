@@ -16,7 +16,7 @@ Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and
 
 ## Quick start
 
-Constructing a `DirSQL` returns immediately; scanning runs in the background and every method awaits it, so you can query right away (or `await db.ready` to surface scan errors up front). Each table is a `(ddl, glob, extract)` object: the DDL defines the SQLite schema, the glob selects files (relative to `root`), and `extract` returns the rows a matched file contributes -- always an array, return `[]` to skip a file. `dirsql` does not read file contents; if `extract` needs the file body it reads `path` itself.
+Constructing a `DirSQL` returns immediately; scanning runs in the background and every method awaits it, so you can query right away (or `await db.ready` to surface scan errors up front). Each table is a `{ name, ddl, glob, onFile }` object: the name is the table's SQL name, the DDL defines the SQLite schema and must create a table by that name, the glob selects files (relative to `root`), and `onFile` returns the rows a matched file contributes -- always an array, return `[]` to skip a file. `dirsql` does not read file contents; if `onFile` needs the file body it reads `path` itself.
 
 ```typescript
 import { readFileSync } from "node:fs";
@@ -24,9 +24,10 @@ import { DirSQL, type TableDef } from "dirsql";
 
 const tables: TableDef[] = [
   {
+    name: "posts",
     ddl: "CREATE TABLE posts (title TEXT, author TEXT)",
     glob: "posts/*.json",
-    extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+    onFile: (path) => [JSON.parse(readFileSync(path, "utf8"))],
   },
 ];
 
@@ -44,14 +45,16 @@ import { DirSQL, type TableDef } from "dirsql";
 
 const tables: TableDef[] = [
   {
+    name: "posts",
     ddl: "CREATE TABLE posts (title TEXT, author_id TEXT)",
     glob: "posts/*.json",
-    extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+    onFile: (path) => [JSON.parse(readFileSync(path, "utf8"))],
   },
   {
+    name: "authors",
     ddl: "CREATE TABLE authors (id TEXT, name TEXT)",
     glob: "authors/*.json",
-    extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+    onFile: (path) => [JSON.parse(readFileSync(path, "utf8"))],
   },
 ];
 

@@ -14,7 +14,7 @@ cargo add dirsql
 
 ## Quick start
 
-`DirSQL::new` scans the directory synchronously and returns a ready instance. Each table is a `(ddl, glob, extract)` triple: the DDL defines the SQLite schema, the glob selects files (relative to the root), and `extract` turns a matched file into rows (`Vec<HashMap<String, Value>>`). `dirsql` does not read file contents -- the callback reads `path` itself; return an empty `Vec` to skip a file.
+`DirSQL::new` scans the directory synchronously and returns a ready instance. Each table is a `(name, ddl, glob, on_file)` tuple: the name is the table's SQL name, the DDL defines the SQLite schema and must create a table by that name, the glob selects files (relative to the root), and `on_file` turns a matched file into rows (`Vec<HashMap<String, Value>>`). `dirsql` does not read file contents -- the callback reads `path` itself; return an empty `Vec` to skip a file.
 
 ```rust
 use dirsql::{DirSQL, Table, Value};
@@ -44,6 +44,7 @@ fn row_from_json(raw: &str) -> HashMap<String, Value> {
 let db = DirSQL::new(
     "./my-blog",
     vec![Table::new(
+        "posts",
         "CREATE TABLE posts (title TEXT, author TEXT)",
         "posts/*.json",
         |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
@@ -60,11 +61,13 @@ let db = DirSQL::new(
     "./my-blog",
     vec![
         Table::new(
+            "posts",
             "CREATE TABLE posts (title TEXT, author_id TEXT)",
             "posts/*.json",
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
         Table::new(
+            "authors",
             "CREATE TABLE authors (id TEXT, name TEXT)",
             "authors/*.json",
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],

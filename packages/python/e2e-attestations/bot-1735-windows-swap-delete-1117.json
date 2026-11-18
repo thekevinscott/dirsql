@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/written_during_build_test.py tests/e2e/parent_then_child_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1794884292,
+  "exit_code": 0,
+  "commit": "c0f99e2d747850558d3168c3dddc5daab4ba792d",
+  "branch": "bot/1735-windows-swap-delete-1117"
+}
