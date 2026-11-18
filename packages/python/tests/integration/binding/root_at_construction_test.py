@@ -3,6 +3,7 @@ is called, so a ``chdir`` before the first await does not move it.
 """
 
 import os
+import re
 
 import pytest
 
@@ -45,3 +46,13 @@ def describe_root_at_construction():
         rows = await db.query("SELECT path FROM './**'")
 
         assert rows == [{"path": "a.json"}]
+
+    @pytest.mark.asyncio
+    async def it_raises_when_the_root_does_not_exist(tmp_path):
+        missing = tmp_path / "absent"
+        db = DirSQL(str(missing))
+
+        with pytest.raises(
+            Exception, match=rf"^root directory {re.escape(str(missing))} does not exist$"
+        ):
+            await db.ready()
