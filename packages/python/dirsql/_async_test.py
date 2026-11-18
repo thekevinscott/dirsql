@@ -24,6 +24,7 @@ class _FakeRustDirSQL:
         persist_path=None,
         extensions=None,
         suppress_config_extensions=False,
+        watch=True,
     ):
         self.root = root
         self.tables = tables
@@ -34,6 +35,7 @@ class _FakeRustDirSQL:
         self.persist_path = persist_path
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
+        self.watch = watch
         self.query_calls = []
         self.query_params = []
         self.scan_failures_value = []
@@ -484,6 +486,31 @@ def describe_DirSQL_async():
             assert ".dirsql/cache.db" not in async_mod.DirSQL.__doc__
 
     def describe_watch():
+        @pytest.mark.asyncio
+        async def it_forwards_watch_to_the_core():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                on = async_mod.DirSQL("/tmp/root")
+                off = async_mod.DirSQL("/tmp/root", watch=False)
+                await on.ready()
+                await off.ready()
+
+                assert on._db.watch is True
+                assert off._db.watch is False
+
+        @pytest.mark.asyncio
+        async def it_raises_without_starting_the_watcher_when_built_unwatched():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root", watch=False)
+
+                with pytest.raises(RuntimeError, match="watching is off"):
+                    db.watch()
+                await db.ready()
+                with pytest.raises(RuntimeError, match="watching is off"):
+                    db.watch()
+
+                assert db._db.watchers_started == 0
+                assert len(db._watch_streams) == 0
+
         @pytest.mark.asyncio
         async def it_returns_a_watch_stream_bound_to_the_owner():
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):

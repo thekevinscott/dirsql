@@ -43,6 +43,7 @@ class _FakeRustDirSQL:
         persist_path=None,
         extensions=None,
         suppress_config_extensions=False,
+        watch=True,
     ):
         self.root = root
         self.tables = tables
@@ -53,6 +54,7 @@ class _FakeRustDirSQL:
         self.persist_path = persist_path
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
+        self.watch = watch
         self.queries: list[str] = []
         self.query_params: list = []
         self.query_results: list = (
@@ -292,6 +294,16 @@ def describe_binding_layer():
                 asyncio.gather(take_two(first), take_two(second)), timeout=2.0
             )
             assert got == [["a", "b"], ["a", "b"]]
+
+        @pytest.mark.asyncio
+        async def it_builds_unwatched_and_refuses_to_watch(mock_core):
+            db = mock_core("/root", tables=["t"], watch=False)
+            await db.ready()
+
+            with pytest.raises(RuntimeError, match="watching is off"):
+                db.watch()
+            assert _FakeRustDirSQL.instances[0].watch is False
+            assert _FakeRustDirSQL.instances[0].started is False
 
     def describe_config_kwarg():
         # Feature: DirSQL(config=path) forwards to the Rust core. See

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";

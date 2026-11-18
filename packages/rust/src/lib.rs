@@ -489,6 +489,8 @@ struct DirSqlInner {
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Arc<Watcher>>>,
+    /// Built from one walk: no watcher ever starts.
+    no_watch: bool,
     /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
     /// both would drain the same underlying watcher.
     poll_used: AtomicBool,
@@ -967,11 +969,19 @@ impl DirSQL {
     /// could not. Idempotent.
     #[doc(hidden)]
     pub fn attach_watcher(&self) -> Result<()> {
+        self.require_watching()?;
         self.require_named_tables()?;
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
             let watcher = Watcher::scoped(self.watch_scopes()).map_err(DirSqlError::watch)?;
             *guard = Some(Arc::new(watcher));
+        }
+        Ok(())
+    }
+
+    fn require_watching(&self) -> Result<()> {
+        if self.inner.no_watch {
+            return Err(DirSqlError::watch_msg(WATCHING_OFF));
         }
         Ok(())
     }
@@ -1016,6 +1026,7 @@ impl DirSQL {
     /// waiting: changes applied from here on reach the next `poll_events`.
     #[doc(hidden)]
     pub fn attach_poll(&self) -> Result<()> {
+        self.require_watching()?;
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "watch() is active; cannot mix with poll_events()",
@@ -1244,6 +1255,7 @@ impl DirSQL {
     ///
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
+        self.require_watching()?;
         self.require_named_tables()?;
         if self.inner.poll_used.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
@@ -1844,6 +1856,7 @@ impl DirSQL {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            no_watch: false,
         };
         let prepared = Self::prepare_resolved(resolved)?;
         Self::finish_build_with_fs(prepared, fs, Progress::indexing())
@@ -1900,6 +1913,7 @@ impl DirSQL {
             hint_legacy_files_table,
             path_table_parser,
             no_ignore,
+            no_watch,
         } = resolved;
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
         let groups = groups
@@ -1935,7 +1949,7 @@ impl DirSQL {
         };
         // A watcher that cannot start yet (an anchor not created) does not
         // fail the build; watching starts it.
-        let watcher = if table_names.is_empty() {
+        let watcher = if table_names.is_empty() || no_watch {
             None
         } else {
             watcher_at_build(Watcher::scoped(build_watch_scopes(&groups)))?
@@ -2045,6 +2059,7 @@ impl DirSQL {
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             watcher,
+            no_watch,
         })
     }
 
@@ -2071,7 +2086,7 @@ impl DirSQL {
     /// Apply the watcher's events on a thread of the instance's own, from now
     /// until it is dropped.
     fn start_applier(&self) {
-        if self.inner.groups.is_empty() {
+        if self.inner.groups.is_empty() || self.inner.no_watch {
             return;
         }
         let inner = Arc::downgrade(&self.inner);
@@ -2105,6 +2120,7 @@ impl DirSQL {
             no_ignore,
             links,
             watcher,
+            no_watch,
         } = prepared;
 
         let (mut db, fresh_ddl, ddl_warnings, persist_ready, needs_sweep) = match persist {
@@ -2381,6 +2397,7 @@ impl DirSQL {
                 fault: OnceLock::new(),
                 scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
+                no_watch,
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
                 stream: Mutex::new(None),
@@ -2462,6 +2479,7 @@ pub struct DirSQLBuilder {
     poll_interval: Option<Duration>,
     path_table_parser: Option<String>,
     no_ignore: bool,
+    no_watch: bool,
 }
 
 impl DirSQLBuilder {
@@ -2590,6 +2608,14 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Build from one walk and never start a watcher: for a tree nothing
+    /// writes to while the instance lives. Watching such an instance fails.
+    #[doc(hidden)]
+    pub fn no_watch(mut self, no_watch: bool) -> Self {
+        self.no_watch = no_watch;
+        self
+    }
+
     fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
@@ -2603,6 +2629,7 @@ impl DirSQLBuilder {
             poll_interval,
             path_table_parser,
             no_ignore,
+            no_watch,
         } = self;
 
         // The index root is an operational fact owned by the runner: the
@@ -2692,6 +2719,7 @@ impl DirSQLBuilder {
             hint_legacy_files_table,
             path_table_parser,
             no_ignore,
+            no_watch,
         })
     }
 
@@ -2717,6 +2745,8 @@ impl DirSQLBuilder {
         Ok(AsyncDirSQL::spawn_build(resolved))
     }
 }
+
+const WATCHING_OFF: &str = "watching is off: this instance was built with watch disabled";
 
 /// Default poll interval for the channel-based watch loop.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -2753,6 +2783,8 @@ pub struct ResolvedBuild {
     /// When set (the CLI's `--no-ignore`), path-table scans do not respect
     /// `.gitignore` files.
     pub no_ignore: bool,
+    /// When set, the build walks once and no watcher ever starts.
+    pub no_watch: bool,
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
@@ -2828,6 +2860,7 @@ pub struct PreparedBuild {
     links: Vec<PathBuf>,
     /// Started before the walk, so it holds every change the walk may miss.
     watcher: Option<Watcher>,
+    no_watch: bool,
 }
 
 #[doc(hidden)]
@@ -4156,6 +4189,7 @@ mod internal_tests {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            no_watch: false,
         }
     }
 
@@ -4572,6 +4606,7 @@ mod internal_tests {
             no_ignore: false,
             links: Vec::new(),
             watcher: None,
+            no_watch: false,
         };
         assert!(DirSQL::finish_build(prepared).is_err());
     }
@@ -5999,6 +6034,55 @@ mod internal_tests {
         );
     }
 
+    fn unwatched_db() -> (TempDir, DirSQL) {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "").unwrap();
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .table(Table::new("t", "CREATE TABLE t (x TEXT)", "*.txt", |_| {
+                vec![HashMap::from([("x".to_string(), Value::Text("a".into()))])]
+            }))
+            .no_watch(true)
+            .build()
+            .unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn builder_no_watch_flows_into_the_resolved_build() {
+        let resolved = DirSQL::builder()
+            .root("/idx")
+            .no_watch(true)
+            .resolve()
+            .unwrap();
+        assert!(resolved.no_watch);
+        assert!(!DirSQL::builder().root("/idx").resolve().unwrap().no_watch);
+    }
+
+    #[test]
+    fn no_watch_reads_the_build_walk_without_a_watcher() {
+        let (_dir, db) = unwatched_db();
+        assert!(db.inner.watcher.lock().unwrap().is_none());
+        assert_eq!(Arc::weak_count(&db.inner), 0, "no applier thread");
+        assert_eq!(db.query("SELECT x FROM t").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn no_watch_refuses_every_way_to_watch() {
+        let (_dir, db) = unwatched_db();
+        for err in [
+            db.watch().map(|_| ()).unwrap_err(),
+            db.poll_events(Duration::ZERO).map(|_| ()).unwrap_err(),
+            db.attach_poll().unwrap_err(),
+            db.attach_watcher().unwrap_err(),
+        ] {
+            assert_eq!(err.to_string(), format!("watcher error: {WATCHING_OFF}"));
+        }
+        assert!(db.inner.watcher.lock().unwrap().is_none());
+        assert!(!db.inner.poll_used.load(Ordering::SeqCst));
+        assert!(!db.inner.watch_thread_started.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn watch_twice_reports_already_started() {
         let (_dir, db) = simple_db();
@@ -7181,6 +7265,7 @@ mod internal_tests {
             no_ignore: false,
             links: Vec::new(),
             watcher: None,
+            no_watch: false,
         }
     }
 

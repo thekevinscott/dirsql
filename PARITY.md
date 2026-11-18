@@ -92,7 +92,7 @@ core, so all three SDKs change at once. **No drift.**
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
-| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |
+| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None, watch=True)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore?, watch? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Query carrying the projection order | `db.query(sql)`: each row dict is keyed in projection order | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | `await db.queryOrdered(sql) -> QueryResult` (`columns` + `rows`) |
 | Query with bind parameters (sequence -> `?`, mapping -> `:name`) | `await db.query(sql, params)` | `db.query_with(sql, &Params)` (also `query_ordered_with`, `query_each_with`, `AsyncDirSQL::query_with`) | `await db.query(sql, params)` (array -> `?`, plain object -> `:name`; also `queryOrdered(sql, params)`) |
@@ -309,6 +309,13 @@ with no binding work. The *opt-out* is at parity too: the CLI has
 `DirSQL(..., no_ignore=True)` (#745, plumbed through the PyO3 binding to the
 core builder), and **TypeScript** has the `noIgnore` constructor option
 (#746).
+
+**Opting out of the watcher — Python and TypeScript only.** Python
+`DirSQL(..., watch=False)` and TypeScript `new DirSQL({ watch: false })`
+build from one walk and never start a watcher; watching such an instance
+raises `watching is off`. Both plumb into the core builder's
+`.no_watch(bool)`, which is `#[doc(hidden)]` binding plumbing, so **Rust** has
+no public equivalent, and the **CLI** has no flag.
 
 **Path-table parity proven per binding (#629, epic path-as-table close) —
 restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the
