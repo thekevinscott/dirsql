@@ -113,3 +113,35 @@ fn rotating_a_unique_value_through_three_keyed_rows_updates_each_in_place() {
     );
     assert_eq!(rows(&db), [named(1, "z"), named(2, "x"), named(3, "w")]);
 }
+
+// Windows reports the replaced file as removed before it reports the rename,
+// and only now and then applies the two apart.
+#[test]
+fn replacing_a_file_again_and_again_only_ever_updates_its_rows() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir(root.path().join("d")).unwrap();
+    let bodies = [
+        "{\"id\":1,\"name\":\"x\"}\n{\"id\":2,\"name\":\"y\"}\n",
+        "{\"id\":1,\"name\":\"y\"}\n{\"id\":2,\"name\":\"x\"}\n",
+    ];
+    write_rows(root.path(), bodies[0]);
+    let cfg = root.path().join(".dirsql.toml");
+    fs::write(&cfg, CONFIG).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(&cfg)
+        .build()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    db.poll_events(Duration::ZERO).unwrap();
+
+    for round in 1..=300 {
+        write_rows(root.path(), bodies[round % 2]);
+        let events = poll_until(&db, |seen| seen.len() >= 2);
+        assert_eq!(events.len(), 2, "round {round}: {events:?}");
+        assert!(
+            events.iter().all(|e| matches!(e, RowEvent::Update { .. })),
+            "round {round}: {events:?}"
+        );
+    }
+}

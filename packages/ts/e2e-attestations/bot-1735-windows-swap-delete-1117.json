@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fresh-declared-repros fanout query-contract",
+  "ran_at": 1794884437,
+  "exit_code": 0,
+  "commit": "c10045f170f43104bc909935d5cdb362dfc3db7f",
+  "branch": "bot/1735-windows-swap-delete-1117"
+}
