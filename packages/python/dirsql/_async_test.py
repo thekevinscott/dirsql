@@ -104,10 +104,8 @@ def describe_DirSQL_async():
                 assert db._db.root == os.path.abspath("/tmp/root")
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
-                # Programmatic entries resolve against the cwd and keep
-                # relative paths relative (unlike config-file entries).
                 resolver.assert_called_once_with(
-                    "ext/a.so", base=os.getcwd(), resolve_relative=False
+                    "ext/a.so", base=os.getcwd(), resolve_relative=True
                 )
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
@@ -445,6 +443,43 @@ def describe_DirSQL_async():
                 await db.ready()
 
             assert db._db.root is None
+
+        @pytest.mark.asyncio
+        async def it_resolves_extensions_against_the_cwd_at_construction():
+            built = os.path.abspath("/built")
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_extension_path", return_value="R"
+                ) as resolver,
+            ):
+                with patch.object(async_mod.os, "getcwd", return_value=built):
+                    db = async_mod.DirSQL("/data", extensions=[{"path": "ext/a.so"}])
+                await db.ready()
+
+            resolver.assert_called_once_with(
+                "ext/a.so", base=built, resolve_relative=True
+            )
+
+        @pytest.mark.asyncio
+        async def it_reads_an_unreadable_construction_cwd_again_for_extensions():
+            later = os.path.abspath("/later")
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_extension_path", return_value="R"
+                ) as resolver,
+            ):
+                with patch.object(
+                    async_mod.os, "getcwd", side_effect=FileNotFoundError
+                ):
+                    db = async_mod.DirSQL("/data", extensions=[{"path": "ext/a.so"}])
+                with patch.object(async_mod.os, "getcwd", return_value=later):
+                    await db.ready()
+
+            resolver.assert_called_once_with(
+                "ext/a.so", base=later, resolve_relative=True
+            )
 
     def describe_docstring():
         def it_names_no_cache_path_inside_the_root():
