@@ -142,16 +142,6 @@ enum Hook {
 /// and never sits beneath any directory a watcher reports deleted.
 const BATCH_OWNER: &str = "";
 
-/// One file whose on-file hook failed, carried so a scan can report every
-/// failure rather than only whichever came first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnFileFailure {
-    /// Path relative to the scan root.
-    pub path: String,
-    /// The hook's error, as rendered by its `Display`.
-    pub message: String,
-}
-
 /// An error the OS reported, which each binding raises as its own native OS
 /// error. Carried inside [`DirSqlError::Io`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -489,8 +479,6 @@ struct DirSqlInner {
     /// batch until one lands them.
     held: Mutex<Held>,
     fault: OnceLock<WatchFault>,
-    /// Files the initial scan could not index. Empty for a clean scan.
-    scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Arc<Watcher>>>,
     /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
     /// both would drain the same underlying watcher.
@@ -2066,12 +2054,6 @@ impl DirSQL {
         })
     }
 
-    /// Always empty: a hook that fails, or returns a row the table rejects,
-    /// fails the build with [`DirSqlError::OnFile`] instead.
-    pub fn scan_failures(&self) -> &[OnFileFailure] {
-        &self.inner.scan_failures
-    }
-
     /// Split-phase construction — part 2. Consumes the intermediate state from
     /// [`prepare_resolved`](Self::prepare_resolved): configures the prepared
     /// database, completes any deferred DDL, invokes each file's `on_file`
@@ -2397,7 +2379,6 @@ impl DirSQL {
                 batch_files: Mutex::new(batch_files),
                 held: Mutex::new(Held::default()),
                 fault: OnceLock::new(),
-                scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
@@ -7328,7 +7309,6 @@ mod internal_tests {
             db.query("SELECT name FROM items ORDER BY rowid").unwrap(),
             vec![name_row("b.txt"), name_row("a.txt")]
         );
-        assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
     }
 
     fn streaming_per_table(
