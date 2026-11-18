@@ -31,7 +31,7 @@ Every adoptable gate runs inside the per-domain CI workflows, per package; `test
 | unit-lint | ✅ | ✅ | ✅ |
 | integration-lint | ✅ | ✅ | ✅ |
 | unit-coverage | ✅ | ✅ | ❌ bespoke in `dirsql-rust-ci.yml` -- permanent, see below |
-| mutation | ✅ | ✅ | ✅ |
+| mutation | ❌ off on PRs | ❌ off on PRs | ❌ off on PRs |
 | e2e-verify | ✅ | ✅ | N/A by design, see below |
 | packaging | ✅ | ✅ | ✅ (workspace-member support, upstream #360/#362) |
 
