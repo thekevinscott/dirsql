@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/parent_then_child_server_test.py tests/e2e/watch_speed_test.py tests/e2e/written_during_build_test.py -x -q",
+  "ran_at": 1794881667,
+  "exit_code": 0,
+  "commit": "4b6c1c7d3f78fc1929a541cf2cea3473114cedbf",
+  "branch": "bot/1719-dropped-stream-1116"
+}
