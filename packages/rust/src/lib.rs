@@ -81,7 +81,7 @@ use crate::persist::{
     resolve_persist_path, upsert_file, write_meta,
 };
 use crate::progress::Progress;
-use crate::scanner::{Found, scan_directory_reporting};
+use crate::scanner::{Found, UnlistableFolder, scan_directory_reporting};
 use crate::watcher::{FileEvent, WatchFault, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -683,7 +683,7 @@ type ScanFn<'a> = &'a dyn Fn(
     &mut dyn FnMut(u64),
     &mut dyn FnMut(&Path, &str),
     &(dyn Fn(&Path) + Sync),
-) -> Vec<Found>;
+) -> std::result::Result<Vec<Found>, UnlistableFolder>;
 
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
@@ -1980,7 +1980,7 @@ impl DirSQL {
                 // The walk reports a running count rather than a fraction: it does
                 // not know how many files there are until it has found them all.
                 let mut progress = Progress::scanning();
-                let (scanned, seen) = scan_groups(
+                let scanned = scan_groups(
                     &groups,
                     scan,
                     &mut progress,
@@ -1997,6 +1997,7 @@ impl DirSQL {
                     },
                 );
                 drop(feeds);
+                let (scanned, seen) = scanned.map_err(std::io::Error::from)?;
                 progress.finish(seen);
                 for warning in empty_table_warnings(&tables, &anchors, &scanned) {
                     eprintln!("{warning}");
@@ -2915,7 +2916,7 @@ fn scan_groups(
     progress: &mut Progress,
     on_match: &mut dyn FnMut(&Path, &str),
     on_link: &(dyn Fn(&Path) + Sync),
-) -> (Vec<Found>, u64) {
+) -> std::result::Result<(Vec<Found>, u64), UnlistableFolder> {
     let mut seen = 0;
     let mut scanned = Vec::new();
     for group in groups {
@@ -2929,9 +2930,9 @@ fn scan_groups(
             },
             on_match,
             on_link,
-        ));
+        )?);
     }
-    (scanned, seen)
+    Ok((scanned, seen))
 }
 
 fn compile_groups(
@@ -4134,12 +4135,12 @@ mod internal_tests {
             _matcher: &TableMatcher,
             on_file: &mut dyn FnMut(u64),
             _on_match: &mut dyn FnMut(&Path, &str),
-        ) -> Vec<Found> {
+        ) -> std::result::Result<Vec<Found>, UnlistableFolder> {
             self.calls.set(self.calls.get() + 1);
             for (index, _) in self.found.iter().enumerate() {
                 on_file(index as u64 + 1);
             }
-            self.found.clone()
+            Ok(self.found.clone())
         }
     }
 
@@ -4185,7 +4186,7 @@ mod internal_tests {
                 wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
                 "database creation must finish before the scan completes"
             );
-            Vec::new()
+            Ok(Vec::new())
         };
         let new_db = move || {
             wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -4220,7 +4221,7 @@ mod internal_tests {
                 wait_for_ddl.recv_timeout(Duration::from_secs(5)).is_ok(),
                 "table DDL must finish before the scan completes"
             );
-            Vec::new()
+            Ok(Vec::new())
         };
         let ddl = move |db: &Db, tables: &[Table]| {
             wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -4254,7 +4255,7 @@ mod internal_tests {
         let called = Arc::clone(&ddl_called);
         let prepared = DirSQL::prepare_resolved_with_setup(
             resolved,
-            &|_, _, _, _, _| Vec::new(),
+            &|_, _, _, _, _| Ok(Vec::new()),
             Db::new,
             move |_, _| {
                 called.store(true, Ordering::SeqCst);
@@ -4327,7 +4328,7 @@ mod internal_tests {
         let called = Arc::clone(&ddl_called);
         let prepared = DirSQL::prepare_resolved_with_setup(
             resolved,
-            &|_, _, _, _, _| Vec::new(),
+            &|_, _, _, _, _| Ok(Vec::new()),
             Db::new,
             move |_, _| {
                 called.store(true, Ordering::SeqCst);
@@ -4464,11 +4465,11 @@ mod internal_tests {
                     .recv_timeout(std::time::Duration::from_secs(5))
                     .is_ok(),
             );
-            vec![Found {
+            Ok(vec![Found {
                 path: found.clone(),
                 rel_path: "a.txt".into(),
                 table_name: "items".into(),
-            }]
+            }])
         })
         .unwrap();
         assert!(hook_saw_it_mid_walk.get());
@@ -4484,7 +4485,7 @@ mod internal_tests {
             resolved.no_ignore = no_ignore;
             DirSQL::prepare_resolved_with(resolved, &|_, matcher, _, _, _| {
                 honored.set(Some(matcher.respects_gitignore()));
-                Vec::new()
+                Ok(Vec::new())
             })
             .unwrap();
             assert_eq!(honored.get(), Some(!no_ignore));
@@ -5019,7 +5020,7 @@ mod internal_tests {
                     _: &mut dyn FnMut(&Path, &str),
                     _: &(dyn Fn(&Path) + Sync)| {
             report(3);
-            vec![found_at(anchor, &anchor.join("f.txt"), "t")]
+            Ok(vec![found_at(anchor, &anchor.join("f.txt"), "t")])
         };
 
         let (scanned, seen) = scan_groups(
@@ -5028,10 +5029,69 @@ mod internal_tests {
             &mut Progress::scanning(),
             &mut |_, _| {},
             &|_| {},
-        );
+        )
+        .unwrap();
 
         assert_eq!(seen, 6);
         assert_eq!(scanned.len(), 2);
+    }
+
+    #[test]
+    fn scan_groups_fails_on_a_folder_a_scan_could_not_list() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("b", "*.txt", "/two"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let scan = |anchor: &Path,
+                    _: &TableMatcher,
+                    _: &mut dyn FnMut(u64),
+                    _: &mut dyn FnMut(&Path, &str),
+                    _: &(dyn Fn(&Path) + Sync)| {
+            if anchor.ends_with("two") {
+                return Err(unlistable(anchor));
+            }
+            Ok(vec![found_at(anchor, &anchor.join("f.txt"), "t")])
+        };
+
+        let failed = scan_groups(
+            &groups,
+            &scan,
+            &mut Progress::scanning(),
+            &mut |_, _| {},
+            &|_| {},
+        )
+        .unwrap_err();
+
+        assert!(failed.path.ends_with("two"), "{failed}");
+    }
+
+    fn unlistable(path: &Path) -> UnlistableFolder {
+        UnlistableFolder {
+            path: path.to_path_buf(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        }
+    }
+
+    #[test]
+    fn a_build_fails_naming_a_folder_its_scan_could_not_list() {
+        let dir = TempDir::new().unwrap();
+        let locked = dir.path().join("locked");
+        let failed = DirSQL::prepare_resolved_with(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &|_, _, _, _, _| Err(unlistable(&locked)),
+        )
+        .err()
+        .unwrap();
+
+        let DirSqlError::Io(io) = &failed else {
+            panic!("not an io error: {failed:?}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            failed.to_string().contains(&locked.display().to_string()),
+            "{failed}"
+        );
     }
 
     #[test]
@@ -9144,7 +9204,7 @@ mod internal_tests {
         let link = dir.path().join("link");
         let prepared = DirSQL::prepare_resolved_with(resolved, &|_, _, _, _, on_link| {
             on_link(&link);
-            Vec::new()
+            Ok(Vec::new())
         })
         .unwrap();
         assert_eq!(prepared.links, vec![link.clone()]);
