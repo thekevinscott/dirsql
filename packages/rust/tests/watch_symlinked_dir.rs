@@ -155,3 +155,45 @@ fn a_per_table_hook_is_not_handed_a_path_whose_target_left_the_tree() {
     assert!(paths_of(&events, is_error).is_empty(), "got: {events:?}");
     assert_eq!(paths_of(&events, is_delete).len(), 2, "got: {events:?}");
 }
+
+fn table_over(glob: &str) -> Table {
+    Table::new("t", "CREATE TABLE t (body TEXT)", glob, |path| {
+        let body = fs::read_to_string(path).unwrap_or_default();
+        vec![Row::from([(
+            "body".to_string(),
+            Value::Text(body.trim().to_string()),
+        )])]
+    })
+}
+
+#[test]
+fn an_edit_at_a_target_no_glob_reaches_updates_the_rows_reached_through_the_link() {
+    let root = linked_tree("one");
+    let db = watching(root.path(), table_over("link/*.txt"));
+
+    fs::write(root.path().join("real/x.txt"), "two").unwrap();
+
+    let events = poll_until(&db, |seen| !paths_of(seen, is_update).is_empty());
+    assert_eq!(
+        paths_of(&events, is_update),
+        ["link/x.txt"],
+        "got: {events:?}"
+    );
+}
+
+#[test]
+fn a_directory_made_later_under_a_target_no_glob_reaches_is_watched_through_the_link() {
+    let root = linked_tree("one");
+    let db = watching(root.path(), table_over("link/**/*.txt"));
+
+    fs::create_dir(root.path().join("real/sub")).unwrap();
+    db.poll_events(Duration::from_millis(500)).unwrap();
+    fs::write(root.path().join("real/sub/y.txt"), "two").unwrap();
+
+    let events = poll_until(&db, |seen| !paths_of(seen, is_insert).is_empty());
+    assert_eq!(
+        paths_of(&events, is_insert),
+        ["link/sub/y.txt"],
+        "got: {events:?}"
+    );
+}
