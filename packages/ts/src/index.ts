@@ -7,7 +7,6 @@ export type {
   QueryParams,
   QueryResult,
   RowEvent,
-  ScanFailure,
 } from "./dirsql.js";
 export { Table } from "./table.js";
 export type { TableDef } from "./table.js";
