@@ -45,6 +45,7 @@ jobs:
       config: packages/ts/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       rust_toolchain: true
+      gates: '["colocated-test", "one-function-per-file", "unit-lint", "integration-lint", "unit-coverage", "packaging", "workflow-lint", "e2e-verify", "changelog"]'
 
   rust-napi-binding:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0

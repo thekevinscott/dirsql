@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e -- tests/e2e/root-at-construction.test.ts",
+  "ran_at": 1794856480,
+  "exit_code": 0,
+  "commit": "15db34461ffda5800680f2fb622a938f8b270409",
+  "branch": "bot/1633-extension-paths-1116"
+}

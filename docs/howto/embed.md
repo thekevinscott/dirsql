@@ -178,8 +178,9 @@ iteration:
 ::: code-group
 
 ```python [Python]
-async for event in db.watch():
-    print(event.action, event.table, event.row)
+async with db.watch() as events:
+    async for event in events:
+        print(event.action, event.table, event.row)
 ```
 
 ```typescript [TypeScript]

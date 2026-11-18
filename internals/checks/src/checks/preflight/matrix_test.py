@@ -35,6 +35,13 @@ def describe_parse_gate_matrix():
         (python, _rust) = parse_gate_matrix(CONVENTIONS)
         assert python.gates == ROOT_GATES
 
+    def it_drops_gates_that_have_no_local_command():
+        text = CONVENTIONS.replace(
+            '["colocated-test", "packaging"]', '["colocated-test", "workflow-lint", "changelog"]'
+        )
+        (_python, rust) = parse_gate_matrix(text)
+        assert rust.gates == ["colocated-test"]
+
     def it_leaves_config_empty_when_a_caller_omits_it():
         (_python, rust) = parse_gate_matrix(CONVENTIONS)
         assert rust.config == ""

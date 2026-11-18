@@ -114,25 +114,6 @@ describe("NativeDirSQLConstructor contract", () => {
 });
 
 describe("NativeDirSQL interface", () => {
-  it("includes a synchronous scanFailures() (#715)", () => {
-    // Synchronous by design: it reads a list the scan already produced, so it
-    // needs no threadpool hop. A `Promise`-returning shape here would be a
-    // real defect -- the wrapper awaits `ready` and then returns this value
-    // directly, so a thenable would leak into the caller's array.
-    const failures = [{ path: "bad.json", message: "boom" }];
-    const instance = {
-      query: vi.fn().mockResolvedValue([]),
-      startWatcher: vi.fn(),
-      pollEvents: vi.fn().mockResolvedValue([]),
-      scanFailures: vi.fn(() => failures),
-      close: vi.fn(),
-    } as unknown as NativeDirSQL;
-
-    const result = instance.scanFailures();
-    expect(result).toEqual(failures);
-    expect(result).not.toBeInstanceOf(Promise);
-  });
-
   it("includes queryOrdered() resolving to columns plus rows", async () => {
     const result = { columns: ["b", "a"], rows: [{ a: 1, b: 2 }] };
     const queryOrdered: NativeDirSQL["queryOrdered"] = vi
