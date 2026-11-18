@@ -1,7 +1,7 @@
 {
-  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/watch_speed_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/many_dirs_speed_test.py tests/e2e/query_contract_test.py tests/e2e/glob_speed_symlink_test.py -x -q",
-  "ran_at": 1795025707,
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/watch_speed_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/many_dirs_speed_test.py tests/e2e/query_contract_test.py tests/e2e/glob_speed_symlink_test.py -q -rf",
+  "ran_at": 1795026976,
   "exit_code": 0,
-  "commit": "2350a4105d1e5bc49cecfd8ca493f98790b4a4ac",
+  "commit": "a6393b333bf60aad47c12614efd03272ffa40be2",
   "branch": "bot/1756-glob-scoped-watch-1118"
 }
