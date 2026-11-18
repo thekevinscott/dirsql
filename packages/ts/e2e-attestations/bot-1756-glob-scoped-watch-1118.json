@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec wireit-free 2>/dev/null; pnpm run build && pnpm exec vitest run --dir tests/e2e fresh-declared-repros fanout",
+  "ran_at": 1795019475,
+  "exit_code": 0,
+  "commit": "4146134e128e3ca6ac6a00c9eb3c0b821ae1957a",
+  "branch": "bot/1756-glob-scoped-watch-1118"
+}
