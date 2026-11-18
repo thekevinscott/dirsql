@@ -198,6 +198,25 @@ glob = "**/*.md"
                 await db.ready()
 
         @pytest.mark.asyncio
+        async def it_raises_on_a_table_whose_own_directory_is_missing(config_dir):
+            nested = os.path.join(config_dir, "cfg", ".dirsql.toml")
+            _write(
+                nested,
+                """\
+[[table]]
+name = "later"
+ddl = "CREATE TABLE later (x TEXT)"
+glob = "../absent/*.json"
+on-file = "true"
+""",
+            )
+            db = DirSQL(config=nested)
+            with pytest.raises(
+                Exception, match=r"table 'later': its directory .*absent does not exist"
+            ):
+                await db.ready()
+
+        @pytest.mark.asyncio
         async def it_raises_on_missing_ddl(config_dir):
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),

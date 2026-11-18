@@ -179,6 +179,24 @@ glob = "**/*.md"
     await expect(db.ready).rejects.toThrow(/FROM '\.\/\*\*'/);
   });
 
+  it("rejects a table whose own directory does not exist, naming both", async () => {
+    const nested = join(dir, "cfg", ".dirsql.toml");
+    await seedFile(
+      nested,
+      `
+[[table]]
+name = "later"
+ddl = "CREATE TABLE later (x TEXT)"
+glob = "../absent/*.json"
+on-file = "true"
+`,
+    );
+    const db = new DirSQL(nested);
+    await expect(db.ready).rejects.toThrow(
+      /table 'later': its directory .*absent does not exist/,
+    );
+  });
+
   it("rejects table entries missing ddl", async () => {
     await seedFile(
       configPath,
