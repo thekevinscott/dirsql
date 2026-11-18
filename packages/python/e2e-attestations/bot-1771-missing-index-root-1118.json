@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/extension_package_test.py tests/e2e/parent_then_child_test.py tests/e2e/on_file_query_test.py tests/e2e/parent_then_child_server_test.py tests/e2e/plugin_discovery_test.py tests/e2e/on_file_value_types_test.py tests/e2e/interpret_removed_test.py tests/e2e/orphan_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/declared_table_name_test.py tests/e2e/use_case_dossier_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/relative_root_chdir_test.py tests/e2e/root_at_construction_test.py tests/e2e/written_during_build_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_transcripts_test.py -x -q",
+  "ran_at": 1795026128,
+  "exit_code": 0,
+  "commit": "4c3d8a17a12240c7e4f93321c4696ddb67365cf4",
+  "branch": "bot/1771-missing-index-root-1118"
+}
