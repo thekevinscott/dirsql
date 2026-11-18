@@ -1,0 +1,7 @@
+{
+  "command": "uv run --no-sync python -m pytest tests/e2e/glob_speed_recursive_test.py -x -q -s",
+  "ran_at": 1794884655,
+  "exit_code": 0,
+  "commit": "3e93d9ccb3d0ae7aace3472fab5ab57f7ea477da",
+  "branch": "bot/1570-glob-speed-recursive-corpus-1117"
+}

@@ -16,7 +16,7 @@ Requires Python >= 3.12. Ships as a native extension (Rust via PyO3); prebuilt b
 
 ## Quick start
 
-`DirSQL` is async by default: the constructor returns immediately, scanning runs in a background thread, and you `await db.ready()` before querying. Each table is a `(ddl, glob, extract)` triple: the DDL defines the SQLite schema, the glob selects files (relative to the root), and `extract` turns a matched file into a list of row dicts. `dirsql` does not read file contents -- if `extract` needs the file body it reads `path` itself; return an empty list to skip a file.
+`DirSQL` is async by default: the constructor returns immediately, scanning runs in a background thread, and you `await db.ready()` before querying. Each table is a `name`, a `ddl`, a `glob` and an `on_file` callback: the name is the table's SQL name, the DDL defines the SQLite schema and must create a table by that name, the glob selects files (relative to the root), and `on_file` turns a matched file into a list of row dicts. `dirsql` does not read file contents -- if `on_file` needs the file body it reads `path` itself; return an empty list to skip a file.
 
 ```python
 import asyncio
@@ -28,9 +28,10 @@ async def main():
         "./my-blog",
         tables=[
             Table(
+                name="posts",
                 ddl="CREATE TABLE posts (title TEXT, author TEXT)",
                 glob="posts/*.json",
-                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )
@@ -49,14 +50,16 @@ db = DirSQL(
     "./my-blog",
     tables=[
         Table(
+            name="posts",
             ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
             glob="posts/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
+            name="authors",
             ddl="CREATE TABLE authors (id TEXT, name TEXT)",
             glob="authors/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )

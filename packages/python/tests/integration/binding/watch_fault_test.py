@@ -33,7 +33,13 @@ def describe_a_directory_the_watcher_cannot_watch():
         await db.ready()
         assert await db.query("SELECT name FROM items") == []
 
+        stream = db.watch()
         os.mkdir(os.path.join(tmp_dir, "locked"), 0o000)
+        # Changes are applied in order, so this file's event follows the fault.
+        open(os.path.join(tmp_dir, "after.md"), "w").close()
+        async for event in stream:
+            if event.action == "insert":
+                break
 
         for _ in range(2):
             with pytest.raises(RuntimeError, match="Permission denied"):
