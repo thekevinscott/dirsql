@@ -514,7 +514,7 @@ public-API binding, so no drift.
 - `RowEvent` is a frozen class with attribute access (`event.action`, `event.row`).
 - `AsyncDirSQL` is a pure-Python wrapper using `asyncio.to_thread`.
 - Watch low-level methods are prefixed with `_` (private convention).
-- Ships PEP 561 type information (`py.typed` + `dirsql/_dirsql.pyi`) so downstream consumers see types for `DirSQL`, `Table`, `RowEvent`, `ScanFailure`. Parity-restoring: Rust types come from Rust source, TypeScript types from generated `.d.ts`, Python from the bundled stub. The stub MUST be updated in lockstep with `packages/python/src/lib.rs`.
+- Ships PEP 561 type information (`py.typed` + `dirsql/_dirsql.pyi`) so downstream consumers see types for `DirSQL`, `Table`, `RowEvent`. Parity-restoring: Rust types come from Rust source, TypeScript types from generated `.d.ts`, Python from the bundled stub. The stub MUST be updated in lockstep with `packages/python/src/lib.rs`.
 
 ### Rust
 - Uses `snake_case` for all identifiers.
@@ -524,7 +524,7 @@ public-API binding, so no drift.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
-- **Parity restored (dirsql#715).** All three SDKs expose the files a scan could not index: Rust `DirSQL::scan_failures() -> &[OnFileFailure]`, Python `await db.scan_failures()` (a list of `ScanFailure` with `.path` / `.message`, importable as `from dirsql import ScanFailure`), TypeScript `await db.scanFailures()` (`ScanFailure[]` with `path` / `message`, exported from the package barrel). A programmatic per-file hook that fails, or a row the table rejects, now fails the build and the query instead (`DirSqlError::OnFile`, naming the table, the file and the original error), so the list is always empty. A config-declared `on-file` command runs once per table, so its failure is a build error, not a skip; the CLI prints it and exits `1`. `--allow-skipped` remains unbuilt and is tracked in #715.
+- A programmatic per-file hook that fails, or a row the table rejects, fails the build and the query in every SDK (`DirSqlError::OnFile`, naming the table, the file and the original error). A config-declared `on-file` command runs once per table, so its failure is a build error, not a skip; the CLI prints it and exits `1`. `--allow-skipped` remains unbuilt and is tracked in #715.
 
 ### TypeScript
 - Uses `camelCase` for method names.

@@ -35,12 +35,11 @@ on-file = "sh record.sh"
     fs::write(root.path().join("b.txt"), "b\n").unwrap();
     fs::write(root.path().join("c.txt"), "c\n").unwrap();
 
-    let db = DirSQL::builder()
+    let _db = DirSQL::builder()
         .root(root.path())
         .config(root.path().join(".dirsql.toml"))
         .build()
         .unwrap();
-    assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
 
     let log = fs::read_to_string(root.path().join("argv.log")).unwrap_or_default();
     let invocations: Vec<&str> = log.lines().collect();

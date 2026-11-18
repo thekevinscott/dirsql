@@ -109,7 +109,8 @@ class DirSQL:
     at startup. Any ``[[dirsql.extension]]`` entries in a ``config`` file are
     appended after the programmatic ones. A ``path`` (programmatic or
     config-file) may be a bare **package name**, resolved from the installed
-    package in the runtime env.
+    package in the runtime env. A relative programmatic ``path`` resolves
+    against the cwd when ``DirSQL()`` is called.
 
     Pass ``watch=False`` for a tree nothing writes to while the instance
     lives: the index is built from one walk, no watcher ever starts, and
@@ -130,11 +131,15 @@ class DirSQL:
         watch=True,
     ):
         # Read now: the core is built on a worker thread after the first
-        # await, and a chdir in between must not move the root. An unreadable
-        # cwd stays the core's error, raised from ready() like any other.
+        # await, and a chdir in between must not move the root or a relative
+        # extension path. An unreadable cwd stays the core's error, raised
+        # from ready() like any other.
         with contextlib.suppress(OSError):
             root = os.path.abspath(os.getcwd() if root is None else root)
         self._root = root
+        self._cwd = None
+        with contextlib.suppress(OSError):
+            self._cwd = os.getcwd()
         self._tables = tables
         self._ignore = ignore
         self._no_ignore = no_ignore
@@ -216,7 +221,8 @@ class DirSQL:
         """Resolve each programmatic extension's ``path`` to a loadable file.
 
         A bare package name is resolved to the loadable installed in the
-        runtime env; path-looking values pass through verbatim. Config-file
+        runtime env; a relative path-looking value is made absolute against
+        the cwd at construction. Config-file
         ``[[dirsql.extension]]`` entries are handled by ``_build_db``.
         """
         if not self._extensions:
@@ -224,7 +230,7 @@ class DirSQL:
         return [
             {
                 "path": resolve_extension_path(
-                    e["path"], base=os.getcwd(), resolve_relative=False
+                    e["path"], base=self._cwd or os.getcwd(), resolve_relative=True
                 ),
                 "entrypoint": e.get("entrypoint"),
             }
@@ -268,23 +274,6 @@ class DirSQL:
         waits for the block to exit.
         """
         return _IndexLock(self)
-
-    async def scan_failures(self):
-        """The files the initial scan could not index.
-
-        Each entry carries ``path`` (relative to the root) and ``message``
-        (the hook's own error). Empty after a clean scan, which is the signal
-        to check: a non-empty list means the index is *incomplete*, not wrong,
-        and those files are retried on the next scan.
-
-        Awaits :meth:`ready` first, so the scan has finished before the answer
-        is read -- otherwise a caller could see an empty list simply because
-        the scan had not reached the failing file yet.
-        """
-        await self.ready()
-        db = self._db
-        assert db is not None  # ready() returned, so _init_bg set _db
-        return db.scan_failures()
 
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent.

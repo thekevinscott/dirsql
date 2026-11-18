@@ -32,7 +32,6 @@ type FakeInner = {
   queryOrdered: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
-  scanFailures: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 };
 
@@ -50,7 +49,6 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
     queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
     startWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
-    scanFailures: vi.fn(() => []),
     close: vi.fn(),
     ...overrides,
   };
@@ -125,7 +123,7 @@ describe("DirSQL", () => {
       expect(resolveExtensionPath).toHaveBeenCalledWith(
         "sqlite-vec",
         process.cwd(),
-        false,
+        true,
       );
       expect(openAsync).toHaveBeenCalledWith(
         resolve("/data"),
@@ -141,6 +139,41 @@ describe("DirSQL", () => {
         false,
         null,
         null,
+      );
+    });
+
+    it("resolves extension paths against the cwd at construction", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue("/built");
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockRestore();
+      await db.ready;
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/built",
+        true,
+      );
+    });
+
+    it("reads an unreadable construction cwd again when resolving extensions", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockImplementationOnce(() => {
+        throw new Error("ENOENT: uv_cwd");
+      });
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockReturnValue("/later");
+      await db.ready;
+      cwd.mockRestore();
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/later",
+        true,
       );
     });
 
@@ -372,17 +405,6 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/d" });
       await db.queryOrdered("SELECT :a", { a: 1 });
       expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT :a", { a: 1 });
-    });
-
-    it("scanFailures awaits ready then forwards to the inner instance", async () => {
-      const failures = [{ path: "bad.json", message: "boom" }];
-      const withFailures = makeInner({ scanFailures: vi.fn(() => failures) });
-      installFakeCore(withFailures);
-      const db = new DirSQL({ root: "/d" });
-      // Awaiting ready first is the point: reading before the scan finishes
-      // would report an empty list for a scan that had not got there yet.
-      expect(await db.scanFailures()).toEqual(failures);
-      expect(withFailures.scanFailures).toHaveBeenCalledOnce();
     });
 
     it("startWatcher forwards to the inner instance once", async () => {

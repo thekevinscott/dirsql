@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_failure_test.py tests/e2e/on_file_query_test.py tests/e2e/on_file_value_types_test.py tests/e2e/root_at_construction_test.py tests/e2e/query_contract_test.py tests/e2e/written_during_build_test.py tests/e2e/watch_fault_test.py tests/e2e/declared_table_name_test.py -x -q",
+  "ran_at": 1794884001,
+  "exit_code": 0,
+  "commit": "6025cc6871bb8c00df0dbe4edc16f920fcf074ff",
+  "branch": "bot/1641-remove-scan-failures-1117"
+}

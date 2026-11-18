@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1794884025,
+  "exit_code": 0,
+  "commit": "983db57648d4805b5a03dbbbcbad8f9eb99e7302",
+  "branch": "bot/1641-remove-scan-failures-1117"
+}

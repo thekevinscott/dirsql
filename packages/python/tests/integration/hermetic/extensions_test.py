@@ -129,7 +129,7 @@ def describe_extensions_kwarg():
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
-            {"path": "./rel/libvec.so", "entrypoint": None}
+            {"path": os.path.join("/cwd", "./rel/libvec.so"), "entrypoint": None}
         ]
 
     @pytest.mark.asyncio
