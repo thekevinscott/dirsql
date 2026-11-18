@@ -1340,17 +1340,37 @@ mod tests {
     }
 
     #[test]
-    fn scan_dirs_lists_the_start_and_every_directory_the_scan_enters() {
+    fn scan_dirs_lists_only_the_directories_a_table_glob_can_reach() {
+        let root = tempfile::tempdir().unwrap();
+        for n in 0..50 {
+            fs::create_dir_all(root.path().join("src").join(n.to_string()).join("deep")).unwrap();
+        }
+        fs::create_dir_all(root.path().join("docs").join("guide")).unwrap();
+        fs::create_dir_all(root.path().join("docs").join("node_modules").join("pkg")).unwrap();
+        fs::create_dir_all(root.path().join("docs").join(".cache")).unwrap();
+        fs::create_dir_all(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[("docs/**/*.md", "t")], &["**/node_modules/**"]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
+        dirs.sort();
+        let docs = root.path().join("docs");
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), docs.clone(), docs.join("guide")]
+        );
+    }
+
+    #[test]
+    fn scan_dirs_enters_a_dot_named_directory_a_glob_spells() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join("b")).unwrap();
-        fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
-        fs::create_dir_all(root.path().join("a").join(".dirsql")).unwrap();
-        fs::write(root.path().join("a").join("f.md"), "").unwrap();
-        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &["**/node_modules/**"]).unwrap();
-        let a = root.path().join("a");
-        let mut dirs = scan_dirs(root.path(), &a, &ignore);
+        fs::create_dir_all(root.path().join(".dirsql")).unwrap();
+        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &[]).unwrap();
+        let mut dirs = scan_dirs(root.path(), root.path(), &ignore);
         dirs.sort();
-        assert_eq!(dirs, vec![a.clone(), a.join(".dirsql"), a.join("b")]);
+        assert_eq!(
+            dirs,
+            vec![root.path().to_path_buf(), root.path().join(".dirsql")]
+        );
     }
 
     #[test]
@@ -1536,6 +1556,15 @@ mod tests {
         assert!(reaches_dir(Path::new(""), &ignore));
         assert!(reaches_dir(Path::new("src/deep"), &ignore));
         assert!(reaches_dir(Path::new("a/.dirsql"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_enters_only_directories_a_table_glob_can_reach() {
+        let matcher = TableMatcher::new(&[("docs/**/*.md", "t")], &[]).unwrap();
+        assert!(reaches_dir(Path::new(""), &matcher));
+        assert!(reaches_dir(Path::new("docs/guide"), &matcher));
+        assert!(!reaches_dir(Path::new("src"), &matcher));
+        assert!(!reaches_dir(Path::new("docs/.cache"), &matcher));
     }
 
     #[test]
