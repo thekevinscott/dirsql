@@ -117,11 +117,14 @@ rows = await db.query("SELECT vec_version() AS v")
 `db.watch()` returns an async iterator of row-level change events as files change on disk:
 
 ```python
-async for event in db.watch():
-    print(f"{event.action} on {event.table}: {event.row}")
-    if event.action == "error":
-        print(f"  error: {event.error}")
+async with db.watch() as events:
+    async for event in events:
+        print(f"{event.action} on {event.table}: {event.row}")
+        if event.action == "error":
+            print(f"  error: {event.error}")
 ```
+
+The `async with` block closes the stream on exit, which releases the events it has not returned yet; `await events.aclose()` does the same directly. `async for event in db.watch():` also works, and that stream is released when Python collects it.
 
 Each event has `.action` (`"insert"`, `"update"`, `"delete"`, or `"error"`), `.table`, `.row` (the new row, or the deleted row on `delete`), `.old_row` (the previous row, on `update`), `.file_path`, and `.error` (on `error`).
 
