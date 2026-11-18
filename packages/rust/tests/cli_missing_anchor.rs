@@ -14,10 +14,18 @@ fn a_config_table_whose_directory_is_missing_fails_the_query() {
     let dir = TempDir::new().unwrap();
     let cfg_dir = dir.path().join("cfg");
     fs::create_dir(&cfg_dir).unwrap();
+    let absent = dir
+        .path()
+        .join("absent")
+        .display()
+        .to_string()
+        .replace('\\', "/");
     let cfg = cfg_dir.join(".dirsql.toml");
     fs::write(
         &cfg,
-        "[[table]]\nname = \"later\"\nddl = \"CREATE TABLE later (x TEXT)\"\nglob = \"../absent/*.json\"\non-file = \"true\"\n",
+        format!(
+            "[[table]]\nname = \"later\"\nddl = \"CREATE TABLE later (x TEXT)\"\nglob = '{absent}/*.json'\non-file = \"true\"\n"
+        ),
     )
     .unwrap();
 
