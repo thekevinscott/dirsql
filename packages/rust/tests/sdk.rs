@@ -749,6 +749,30 @@ fn watch_twice_errors_with_already_started() {
 }
 
 #[test]
+fn watch_after_dropping_the_stream_sees_only_later_changes() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    drop(db.watch().unwrap());
+    fs::write(root.path().join("before.txt"), "before").unwrap();
+    while db.query("SELECT name FROM items").unwrap().is_empty() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut stream = db.watch().unwrap();
+    fs::write(root.path().join("after.txt"), "after").unwrap();
+
+    let event = block_on(stream.next()).expect("watch event");
+    assert!(
+        matches!(
+            &event,
+            dirsql::RowEvent::Insert { row, .. }
+                if row.get("name") == Some(&Value::Text("after".into()))
+        ),
+        "got: {event:?}"
+    );
+}
+
+#[test]
 fn ddl_sqlite_rejects_errors() {
     let root = TempDir::new().unwrap();
     let table = Table::new("t", "THIS IS NOT A CREATE TABLE", "*.txt", |_| vec![]);

@@ -216,6 +216,9 @@ pub enum DirSqlError {
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
 
+    #[error("table '{table}': its directory {} does not exist", .dir.display())]
+    MissingAnchor { table: String, dir: PathBuf },
+
     #[error("config error: {message}")]
     Config {
         message: String,
@@ -567,6 +570,20 @@ impl FreshState {
     fn must_wait(&self, turn: u64) -> bool {
         self.locked || self.serving != turn
     }
+}
+
+/// Fails on the first table whose own anchor `exists` says is missing:
+/// nothing watches above an anchor, so it could never be seen to appear.
+fn check_anchors(tables: &[Table], exists: &dyn Fn(&Path) -> bool) -> Result<()> {
+    for table in tables {
+        if let Some(anchor) = table.anchor.as_ref().filter(|anchor| !exists(anchor)) {
+            return Err(DirSqlError::MissingAnchor {
+                table: table.name.clone(),
+                dir: anchor.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The watcher the build keeps, given how starting it went.
@@ -1021,6 +1038,18 @@ impl DirSQL {
         Ok(())
     }
 
+    /// Undo [`attach_poll`](Self::attach_poll): the batches still waiting for
+    /// [`poll_events`](Self::poll_events) are dropped, and none are kept until
+    /// the next attach.
+    #[doc(hidden)]
+    pub fn detach_poll(&self) -> Result<()> {
+        let mut polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        if polled.take().is_some() {
+            *self.inner.stream.lock().map_err(DirSqlError::lock)? = None;
+        }
+        Ok(())
+    }
+
     /// Apply a batch of raw file events through the on_file/DB update
     /// pipeline.
     #[doc(hidden)]
@@ -1228,8 +1257,10 @@ impl DirSQL {
 
     /// Channel-based watch API. The returned stream receives the [`RowEvent`]s
     /// of every change applied from now on. Intended for long-running Rust
-    /// consumers (e.g. a CLI `watch` command). Can only be called once per
-    /// `DirSQL` instance.
+    /// consumers (e.g. a CLI `watch` command). A `DirSQL` instance has one
+    /// stream at a time: a call while the last stream is alive is an error.
+    /// Dropping the stream releases the events it holds, and a later call
+    /// returns a new stream.
     ///
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
@@ -1239,13 +1270,17 @@ impl DirSQL {
                 "poll_events() already in use; cannot call watch()",
             ));
         }
-        if self.inner.watch_thread_started.swap(true, Ordering::SeqCst) {
-            return Err(DirSqlError::WatchAlreadyStarted);
-        }
         self.attach_watcher()?;
 
+        let mut stream = self.inner.stream.lock().map_err(DirSqlError::lock)?;
+        if matches!(stream.as_ref(), Some(Sink::Stream(live)) if !live.is_closed()) {
+            return Err(DirSqlError::WatchAlreadyStarted);
+        }
+        self.inner
+            .watch_thread_started
+            .store(true, Ordering::SeqCst);
         let (tx, rx) = unbounded();
-        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Stream(tx));
+        *stream = Some(Sink::Stream(tx));
         Ok(rx)
     }
 
@@ -1890,6 +1925,7 @@ impl DirSQL {
             path_table_parser,
             no_ignore,
         } = resolved;
+        check_anchors(&tables, &|anchor| anchor.exists())?;
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
         let groups = groups
             .into_iter()
@@ -1922,8 +1958,8 @@ impl DirSQL {
         } else {
             (HashMap::new(), Vec::new())
         };
-        // A watcher that cannot start yet (an anchor not created) does not
-        // fail the build; watching starts it.
+        // A watcher that cannot start yet (the index root not created) does
+        // not fail the build; watching starts it.
         let watcher = if table_names.is_empty() {
             None
         } else {
@@ -5683,6 +5719,53 @@ mod internal_tests {
     }
 
     #[test]
+    fn detach_poll_drops_the_queue_and_keeps_no_later_batch() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "b", "x".into())]);
+
+        assert!(db.inner.polled.lock().unwrap().is_none());
+        assert!(db.inner.stream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn poll_events_after_detach_poll_returns_only_later_batches() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "before", "x".into())]);
+        db.detach_poll().unwrap();
+
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "after", "x".into())]);
+
+        let events = db.poll_events(Duration::ZERO).unwrap();
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        assert!(format!("{:?}", events[0]).contains("after"));
+    }
+
+    #[test]
+    fn detach_poll_leaves_a_watch_stream_attached() {
+        let (_dir, db) = simple_db();
+        let mut stream = db.watch().unwrap();
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
+    }
+
+    #[test]
+    fn detach_poll_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.polled);
+        let err = db.detach_poll().unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    #[test]
     fn deliver_detaches_a_stream_whose_receiver_is_gone() {
         let (_dir, db) = simple_db();
         drop(db.watch().unwrap());
@@ -5990,6 +6073,17 @@ mod internal_tests {
             matches!(err, DirSqlError::WatchAlreadyStarted),
             "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn watch_after_its_stream_is_dropped_attaches_a_fresh_stream() {
+        let (_dir, db) = simple_db();
+        drop(db.watch().unwrap());
+
+        let mut stream = db.watch().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
     }
 
     #[test]
@@ -8109,7 +8203,34 @@ mod internal_tests {
     }
 
     #[test]
-    fn a_build_over_a_missing_anchor_starts_no_watcher() {
+    fn check_anchors_names_the_first_table_whose_anchor_is_missing() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+            anchored_table("gone", "*.md", "/gone"),
+            anchored_table("also_gone", "*.md", "/also-gone"),
+        ];
+
+        let err = check_anchors(&tables, &|anchor| anchor == Path::new("/here")).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "table 'gone': its directory /gone does not exist"
+        );
+    }
+
+    #[test]
+    fn check_anchors_passes_when_every_anchor_exists_and_ignores_unanchored_tables() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+        ];
+
+        assert!(check_anchors(&tables, &|anchor| anchor == Path::new("/here")).is_ok());
+    }
+
+    #[test]
+    fn a_build_over_a_missing_index_root_starts_no_watcher() {
         assert_eq!(
             watcher_at_build::<()>(Err(path_not_found_error())).unwrap(),
             None
@@ -8207,6 +8328,8 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
         let two = dir.path().join("two");
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&two).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![
@@ -8227,6 +8350,7 @@ mod internal_tests {
     fn an_event_under_no_anchor_is_offered_raw_to_every_group() {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
+        std::fs::create_dir(&one).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![anchored_table("a", "*.txt", one.to_str().unwrap())],

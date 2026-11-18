@@ -1,0 +1,1 @@
+**Fixed** `watch()` can be called again once the previous stream has been dropped; it returned `WatchAlreadyStarted` for the life of the instance. Dropping the stream releases the events it holds, as before.
