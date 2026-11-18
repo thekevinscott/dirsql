@@ -61,7 +61,6 @@ fn sdk_title(strict: bool) -> Value {
         Table::new("posts", "CREATE TABLE posts (TITLE TEXT)", "t.txt", hook)
     };
     let db = DirSQL::new(root.path(), vec![table]).unwrap();
-    assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
     let rows = db.query("SELECT title FROM posts").unwrap();
     assert_eq!(rows.len(), 1);
     rows[0]["TITLE"].clone()

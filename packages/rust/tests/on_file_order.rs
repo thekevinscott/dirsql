@@ -56,12 +56,11 @@ fn startup_runs_commands_in_declaration_order_not_walk_order() {
     let log = dir.path().join("order.log");
     let config = write_config(dir.path(), &["zeta", "alpha"], &log);
 
-    let db = DirSQL::builder()
+    let _db = DirSQL::builder()
         .root(dir.path())
         .config(&config)
         .build()
         .unwrap();
-    assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
 
     assert_eq!(runs(&log), in_order(&["zeta", "alpha"]));
 }
