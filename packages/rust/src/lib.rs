@@ -218,6 +218,9 @@ pub enum DirSqlError {
     #[error("root directory {} does not exist", .0.display())]
     MissingRoot(PathBuf),
 
+    #[error("table '{table}': its directory {} does not exist", .dir.display())]
+    MissingAnchor { table: String, dir: PathBuf },
+
     #[error("config error: {message}")]
     Config {
         message: String,
@@ -579,6 +582,20 @@ fn check_root(root: &Path, exists: &dyn Fn(&Path) -> bool) -> Result<()> {
     } else {
         Err(DirSqlError::MissingRoot(root.to_path_buf()))
     }
+}
+
+/// Fails on the first table whose own anchor `exists` says is missing:
+/// nothing watches above an anchor, so it could never be seen to appear.
+fn check_anchors(tables: &[Table], exists: &dyn Fn(&Path) -> bool) -> Result<()> {
+    for table in tables {
+        if let Some(anchor) = table.anchor.as_ref().filter(|anchor| !exists(anchor)) {
+            return Err(DirSqlError::MissingAnchor {
+                table: table.name.clone(),
+                dir: anchor.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The watcher the build keeps, given how starting it went.
@@ -1922,6 +1939,7 @@ impl DirSQL {
             path_table_parser,
             no_ignore,
         } = resolved;
+        check_anchors(&tables, &|anchor| anchor.exists())?;
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
         let groups = groups
             .into_iter()
@@ -1954,7 +1972,7 @@ impl DirSQL {
         } else {
             (HashMap::new(), Vec::new())
         };
-        // A watcher that cannot start yet (an anchor not created) does not
+        // A watcher whose directory vanished after the checks above does not
         // fail the build; watching starts it.
         let watcher = if table_names.is_empty() {
             None
@@ -8211,7 +8229,34 @@ mod internal_tests {
     }
 
     #[test]
-    fn a_build_over_a_missing_anchor_starts_no_watcher() {
+    fn check_anchors_names_the_first_table_whose_anchor_is_missing() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+            anchored_table("gone", "*.md", "/gone"),
+            anchored_table("also_gone", "*.md", "/also-gone"),
+        ];
+
+        let err = check_anchors(&tables, &|anchor| anchor == Path::new("/here")).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "table 'gone': its directory /gone does not exist"
+        );
+    }
+
+    #[test]
+    fn check_anchors_passes_when_every_anchor_exists_and_ignores_unanchored_tables() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+        ];
+
+        assert!(check_anchors(&tables, &|anchor| anchor == Path::new("/here")).is_ok());
+    }
+
+    #[test]
+    fn a_build_whose_watched_directory_vanished_starts_no_watcher() {
         assert_eq!(
             watcher_at_build::<()>(Err(path_not_found_error())).unwrap(),
             None
@@ -8309,6 +8354,8 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
         let two = dir.path().join("two");
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&two).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![
@@ -8329,6 +8376,7 @@ mod internal_tests {
     fn an_event_under_no_anchor_is_offered_raw_to_every_group() {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
+        std::fs::create_dir(&one).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![anchored_table("a", "*.txt", one.to_str().unwrap())],
