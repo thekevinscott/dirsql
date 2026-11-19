@@ -313,15 +313,25 @@ fn absolute_target<S: Syntax>(
     home: Option<&Path>,
 ) -> Option<Option<Utf8PathBuf<S>>> {
     if let Some(rest) = S::HOME_PREFIXES.iter().find_map(|p| name.strip_prefix(p)) {
-        return Some(home.map(|h| typed::<S>(h).join(rest)));
+        return Some(home.map(|h| join_written(typed::<S>(h), rest)));
     }
     if name.starts_with("../") {
-        return Some(Some(typed::<S>(index_root).join(name)));
+        return Some(Some(join_written(typed::<S>(index_root), name)));
     }
     if S::is_rooted(name) {
         return Some(Some(Utf8PathBuf::from(name)));
     }
     None
+}
+
+/// `base` with the written `rest` appended one component at a time. Joined
+/// whole onto a verbatim (`\\?\`) base, `rest` would be one component with
+/// its `/` kept literal.
+fn join_written<S: Syntax>(mut base: Utf8PathBuf<S>, rest: &str) -> Utf8PathBuf<S> {
+    for part in rest.split(S::SEPARATORS).filter(|p| !p.is_empty()) {
+        base.push(part);
+    }
+    base
 }
 
 /// Fold `.` and `..` out of `path` lexically. Purely textual: a `..` is not

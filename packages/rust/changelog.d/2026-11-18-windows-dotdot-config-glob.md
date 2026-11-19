@@ -1,0 +1,1 @@
+**Fixed** On Windows, a config `[[table]] glob` starting with `../` now anchors above the config's directory when the config path is a verbatim (`\\?\`) path, as the CLI's `-c` produces; it used to match nothing.
