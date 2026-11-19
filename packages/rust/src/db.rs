@@ -34,6 +34,9 @@ pub enum DbError {
     #[error("cannot create the index database file: {0}")]
     TempFile(#[from] std::io::Error),
 
+    #[error("an anonymous database has no file another connection can open; promote it first")]
+    Anonymous,
+
     #[error("Schema mismatch: {0}")]
     SchemaMismatch(String),
 
@@ -583,7 +586,8 @@ pub struct Db {
     registered: Vec<(Arc<Worker>, Vec<u8>, bool)>,
     /// The extensions loaded on this connection, in load order.
     extensions: Vec<(PathBuf, Option<String>)>,
-    path: PathBuf,
+    /// This database's file; `None` while the database is anonymous.
+    path: Option<PathBuf>,
     /// The default database's file, deleted once the last connection sharing
     /// it drops. Declared after `conn` so the connection closes first.
     file: Option<Arc<TempDbFile>>,
@@ -632,24 +636,29 @@ fn worker_error(message: String) -> DbError {
 }
 
 impl Db {
-    /// Open the default, ephemeral `Db`: a database file of its own in
-    /// SQLite's temp directory (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` →
-    /// `/usr/tmp` → `/tmp`), deleted with its journal, `-wal` and `-shm`
-    /// files when the last connection to it drops; a crash leaves them
-    /// behind.
+    /// Open the default, ephemeral `Db`: an **anonymous disk-backed temp
+    /// database** (`Connection::open("")`), not `:memory:`.
     ///
-    /// Pages spill to disk as the index grows — only each connection's page
-    /// cache stays resident — so memory does not scale with the indexed
-    /// corpus.
+    /// SQLite creates a private temp file and deletes it immediately after
+    /// opening, so the OS reclaims it even on a crash or SIGKILL, and there
+    /// is never a name to collide on. Pages spill to disk as the index
+    /// grows — only the page cache stays resident — so memory does not
+    /// scale with the indexed corpus. The file lands in the directory
+    /// SQLite's VFS picks (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` →
+    /// `/usr/tmp` → `/tmp`); export `SQLITE_TMPDIR` to steer it off a
+    /// tmpfs mount. No other connection can open it until [`Self::promote`].
     pub fn new() -> Result<Self> {
-        let file = Arc::new(TempDbFile::create()?);
-        let conn = open_temp_connection(file.path())?;
-        // The database dies with the process, so durability buys nothing.
+        let conn = Connection::open("")?;
+        // The database is a private temp file that dies with the process, so
+        // durability buys nothing.
         conn.pragma_update(None, "synchronous", "OFF")?;
-        conn.pragma_update(None, "journal_mode", "MEMORY")?;
-        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
         ensure_internal_rows_table(&conn)?;
-        Self::with_connection(conn, file.path().to_path_buf(), Some(file))
+        Self::with_connection(conn, None, None)
+    }
+
+    /// Move an anonymous database into a file other connections can open.
+    pub fn promote(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// Open a `Db` backed by a named on-disk SQLite file. Used by the
@@ -658,12 +667,12 @@ impl Db {
         let conn = open_wal_connection(path)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
-        Self::with_connection(conn, path.to_path_buf(), None)
+        Self::with_connection(conn, Some(path.to_path_buf()), None)
     }
 
     fn with_connection(
         conn: Connection,
-        path: PathBuf,
+        path: Option<PathBuf>,
         file: Option<Arc<TempDbFile>>,
     ) -> Result<Self> {
         // Lets a GROUP BY or ORDER BY over a large table sort on background threads.
@@ -692,23 +701,28 @@ impl Db {
 
     /// Another connection to this database, set up as this one is: the same
     /// path-table settings, extensions and declared functions (sharing their
-    /// workers). It reads a snapshot while this connection writes.
-    ///
-    /// The first reader switches the database to WAL and shared locking,
-    /// which needs every other connection closed and no transaction open.
-    /// Until then the writer keeps its rollback journal in memory and holds
-    /// the file lock, so a bulk build writes each page once and a small
-    /// commit costs about what it did on an anonymous temp database.
+    /// workers). It reads a snapshot while this connection writes. An
+    /// anonymous database has no file to open; [`Self::promote`] it first.
     pub fn reader(&self) -> Result<Self> {
-        self.conn.pragma_update(None, "locking_mode", "NORMAL")?;
-        let _mode: String = self
-            .conn
-            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
-        let conn = match self.file {
-            Some(_) => open_temp_connection(&self.path)?,
-            None => open_wal_connection(&self.path)?,
+        let Some(path) = &self.path else {
+            return Err(DbError::Anonymous);
         };
-        let mut reader = Self::with_connection(conn, self.path.clone(), self.file.clone())?;
+        let conn = match self.file {
+            Some(_) => open_temp_connection(path)?,
+            None => open_wal_connection(path)?,
+        };
+        self.sibling(conn, Some(path.clone()), self.file.clone())
+    }
+
+    /// A `Db` on `conn` with this one's path-table settings, extensions and
+    /// declared functions.
+    fn sibling(
+        &self,
+        conn: Connection,
+        path: Option<PathBuf>,
+        file: Option<Arc<TempDbFile>>,
+    ) -> Result<Self> {
+        let mut reader = Self::with_connection(conn, path, file)?;
         reader.path_table_root = self.path_table_root.clone();
         reader.hint_legacy_files_table = self.hint_legacy_files_table;
         reader.path_table_ignore = self.path_table_ignore.clone();
@@ -3882,26 +3896,64 @@ mod tests {
             .unwrap()
     }
 
-    fn locking_mode(db: &Db) -> String {
-        db.conn()
-            .query_row("PRAGMA locking_mode", [], |row| row.get(0))
-            .unwrap()
+    fn promoted() -> Db {
+        let mut db = Db::new().unwrap();
+        db.promote().unwrap();
+        db
     }
 
     #[test]
-    fn new_keeps_its_journal_in_memory_and_its_lock_until_a_reader_opens() {
+    fn new_is_anonymous_and_opens_no_reader() {
         let db = Db::new().unwrap();
-        assert_eq!(journal_mode(&db), "memory");
-        assert_eq!(locking_mode(&db), "exclusive");
+        assert!(db.path.is_none());
+        assert!(matches!(db.reader(), Err(DbError::Anonymous)));
     }
 
     #[test]
-    fn the_first_reader_switches_the_database_to_wal_and_shared_locks() {
-        let db = Db::new().unwrap();
-        let reader = db.reader().unwrap();
+    fn promote_moves_the_database_into_a_wal_temp_file() {
+        let db = promoted();
         assert_eq!(journal_mode(&db), "wal");
-        assert_eq!(journal_mode(&reader), "wal");
-        assert_eq!(locking_mode(&db), "normal");
+        let file = db.file.as_ref().unwrap();
+        assert_eq!(db.path.as_deref(), Some(file.path()));
+    }
+
+    #[test]
+    fn promote_keeps_the_rows() {
+        let mut db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+        db.promote().unwrap();
+        assert_eq!(count_t(&db), 1);
+    }
+
+    #[test]
+    fn promote_again_keeps_the_same_file() {
+        let mut db = promoted();
+        let path = db.path.clone();
+        db.promote().unwrap();
+        assert_eq!(db.path, path);
+    }
+
+    #[test]
+    fn promote_leaves_an_opened_file_where_it_is() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cache.db");
+        let mut db = Db::open(&path).unwrap();
+        db.promote().unwrap();
+        assert_eq!(db.path, Some(path));
+        assert!(db.file.is_none());
+    }
+
+    #[test]
+    fn promote_keeps_the_declared_functions_on_the_writer() {
+        let mut db = Db::new().unwrap();
+        let (worker, _sent) =
+            functions::test_support::batched_worker("up", 8, Arc::clone(&db.calls), vec![]);
+        db.register_batched_worker(Arc::clone(&worker), &[1]);
+        db.promote().unwrap();
+        assert!(db.conn().prepare("SELECT up(1)").is_ok());
+        assert!(Arc::ptr_eq(&db.batched[0], &worker));
     }
 
     #[test]
@@ -3923,7 +3975,7 @@ mod tests {
 
     #[test]
     fn reader_reads_what_the_writer_committed() {
-        let db = Db::new().unwrap();
+        let db = promoted();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let reader = db.reader().unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
@@ -3933,7 +3985,7 @@ mod tests {
 
     #[test]
     fn reader_keeps_the_database_after_the_writer_drops() {
-        let db = Db::new().unwrap();
+        let db = promoted();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let reader = db.reader().unwrap();
         drop(db);
@@ -3959,6 +4011,7 @@ mod tests {
         db.set_path_table_gitignore(false);
         db.set_path_table_parser("cat".into());
 
+        db.promote().unwrap();
         let reader = db.reader().unwrap();
 
         assert_eq!(reader.path_table_root, Some(PathBuf::from("/root")));
@@ -3975,6 +4028,7 @@ mod tests {
             functions::test_support::batched_worker("up", 8, Arc::clone(&db.calls), vec![]);
         db.register_batched_worker(Arc::clone(&worker), &[1]);
 
+        db.promote().unwrap();
         let reader = db.reader().unwrap();
 
         assert!(reader.conn().prepare("SELECT up(1)").is_ok());
@@ -3988,14 +4042,14 @@ mod tests {
 
     #[test]
     fn reader_has_its_own_path_table_scope() {
-        let db = Db::new().unwrap();
+        let db = promoted();
         let reader = db.reader().unwrap();
         assert!(!Arc::ptr_eq(&reader.scope, &db.scope));
     }
 
     #[test]
     fn reader_sorts_on_background_threads() {
-        let db = Db::new().unwrap();
+        let db = promoted();
         let reader = db.reader().unwrap();
         let threads: i64 = reader
             .conn()

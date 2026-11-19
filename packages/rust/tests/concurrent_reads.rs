@@ -1,4 +1,4 @@
-//! The default database is one SQLite file that several connections share: a
+//! A promoted database is one SQLite file that several connections share: a
 //! read on one connection neither waits for nor is torn by a write committing
 //! on another, and the file is gone once the last connection closes.
 
@@ -29,13 +29,13 @@ fn database_file(db: &Db) -> PathBuf {
         .unwrap();
     assert!(
         !file.is_empty(),
-        "Db::new must open a named database file other connections can share"
+        "Db::promote must move the database to a named file other connections can share"
     );
     PathBuf::from(file)
 }
 
 fn populated() -> Db {
-    let db = Db::new().unwrap();
+    let mut db = Db::new().unwrap();
     db.create_table("t", "CREATE TABLE t (a INTEGER, b TEXT)")
         .unwrap();
     db.conn()
@@ -44,12 +44,20 @@ fn populated() -> Db {
              INSERT INTO t SELECT x, hex(randomblob(16)) FROM n"
         ))
         .unwrap();
+    db.promote().unwrap();
+    database_file(&db);
     db
 }
 
 fn count(conn: &Connection) -> i64 {
     conn.query_row("SELECT count(*) FROM t", [], |row| row.get(0))
         .unwrap()
+}
+
+#[test]
+fn promotion_keeps_every_row() {
+    let db = populated();
+    assert_eq!(count(db.conn()), ROWS);
 }
 
 #[test]
@@ -121,16 +129,19 @@ fn the_database_files_are_deleted_once_the_last_connection_closes() {
 }
 
 #[test]
-fn a_reader_has_the_extensions_the_writer_loaded() {
+fn the_writer_and_a_reader_have_the_extensions_loaded_before_promotion() {
     let ext = build_fixture_extension();
     let mut db = Db::new().unwrap();
     db.load_extension(&ext, None).unwrap();
+    db.promote().unwrap();
+    database_file(&db);
 
     let reader = db.reader().unwrap();
 
-    let answer: i64 = reader
-        .conn()
-        .query_row("SELECT dirsql_testext_answer()", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(answer, 42);
+    for conn in [db.conn(), reader.conn()] {
+        let answer: i64 = conn
+            .query_row("SELECT dirsql_testext_answer()", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(answer, 42);
+    }
 }
