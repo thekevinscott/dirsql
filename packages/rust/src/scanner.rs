@@ -1255,18 +1255,33 @@ fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
     }) && dirs_glob(ignore).is_none_or(|glob| glob_reaches_dir(glob, rel_path))
 }
 
-/// Whether a walk from `root` enters `dir`: [`reaches_dir`], and, under a
-/// matcher honoring `.gitignore`, no directory on the way is one the
-/// `.gitignore` files in force there ignore and no table glob spells.
+/// Whether a walk from `root` enters `dir`: [`reaches_dir`], and
+/// [`gitignore_drops`] does not drop it.
 pub(crate) fn enters_dir(root: &Path, dir: &Path, ignore: &TableMatcher) -> bool {
     let Ok(rel_path) = dir.strip_prefix(root) else {
         return false;
     };
-    reaches_dir(rel_path, ignore)
-        && !(ignore.respects_gitignore()
-            && gitignore_hides(rel_path, dirs_glob(ignore), &|prefix| {
-                is_gitignored_dir(&root.join(prefix))
-            }))
+    reaches_dir(rel_path, ignore) && !gitignore_drops(dir, rel_path, true, ignore)
+}
+
+/// Whether a walk under a matcher honoring `.gitignore` drops `path`, reached
+/// as `rel_path` from the walk's root: some entry on the way, `path` itself
+/// included, is one the `.gitignore` files in force there ignore and no table
+/// glob spells.
+pub(crate) fn gitignore_drops(
+    path: &Path,
+    rel_path: &Path,
+    is_dir: bool,
+    ignore: &TableMatcher,
+) -> bool {
+    let depth = rel_path.components().count();
+    ignore.respects_gitignore()
+        && gitignore_hides(rel_path, dirs_glob(ignore), &|prefix| {
+            let below = depth - prefix.components().count();
+            path.ancestors()
+                .nth(below)
+                .is_some_and(|entry| is_gitignored_entry(entry, is_dir || below > 0))
+        })
 }
 
 /// Whether some directory on the way to `rel_path`, itself included, is one
@@ -1283,13 +1298,13 @@ fn gitignore_hides(
     })
 }
 
-/// Whether the `.gitignore` files in force in the directory holding `dir`
-/// ignore it, as the walk judges an entry: only `dir` itself is matched, its
+/// Whether the `.gitignore` files in force in the directory holding `path`
+/// ignore it, as the walk judges an entry: only `path` itself is matched, its
 /// parents having been judged on the way.
-fn is_gitignored_dir(dir: &Path) -> bool {
-    dir.parent()
+fn is_gitignored_entry(path: &Path, is_dir: bool) -> bool {
+    path.parent()
         .and_then(|parent| enclosing_repo(parent, &holds_git))
-        .is_some_and(|top| is_gitignored(&gitignores_above(dir, top, &Frame::load), dir, true))
+        .is_some_and(|top| is_gitignored(&gitignores_above(path, top, &Frame::load), path, is_dir))
 }
 
 /// Whether some component of `glob` can enter the directory at `rel_path`.
@@ -1919,11 +1934,51 @@ mod tests {
         ));
     }
 
+    fn drops(root: &Path, rel: &str, is_dir: bool, matcher: &TableMatcher) -> bool {
+        gitignore_drops(&root.join(rel), Path::new(rel), is_dir, matcher)
+    }
+
     #[test]
-    fn is_gitignored_dir_is_false_outside_any_repo() {
+    fn gitignore_drops_a_file_below_a_gitignored_directory() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("**/*.md", "t")], &[])
+            .unwrap()
+            .with_gitignore(true);
+        assert!(drops(root.path(), "build/x.md", false, &matcher));
+        assert!(!drops(root.path(), "docs/x.md", false, &matcher));
+    }
+
+    #[test]
+    fn gitignore_drops_no_file_a_glob_spells_below_a_gitignored_directory() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("build/x.md", "t")], &[])
+            .unwrap()
+            .with_gitignore(true);
+        assert!(!drops(root.path(), "build/x.md", false, &matcher));
+    }
+
+    #[test]
+    fn gitignore_drops_a_directory_only_pattern_for_a_directory_only() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("**", "t")], &[])
+            .unwrap()
+            .with_gitignore(true);
+        assert!(drops(root.path(), "build", true, &matcher));
+        assert!(!drops(root.path(), "build", false, &matcher));
+    }
+
+    #[test]
+    fn gitignore_drops_nothing_when_gitignore_is_off() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("**/*.md", "t")], &[]).unwrap();
+        assert!(!drops(root.path(), "build/x.md", false, &matcher));
+    }
+
+    #[test]
+    fn is_gitignored_entry_is_false_outside_any_repo() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join(".gitignore"), "build/\n").unwrap();
-        assert!(!is_gitignored_dir(&root.path().join("build")));
+        assert!(!is_gitignored_entry(&root.path().join("build"), true));
     }
 
     #[test]
