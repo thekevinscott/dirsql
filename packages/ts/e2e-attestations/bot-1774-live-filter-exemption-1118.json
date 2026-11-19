@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1795057726,
+  "exit_code": 0,
+  "commit": "ae9514b9869d02c8c58d4950952baa209d8ae0f8",
+  "branch": "bot/1774-live-filter-exemption-1118"
+}
