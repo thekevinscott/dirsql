@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_fault_test.py tests/e2e/fanout_test.py tests/e2e/fresh_declared_repros_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/watch_speed_test.py -x -q",
+  "ran_at": 1795057644,
+  "exit_code": 0,
+  "commit": "e9cd01bfb2bc323f14756e99fe6258d2a45cc577",
+  "branch": "bot/1774-live-filter-exemption-1118"
+}
