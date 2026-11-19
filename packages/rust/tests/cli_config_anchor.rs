@@ -40,5 +40,8 @@ fn a_parent_relative_config_glob_matches_files_above_the_config() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "stderr: {stderr}");
-    assert!(stdout.contains("a.json"), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("a.json"),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
 }
