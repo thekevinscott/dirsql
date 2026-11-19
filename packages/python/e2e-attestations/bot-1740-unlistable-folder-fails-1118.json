@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/on_file_failure_test.py tests/e2e/query_contract_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/many_dirs_speed_test.py tests/e2e/parent_then_child_test.py -x -q",
+  "ran_at": 1795021146,
+  "exit_code": 0,
+  "commit": "57438a24cfe8bee2dfe32f8258722fc028c2e34c",
+  "branch": "bot/1740-unlistable-folder-fails-1118"
+}

@@ -18,6 +18,7 @@ Path globbing matches `bash -O globstar` with `dotglob` off, exactly. That is th
 - `'./'` and a named directory list one level.
 - `node_modules` is skipped unless the path names it.
 - Files only; no directory rows.
+- A folder that exists but cannot be listed is an error, not an empty folder.
 
 To check a glob change, compare its output with `bash -O globstar -O nullglob` on the same tree. A divergence with no written reason is a bug.
 

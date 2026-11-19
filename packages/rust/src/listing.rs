@@ -166,8 +166,8 @@ type Names = Owned;
 
 impl Listing {
     /// The entries of `dir` in the byte order of their names; none when it
-    /// cannot be read.
-    pub(crate) fn read(dir: &Path) -> Listing {
+    /// does not exist or is not a directory.
+    pub(crate) fn read(dir: &Path) -> std::io::Result<Listing> {
         Listing::sorted(|emit| read_chunks(dir, emit), &Chunk::sort)
     }
 
@@ -175,15 +175,15 @@ impl Listing {
     /// the first chunk, a thread of its own `sort`s each chunk while the next
     /// is read, and the sorted chunks are then merged on every core.
     fn sorted(
-        read: impl FnOnce(&mut dyn FnMut(Chunk)),
+        read: impl FnOnce(&mut dyn FnMut(Chunk)) -> std::io::Result<()>,
         sort: &(dyn Fn(&mut Chunk) + Sync),
-    ) -> Listing {
+    ) -> std::io::Result<Listing> {
         let (send, receive) = std::sync::mpsc::channel::<Chunk>();
         let mut receive = Some(receive);
         let mut first = None;
         std::thread::scope(|scope| {
             let mut sorter = None;
-            read(&mut |chunk| {
+            let read = read(&mut |chunk| {
                 if sorter.is_none() {
                     let Some(earlier) = first.take() else {
                         first = Some(chunk);
@@ -196,7 +196,7 @@ impl Listing {
                 send.send(chunk).expect("the sorter is waiting");
             });
             drop(send);
-            match sorter {
+            let listing = match sorter {
                 Some(sorter) => merge(sorter.join().expect("sorting does not panic")),
                 None => {
                     let mut listing = Listing::default();
@@ -206,7 +206,8 @@ impl Listing {
                     listing.sort();
                     listing
                 }
-            }
+            };
+            read.map(|()| listing)
         })
     }
 
@@ -341,46 +342,62 @@ fn open_dir(dir: &Path) -> std::io::Result<rustix::fd::OwnedFd> {
 }
 
 /// The entries of `dir` in the order the filesystem lists them, handed to
-/// `emit` a chunk at a time as they are read; none when it cannot be read.
-pub(crate) fn read_chunks(dir: &Path, emit: &mut dyn FnMut(Chunk)) {
+/// `emit` a chunk at a time as they are read; none when it does not exist or
+/// is not a directory.
+pub(crate) fn read_chunks(dir: &Path, emit: &mut dyn FnMut(Chunk)) -> std::io::Result<()> {
     let mut chunker = Chunker::new(emit);
-    read_into(dir, &mut chunker);
+    let read = read_into(dir, &mut chunker);
     chunker.finish();
+    read
+}
+
+/// `Ok` for a folder that is not there to list, which a glob takes as one
+/// holding nothing; `err` itself otherwise.
+fn absent_as_empty(err: std::io::Error) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    match err.kind() {
+        ErrorKind::NotFound | ErrorKind::NotADirectory => Ok(()),
+        _ => Err(err),
+    }
 }
 
 /// Uses `Dir`, not `RawDir`: on a deep tree of small directories the walk ran
 /// about twice as slow reading through `RawDir`, with no gain on a flat
 /// directory of a million entries.
 #[cfg(unix)]
-fn read_into(dir: &Path, listing: &mut Chunker<'_>) {
+fn read_into(dir: &Path, listing: &mut Chunker<'_>) -> std::io::Result<()> {
     use rustix::fs::Dir;
     use std::os::unix::ffi::OsStrExt;
-    let Ok(fd) = open_dir(dir) else {
-        return;
+    let fd = match open_dir(dir) {
+        Ok(fd) => fd,
+        Err(err) => return absent_as_empty(err),
     };
-    let Ok(mut entries) = Dir::new(fd) else {
-        return;
-    };
-    while let Some(Ok(entry)) = entries.read() {
+    let mut entries = Dir::new(fd)?;
+    while let Some(entry) = entries.read() {
+        let entry = entry?;
         let name = entry.file_name().to_bytes();
         if name == b"." || name == b".." {
             continue;
         }
         listing.push(OsStr::from_bytes(name), seen(entry.file_type()));
     }
+    Ok(())
 }
 
 #[cfg(any(test, not(unix)))]
-fn read_dir_into(dir: &Path, listing: &mut Chunker<'_>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+fn read_dir_into(dir: &Path, listing: &mut Chunker<'_>) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => return absent_as_empty(err),
     };
-    for entry in entries.filter_map(Result::ok) {
+    for entry in entries {
+        let entry = entry?;
         let seen = entry.file_type().map_or(Seen::Other, |kind| {
             seen_flags(kind.is_symlink(), kind.is_dir(), kind.is_file())
         });
         listing.push(&entry.file_name(), seen);
     }
+    Ok(())
 }
 
 #[cfg(any(test, not(unix)))]
@@ -506,7 +523,7 @@ mod tests {
             std::fs::File::create(dir.path().join(format!("f{i}"))).unwrap();
         }
         let mut sizes = Vec::new();
-        read_chunks(dir.path(), &mut |chunk| sizes.push(chunk.entries.len()));
+        read_chunks(dir.path(), &mut |chunk| sizes.push(chunk.entries.len())).unwrap();
         assert_eq!(sizes, [CHUNK_ENTRIES, 1]);
     }
 
@@ -527,7 +544,14 @@ mod tests {
 
     fn sorted_from(chunks: Vec<Chunk>) -> Listing {
         let mut chunks = chunks.into_iter();
-        Listing::sorted(|emit| chunks.by_ref().for_each(&mut *emit), &Chunk::sort)
+        Listing::sorted(
+            |emit| {
+                chunks.by_ref().for_each(&mut *emit);
+                Ok(())
+            },
+            &Chunk::sort,
+        )
+        .unwrap()
     }
 
     fn named_and_seen(listing: &Listing) -> Vec<(String, Seen)> {
@@ -608,9 +632,11 @@ mod tests {
                 sorted_early = *done;
                 drop(done);
                 chunks.by_ref().for_each(&mut *emit);
+                Ok(())
             },
             &sort,
-        );
+        )
+        .unwrap();
         assert!(
             sorted_early,
             "no chunk was sorted until the whole directory was read"
@@ -636,7 +662,10 @@ mod tests {
         for (name, _) in &expected {
             std::fs::File::create(dir.path().join(name)).unwrap();
         }
-        assert_eq!(named_and_seen(&Listing::read(dir.path())), expected);
+        assert_eq!(
+            named_and_seen(&Listing::read(dir.path()).unwrap()),
+            expected
+        );
     }
 
     #[test]
@@ -658,11 +687,14 @@ mod tests {
         );
     }
 
-    fn read_with(read: fn(&Path, &mut Chunker<'_>), dir: &Path) -> Vec<(String, Seen)> {
+    fn read_with(
+        read: fn(&Path, &mut Chunker<'_>) -> std::io::Result<()>,
+        dir: &Path,
+    ) -> Vec<(String, Seen)> {
         let mut listing = Listing::default();
         let mut emit = |chunk| listing.add(chunk);
         let mut chunker = Chunker::new(&mut emit);
-        read(dir, &mut chunker);
+        read(dir, &mut chunker).unwrap();
         chunker.finish();
         listing.sort();
         listing
@@ -694,7 +726,7 @@ mod tests {
     #[test]
     fn read_lists_each_entry_of_a_directory_sorted_and_classified() {
         let dir = fixture();
-        let listing = Listing::read(dir.path());
+        let listing = Listing::read(dir.path()).unwrap();
         let got: Vec<_> = listing
             .entries()
             .iter()
@@ -730,14 +762,37 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_directory_lists_nothing() {
+    fn a_missing_path_or_a_file_lists_nothing() {
         let dir = fixture();
         let file = dir.path().join("file");
         let missing = dir.path().join("missing");
         for path in [&file, &missing] {
-            assert!(Listing::read(path).entries().is_empty());
+            assert!(Listing::read(path).unwrap().entries().is_empty());
             assert!(read_with(read_dir_into, path).is_empty());
         }
+    }
+
+    #[test]
+    fn only_a_folder_that_is_not_there_counts_as_empty() {
+        use std::io::{Error, ErrorKind};
+        assert!(absent_as_empty(Error::from(ErrorKind::NotFound)).is_ok());
+        assert!(absent_as_empty(Error::from(ErrorKind::NotADirectory)).is_ok());
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::Other] {
+            let err = absent_as_empty(Error::from(kind)).unwrap_err();
+            assert_eq!(err.kind(), kind);
+        }
+    }
+
+    #[test]
+    fn a_failed_read_fails_the_sorted_listing() {
+        let failed = Listing::sorted(
+            |emit| {
+                chunks_of(numbered(3)).into_iter().for_each(&mut *emit);
+                Err(std::io::Error::other("read failed part-way"))
+            },
+            &Chunk::sort,
+        );
+        assert_eq!(failed.err().unwrap().to_string(), "read failed part-way");
     }
 
     #[cfg(unix)]

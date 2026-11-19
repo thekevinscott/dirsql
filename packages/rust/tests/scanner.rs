@@ -194,7 +194,7 @@ fn scan_glob_stops_outer_gitignore_rules_at_nested_repo() {
 
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob("**").unwrap();
-    let results = scan_glob(outer.path(), &glob, &ignore, true);
+    let results = scan_glob(outer.path(), &glob, &ignore, true).unwrap();
 
     assert_eq!(results, vec![std::path::PathBuf::from("repo/z.log")]);
 }
@@ -214,7 +214,7 @@ fn scan_glob_applies_gitignore_only_inside_a_repo() {
 
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob("**").unwrap();
-    let results = scan_glob(outer.path(), &glob, &ignore, true);
+    let results = scan_glob(outer.path(), &glob, &ignore, true).unwrap();
 
     assert_eq!(results, vec![std::path::PathBuf::from("zz-sibling/z.log")]);
 }
@@ -241,6 +241,7 @@ fn scan_paths(root: &TempDir, pattern: &str) -> Vec<String> {
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob(pattern).unwrap();
     scan_glob(root.path(), &glob, &ignore, false)
+        .unwrap()
         .into_iter()
         .map(|p| {
             p.components()
