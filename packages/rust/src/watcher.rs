@@ -1,5 +1,5 @@
 use crate::matcher::TableMatcher;
-use crate::scanner::{reaches_dir, scan_dirs_linked};
+use crate::scanner::{enters_dir, scan_dirs_linked};
 use notify::ErrorKind;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -86,8 +86,7 @@ impl WatchScope {
     }
 
     fn entered(&self, dir: &Path) -> Option<PathBuf> {
-        let rel = dir.strip_prefix(&self.root).ok()?;
-        reaches_dir(rel, &self.ignore).then(|| dir.to_path_buf())
+        enters_dir(&self.root, dir, &self.ignore).then(|| dir.to_path_buf())
     }
 }
 
@@ -128,6 +127,46 @@ pub(crate) fn watch_tree(
             return Ok(());
         }
     }
+}
+
+/// After an event at `path`, when it names a `.gitignore`: watch each
+/// directory the walk from its directory now enters that `watched` lacks, and
+/// report the outermost of those as created, so the files a `.gitignore` edit
+/// un-ignored are indexed the way a new directory's are.
+pub(crate) fn watch_unignored(
+    scopes: &[WatchScope],
+    path: &Path,
+    walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
+    watched: &HashSet<PathBuf>,
+    watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
+) -> Vec<FileEvent> {
+    let Some(dir) = gitignore_dir(path) else {
+        return Vec::new();
+    };
+    let mut now = watched.clone();
+    if let Err(e) = watch_tree(scopes, dir, walk, &mut now, &mut |dir| {
+        tolerate_missing(watch(dir))
+    }) {
+        return vec![FileEvent::Fault(WatchFault::of(&e))];
+    }
+    let fresh: HashSet<&PathBuf> = now.difference(watched).collect();
+    let mut outermost: Vec<PathBuf> = fresh
+        .iter()
+        .filter(|dir| {
+            dir.parent()
+                .is_none_or(|parent| !fresh.contains(&parent.to_path_buf()))
+        })
+        .map(|dir| (*dir).clone())
+        .collect();
+    outermost.sort();
+    outermost.into_iter().map(FileEvent::Created).collect()
+}
+
+/// The directory holding `path` when `path` is a `.gitignore`, whose change
+/// can bring directories below it into the walk.
+pub(crate) fn gitignore_dir(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|_| path.file_name() == Some(std::ffi::OsStr::new(".gitignore")))
 }
 
 pub(crate) fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
@@ -299,6 +338,68 @@ mod tests {
             scope.walk_starts(Path::new("/r/moved/sub")),
             vec![PathBuf::from("/r/link/sub")]
         );
+    }
+
+    #[test]
+    fn gitignore_dir_is_the_directory_of_a_gitignore_only() {
+        assert_eq!(
+            gitignore_dir(Path::new("/r/a/.gitignore")),
+            Some(Path::new("/r/a"))
+        );
+        assert_eq!(gitignore_dir(Path::new("/r/a/x.md")), None);
+    }
+
+    fn unignored(
+        path: &str,
+        watch: &mut dyn FnMut(&Path) -> Result<(), notify::Error>,
+    ) -> Vec<FileEvent> {
+        let watched = HashSet::from([PathBuf::from("/r"), PathBuf::from("/r/kept")]);
+        watch_unignored(
+            &[scope("/r", &[])],
+            Path::new(path),
+            &|_, dir| {
+                ["", "kept", "build", "build/sub"]
+                    .iter()
+                    .map(|sub| dir.join(sub))
+                    .map(|dir| dir.components().collect())
+                    .collect()
+            },
+            &watched,
+            watch,
+        )
+    }
+
+    #[test]
+    fn watch_unignored_watches_what_a_gitignore_change_brings_in_and_reports_the_outermost() {
+        let mut seen = Vec::new();
+        let events = unignored("/r/.gitignore", &mut |dir| {
+            seen.push(dir.to_path_buf());
+            Ok(())
+        });
+        assert_eq!(events, vec![FileEvent::Created(PathBuf::from("/r/build"))]);
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![PathBuf::from("/r/build"), PathBuf::from("/r/build/sub")]
+        );
+    }
+
+    #[test]
+    fn watch_unignored_does_nothing_for_another_file() {
+        let events = unignored("/r/x.md", &mut |dir| panic!("watched {dir:?}"));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn watch_unignored_reports_a_failed_watch() {
+        let events = unignored("/r/.gitignore", &mut |_| Err(max_files_watch_error()));
+        assert_eq!(events, vec![FileEvent::Fault(WatchFault::Limit)]);
+    }
+
+    #[test]
+    fn watch_unignored_tolerates_a_directory_gone_before_its_watch() {
+        let events = unignored("/r/.gitignore", &mut |_| Err(path_not_found_error()));
+        assert_eq!(events, vec![FileEvent::Created(PathBuf::from("/r/build"))]);
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
