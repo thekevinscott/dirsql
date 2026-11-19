@@ -7,7 +7,7 @@ use ignore::Match;
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// A root-relative path as dirsql stores and reports it: `/`-separated on
 /// every platform, so globs, `file_path` keys and `path` columns agree.
@@ -32,14 +32,56 @@ fn with_slashes(path: &str, native: char) -> String {
 
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
+/// A folder that cannot be listed contributes nothing.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    paired(scan_directory_reporting(
+    paired(scan_below(
+        root,
         root,
         matcher,
         &mut |_| {},
         &mut |_, _| {},
         &ignore_link,
+        &ignore_unlistable,
     ))
+}
+
+/// A folder a walk reached that exists but could not be listed.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot list folder '{}': {source}", .path.display())]
+pub struct UnlistableFolder {
+    pub path: PathBuf,
+    #[source]
+    pub source: std::io::Error,
+}
+
+impl From<UnlistableFolder> for std::io::Error {
+    fn from(err: UnlistableFolder) -> Self {
+        std::io::Error::new(err.source.kind(), err)
+    }
+}
+
+/// The first folder, in path order, a walk could not list.
+#[derive(Default)]
+struct Unlisted(Mutex<Option<UnlistableFolder>>);
+
+impl Unlisted {
+    fn note(&self, dir: &Path, source: std::io::Error) {
+        let mut first = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if first
+            .as_ref()
+            .is_none_or(|first| dir < first.path.as_path())
+        {
+            *first = Some(UnlistableFolder {
+                path: dir.to_path_buf(),
+                source,
+            });
+        }
+    }
+
+    fn into_result(self) -> Result<(), UnlistableFolder> {
+        let first = self.0.into_inner().unwrap_or_else(PoisonError::into_inner);
+        first.map_or(Ok(()), Err)
+    }
 }
 
 /// A file a scan matched to a table: its path, the same path relative to the
@@ -70,14 +112,29 @@ fn paired(found: Vec<Found>) -> Vec<(PathBuf, String)> {
 /// The count is files *visited*, not the pairs returned: a file matching two
 /// tables' globs is one file the walk paid for, and two rows of work for the
 /// phase after it.
+///
+/// Fails naming the first folder, in path order, that exists but cannot be
+/// listed.
 pub fn scan_directory_reporting(
     root: &Path,
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
     on_link: &(dyn Fn(&Path) + Sync),
-) -> Vec<Found> {
-    scan_below(root, root, matcher, on_file, on_match, on_link)
+) -> Result<Vec<Found>, UnlistableFolder> {
+    let unlisted = Unlisted::default();
+    let found = scan_below(
+        root,
+        root,
+        matcher,
+        on_file,
+        on_match,
+        on_link,
+        &|dir, err| {
+            unlisted.note(dir, err);
+        },
+    );
+    unlisted.into_result().map(|()| found)
 }
 
 /// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
@@ -92,7 +149,7 @@ pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(Pat
 }
 
 /// [`scan_subtree`], telling `on_link` the path of each symlinked directory
-/// the walk enters.
+/// the walk enters. A folder that cannot be listed contributes nothing.
 pub fn scan_subtree_reporting(
     root: &Path,
     dir: &Path,
@@ -106,6 +163,7 @@ pub fn scan_subtree_reporting(
         &mut |_| {},
         &mut |_, _| {},
         on_link,
+        &ignore_unlistable,
     ))
 }
 
@@ -150,14 +208,21 @@ pub(crate) fn scan_dirs_linked(
             entered.push(path.to_path_buf());
         }
     };
+    let gitignore = ignore.respects_gitignore();
+    let repo = if gitignore {
+        enclosing_repo(start, &holds_git)
+    } else {
+        None
+    };
     let walker = Walk {
         ignore,
         glob: dirs_glob(ignore),
-        gitignore: false,
-        in_repo: false,
-        frames: Vec::new(),
+        gitignore,
+        in_repo: repo.is_some(),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: true,
         on_link: &on_link,
+        on_unlistable: &ignore_unlistable,
     };
     let mut walked = vec![start.to_path_buf()];
     walk(
@@ -237,6 +302,7 @@ fn scan_below(
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
     on_link: &(dyn Fn(&Path) + Sync),
+    on_unlistable: &(dyn Fn(&Path, std::io::Error) + Sync),
 ) -> Vec<Found> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
@@ -257,6 +323,7 @@ fn scan_below(
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: false,
         on_link,
+        on_unlistable,
     };
     walk(
         root,
@@ -303,12 +370,15 @@ fn scan_below(
 /// filter what lies below it, never `root` itself, so naming an ignored
 /// directory still scans it. [`scan_glob_checking_root`] lifts that for a
 /// root that is only the literal prefix of a wildcard.
+///
+/// Fails naming the first folder, in path order, that exists but cannot be
+/// listed; a missing one holds nothing.
 pub fn scan_glob(
     root: &Path,
     glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>, UnlistableFolder> {
     scan_glob_checking_root(root, glob, ignore, gitignore, false)
 }
 
@@ -321,7 +391,7 @@ pub fn scan_glob_checking_root(
     ignore: &TableMatcher,
     gitignore: bool,
     check_root: bool,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>, UnlistableFolder> {
     let mut paths = Vec::new();
     scan_glob_rows(
         root,
@@ -331,8 +401,8 @@ pub fn scan_glob_checking_root(
         check_root,
         &|rel_path| rel_path,
         &mut |rel_path| paths.push(rel_path),
-    );
-    paths
+    )?;
+    Ok(paths)
 }
 
 /// [`scan_glob_checking_root`], each matched path made into `row` on the
@@ -346,15 +416,16 @@ pub(crate) fn scan_glob_rows<T: Send>(
     check_root: bool,
     row: &(dyn Fn(PathBuf) -> T + Sync),
     visit: &mut dyn FnMut(T),
-) {
+) -> Result<(), UnlistableFolder> {
     if gitignore && check_root && !holds_git(root) && is_gitignored_path(root, true) {
-        return;
+        return Ok(());
     }
     let repo = if gitignore {
         enclosing_repo(root, &holds_git)
     } else {
         None
     };
+    let unlisted = Unlisted::default();
     let walker = Walk {
         ignore,
         glob: Some(glob),
@@ -363,6 +434,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &Frame::load)),
         dirs: false,
         on_link: &ignore_link,
+        on_unlistable: &|dir, err| unlisted.note(dir, err),
     };
     walk(
         root,
@@ -373,6 +445,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         &|rel_path, _| row(rel_path),
         visit,
     );
+    unlisted.into_result()
 }
 
 /// Whether a walked file is a row of the table: it matches the glob and no
@@ -666,8 +739,9 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// are pruned/skipped too, starting from the walker's frames: the ones in
 /// force above `start` when a repo encloses it. Inside a directory holding
 /// `.git`, its `.gitignore` files apply. Symlinks are followed only as the
-/// glob allows, and not at all without one; a broken link or an unreadable
-/// directory contributes nothing.
+/// glob allows, and not at all without one; a broken link or a missing
+/// directory contributes nothing, and one that cannot be listed is handed to
+/// the walker's `on_unlistable`.
 fn walk<L: Send>(
     root: &Path,
     start: &Path,
@@ -741,7 +815,10 @@ impl<'a> Place<'a> {
         if let Some(Part { listing, range }) = self.part.take() {
             return self.judge(&listing, &listing.entries()[range], keep_name, keep, leaf);
         }
-        let listing = Listing::read(&self.dir);
+        let listing = Listing::read(&self.dir).unwrap_or_else(|err| {
+            (self.walk.on_unlistable)(&self.dir, err);
+            Listing::default()
+        });
         if self.walk.gitignore && listing.holds(OsStr::new(".git")) && holds_git(&self.dir) {
             self.walk.in_repo = true;
             self.walk.frames.clear();
@@ -916,9 +993,13 @@ struct Walk<'a> {
     dirs: bool,
     /// Told the path of each symlinked directory the walk enters.
     on_link: &'a (dyn Fn(&Path) + Sync),
+    /// Told each directory the walk reaches that exists but cannot be listed.
+    on_unlistable: &'a (dyn Fn(&Path, std::io::Error) + Sync),
 }
 
 fn ignore_link(_: &Path) {}
+
+fn ignore_unlistable(_: &Path, _: std::io::Error) {}
 
 /// `rel.join(name)` in one allocation: the walk builds one per entry on every
 /// worker thread, and `join`'s grow-on-push contends the allocator's arenas.
@@ -1166,12 +1247,49 @@ fn should_descend(is_dir: bool, rel_path: &Path, ignore: &TableMatcher) -> bool 
 /// Whether a walk from the root enters the directory at `rel_path`: every
 /// directory on the way, itself included, survives [`should_descend`], and a
 /// table glob can still reach it.
-pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
+fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
     let mut prefix = PathBuf::new();
     rel_path.components().all(|component| {
         prefix.push(component);
         should_descend(true, &prefix, ignore)
     }) && dirs_glob(ignore).is_none_or(|glob| glob_reaches_dir(glob, rel_path))
+}
+
+/// Whether a walk from `root` enters `dir`: [`reaches_dir`], and, under a
+/// matcher honoring `.gitignore`, no directory on the way is one the
+/// `.gitignore` files in force there ignore and no table glob spells.
+pub(crate) fn enters_dir(root: &Path, dir: &Path, ignore: &TableMatcher) -> bool {
+    let Ok(rel_path) = dir.strip_prefix(root) else {
+        return false;
+    };
+    reaches_dir(rel_path, ignore)
+        && !(ignore.respects_gitignore()
+            && gitignore_hides(rel_path, dirs_glob(ignore), &|prefix| {
+                is_gitignored_dir(&root.join(prefix))
+            }))
+}
+
+/// Whether some directory on the way to `rel_path`, itself included, is one
+/// `is_ignored` reports and `glob` does not spell.
+fn gitignore_hides(
+    rel_path: &Path,
+    glob: Option<&PathGlob>,
+    is_ignored: &dyn Fn(&Path) -> bool,
+) -> bool {
+    let mut prefix = PathBuf::new();
+    rel_path.components().any(|component| {
+        prefix.push(component);
+        !glob.is_some_and(|glob| glob.names(&prefix)) && is_ignored(&prefix)
+    })
+}
+
+/// Whether the `.gitignore` files in force in the directory holding `dir`
+/// ignore it, as the walk judges an entry: only `dir` itself is matched, its
+/// parents having been judged on the way.
+fn is_gitignored_dir(dir: &Path) -> bool {
+    dir.parent()
+        .and_then(|parent| enclosing_repo(parent, &holds_git))
+        .is_some_and(|top| is_gitignored(&gitignores_above(dir, top, &Frame::load), dir, true))
 }
 
 /// Whether some component of `glob` can enter the directory at `rel_path`.
@@ -1213,7 +1331,8 @@ mod tests {
             &mut |count| counts.push(count),
             &mut |_, _| {},
             &ignore_link,
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             rows,
@@ -1712,6 +1831,102 @@ mod tests {
     }
 
     #[test]
+    fn gitignore_hides_a_directory_below_an_ignored_one_on_the_way() {
+        let is_ignored = |prefix: &Path| prefix == Path::new("build");
+        assert!(gitignore_hides(Path::new("build"), None, &is_ignored));
+        assert!(gitignore_hides(Path::new("build/sub"), None, &is_ignored));
+        assert!(!gitignore_hides(Path::new("docs/build"), None, &is_ignored));
+        assert!(!gitignore_hides(Path::new(""), None, &is_ignored));
+    }
+
+    #[test]
+    fn gitignore_hides_no_directory_a_glob_spells() {
+        let glob = compile_glob("build/x.md").unwrap();
+        let is_ignored = |prefix: &Path| prefix.starts_with("build");
+        assert!(!gitignore_hides(
+            Path::new("build"),
+            Some(&glob),
+            &is_ignored
+        ));
+        assert!(gitignore_hides(
+            Path::new("build/sub"),
+            Some(&glob),
+            &is_ignored
+        ));
+    }
+
+    fn repo_ignoring_build() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::write(root.path().join(".gitignore"), "build/\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn enters_dir_skips_a_gitignored_directory_and_below_it() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("**/*.md", "t")], &[])
+            .unwrap()
+            .with_gitignore(true);
+        assert!(enters_dir(
+            root.path(),
+            &root.path().join("docs/sub"),
+            &matcher
+        ));
+        assert!(!enters_dir(
+            root.path(),
+            &root.path().join("build"),
+            &matcher
+        ));
+        assert!(!enters_dir(
+            root.path(),
+            &root.path().join("build/sub"),
+            &matcher
+        ));
+    }
+
+    #[test]
+    fn enters_dir_enters_a_gitignored_directory_a_glob_spells() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("build/x.md", "t")], &[])
+            .unwrap()
+            .with_gitignore(true);
+        assert!(enters_dir(
+            root.path(),
+            &root.path().join("build"),
+            &matcher
+        ));
+    }
+
+    #[test]
+    fn enters_dir_enters_a_gitignored_directory_when_gitignore_is_off() {
+        let root = repo_ignoring_build();
+        let matcher = TableMatcher::new(&[("**/*.md", "t")], &[]).unwrap();
+        assert!(enters_dir(
+            root.path(),
+            &root.path().join("build"),
+            &matcher
+        ));
+    }
+
+    #[test]
+    fn enters_dir_is_false_outside_the_root() {
+        let matcher = TableMatcher::new(&[], &[]).unwrap();
+        assert!(!enters_dir(
+            Path::new("/r"),
+            Path::new("/elsewhere"),
+            &matcher
+        ));
+    }
+
+    #[test]
+    fn is_gitignored_dir_is_false_outside_any_repo() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(".gitignore"), "build/\n").unwrap();
+        assert!(!is_gitignored_dir(&root.path().join("build")));
+    }
+
+    #[test]
     fn is_glob_match_accepts_a_matching_relative_path() {
         let set = compile_glob("docs/**/*.md").unwrap();
         assert!(is_glob_match(&set, Path::new("docs/a.md")));
@@ -1946,6 +2161,7 @@ mod tests {
             frames,
             dirs: false,
             on_link: &ignore_link,
+            on_unlistable: &ignore_unlistable,
         }
     }
 
@@ -2273,6 +2489,7 @@ mod tests {
             frames: Vec::new(),
             dirs: false,
             on_link: &ignore_link,
+            on_unlistable: &ignore_unlistable,
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
@@ -2291,6 +2508,7 @@ mod tests {
             frames: Vec::new(),
             dirs: false,
             on_link: &ignore_link,
+            on_unlistable: &ignore_unlistable,
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
         assert!(!walk.follows(false, &[2], Kind::Dir));
@@ -2309,6 +2527,7 @@ mod tests {
             frames: Vec::new(),
             dirs: false,
             on_link: &ignore_link,
+            on_unlistable: &ignore_unlistable,
         };
         assert!(walk.follows(false, &[], Kind::Dir));
     }
@@ -2363,8 +2582,9 @@ mod tests {
         fs::write(repo.path().join("dist/out.log"), "").unwrap();
         fs::write(repo.path().join("a.log"), "").unwrap();
         let none = TableMatcher::new(&[], &[]).unwrap();
-        let scan =
-            |pattern: &str| scan_glob(repo.path(), &compile_glob(pattern).unwrap(), &none, true);
+        let scan = |pattern: &str| {
+            scan_glob(repo.path(), &compile_glob(pattern).unwrap(), &none, true).unwrap()
+        };
 
         assert_eq!(scan("a.log"), vec![PathBuf::from("a.log")]);
         assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
@@ -2406,7 +2626,7 @@ mod tests {
         let none = TableMatcher::new(&[], &[]).unwrap();
         let glob = compile_glob("*").unwrap();
         let scan = |dir: &str, check_root: bool| {
-            scan_glob_checking_root(&repo.path().join(dir), &glob, &none, true, check_root)
+            scan_glob_checking_root(&repo.path().join(dir), &glob, &none, true, check_root).unwrap()
         };
 
         assert!(scan("dist", true).is_empty());
@@ -2426,7 +2646,7 @@ mod tests {
         let glob = compile_glob("*.js").unwrap();
 
         assert_eq!(
-            scan_glob_checking_root(&repo.path().join("src"), &glob, &none, true, true),
+            scan_glob_checking_root(&repo.path().join("src"), &glob, &none, true, true).unwrap(),
             vec![PathBuf::from("a.js")]
         );
     }
@@ -2442,7 +2662,7 @@ mod tests {
         let glob = compile_glob("*.js").unwrap();
 
         assert_eq!(
-            scan_glob_checking_root(&outer.path().join("inner"), &glob, &none, true, true),
+            scan_glob_checking_root(&outer.path().join("inner"), &glob, &none, true, true).unwrap(),
             vec![PathBuf::from("a.js")]
         );
     }
@@ -2496,9 +2716,10 @@ mod tests {
                 rel
             },
             &mut |row| rows.push(row),
-        );
+        )
+        .unwrap();
 
-        assert_eq!(rows, scan_glob(dir.path(), &glob, &none, false));
+        assert_eq!(rows, scan_glob(dir.path(), &glob, &none, false).unwrap());
         assert!(
             overlapped.load(Ordering::SeqCst),
             "rows were made one at a time"
@@ -2523,10 +2744,11 @@ mod tests {
             false,
             &|rel| (MADE_ON.with(|on| std::ptr::from_ref(on).addr()), rel),
             &mut |row| rows.push(row),
-        );
+        )
+        .unwrap();
 
         let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
-        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
+        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false).unwrap());
         let threads: std::collections::HashSet<_> =
             rows.iter().map(|(made_on, _)| made_on).collect();
         assert!(threads.len() > 1, "every row was made on one thread");
@@ -2568,7 +2790,8 @@ mod tests {
                 *lock.lock().unwrap() = true;
                 changed.notify_all();
             },
-        );
+        )
+        .unwrap();
 
         assert!(
             last_made_after.load(Ordering::SeqCst),

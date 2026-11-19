@@ -162,6 +162,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `gitignore` | Inside a git repo, `.gitignore` files hide files and directories a wildcard matches, never one the pattern spells out. `--no-ignore` turns it off. | A query over a repo should not drown in build output. |
 | `directory-name` | A pattern's last component that names a directory lists the files directly inside it, like `ls docs`. A trailing `/` is `*` appended. | A table is rows of files, and `ls` is the shell habit. |
 | `files-only` | A pattern that matches a directory but no file returns nothing. | Every row is a file. |
+| `unlistable` | A folder the pattern reaches that exists but cannot be listed is an error naming it: a config table fails its build and a parsed path-table its query. Bash skips it silently. A folder that does not exist still holds nothing. | An empty result that is really a failed read looks like a true answer. |
 
 `.git` needs no rule of its own: the dotfile rule hides it.
 
