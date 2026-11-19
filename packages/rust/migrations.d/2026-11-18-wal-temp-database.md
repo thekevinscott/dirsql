@@ -1,8 +1,8 @@
-### The default index database is a temp file
+### `Db::promote()` and `Db::reader()`
 
 #### Summary
 
-The default (non-persisted) index now lives in a named file, `dirsql-<pid>-<n>.db`, in SQLite's temp directory instead of an anonymous temp database, and is deleted on shutdown. It switches to WAL mode once a second connection opens it with `Db::reader()`. Nothing breaks.
+`Db::promote()` moves the default anonymous index database into a temp file, `dirsql-<pid>-<n>.db`, in WAL mode, and `Db::reader()` opens another connection to it that reads while the writer writes. Nothing calls `promote()` yet. Nothing breaks.
 
 #### Required changes
 
@@ -14,8 +14,8 @@ _None._
 
 #### Behavior changes without code changes
 
-While dirsql runs, `dirsql-<pid>-<n>.db` and its `-journal`, `-wal` or `-shm` files exist in the temp directory (`SQLITE_TMPDIR`, then `TMPDIR`, then `/var/tmp`, `/usr/tmp`, `/tmp`). A process killed before shutdown (for example by `SIGKILL`) leaves them there.
+_None._ A promoted database's `dirsql-<pid>-<n>.db` and its `-journal`, `-wal` or `-shm` files sit in the temp directory (`SQLITE_TMPDIR`, then `TMPDIR`, then `/var/tmp`, `/usr/tmp`, `/tmp`) until its last connection closes; a process killed before that (for example by `SIGKILL`) leaves them there.
 
 #### Verification
 
-`ls "${SQLITE_TMPDIR:-${TMPDIR:-/var/tmp}}"/dirsql-*.db` while a dirsql server runs lists its database; after it exits cleanly, the files are gone.
+Call `Db::reader()` on a `Db::new()` database: it returns `DbError::Anonymous`. After `db.promote()`, it returns a reader that sees the writer's commits.

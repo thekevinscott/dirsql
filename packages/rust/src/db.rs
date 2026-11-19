@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use rusqlite::backup::Backup;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
@@ -6,6 +7,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 
 use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
@@ -656,8 +658,24 @@ impl Db {
         Self::with_connection(conn, None, None)
     }
 
-    /// Move an anonymous database into a file other connections can open.
+    /// Move an anonymous database into a file other connections can open:
+    /// copy it into a new WAL-mode file in SQLite's temp directory (the
+    /// order above; `std::env::temp_dir()` on Windows) and make that file
+    /// this `Db`'s connection, keeping its path-table settings, extensions
+    /// and declared functions. The file and its `-journal`, `-wal` and
+    /// `-shm` companions are deleted once the last connection to it drops;
+    /// a crash leaves them behind. A database that already has a file is
+    /// left as it is.
     pub fn promote(&mut self) -> Result<()> {
+        if self.path.is_some() {
+            return Ok(());
+        }
+        let file = Arc::new(TempDbFile::create()?);
+        let mut conn = open_temp_connection(file.path())?;
+        conn.pragma_update(None, "synchronous", "OFF")?;
+        Backup::new(&self.conn, &mut conn)?.run_to_completion(i32::MAX, Duration::ZERO, None)?;
+        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        *self = self.sibling(conn, Some(file.path().to_path_buf()), Some(file))?;
         Ok(())
     }
 
