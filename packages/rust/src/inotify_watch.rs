@@ -1,7 +1,8 @@
 #[cfg(test)]
 use crate::watcher::WatchFault;
 use crate::watcher::{
-    FileEvent, WatchScope, tolerate_missing, walk_scope, watch_new_tree, watch_tree,
+    FileEvent, WatchScope, gitignore_dir, tolerate_missing, walk_scope, watch_new_tree, watch_tree,
+    watch_unignored,
 };
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -65,10 +66,7 @@ impl Watcher {
         Self::scoped(
             paths
                 .iter()
-                .map(|root| WatchScope {
-                    root: root.clone(),
-                    ignore: everything.clone(),
-                })
+                .map(|root| WatchScope::new(root.clone(), everything.clone()))
                 .collect(),
         )
     }
@@ -194,7 +192,11 @@ impl Source for Reader {
                         let _ = watches.clone().remove(wd);
                     },
                 );
+                let unignored = dirs.unignored(scopes, &walk_scope, found.as_ref(), &mut |dir| {
+                    add_watch_with(&watches, dir)
+                });
                 queued.extend(found);
+                queued.extend(unignored);
             }
         }
     }
@@ -313,6 +315,27 @@ impl<W: Eq + Hash + Clone> Dirs<W> {
         }
     }
 
+    /// After `event`, the directories a `.gitignore` it names brought into the
+    /// walk, watched and reported as created.
+    fn unignored(
+        &mut self,
+        scopes: &[WatchScope],
+        walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
+        event: Option<&FileEvent>,
+        add: &mut dyn FnMut(&Path) -> Result<W, notify::Error>,
+    ) -> Vec<FileEvent> {
+        let Some(FileEvent::Created(path) | FileEvent::Deleted(path)) = event else {
+            return Vec::new();
+        };
+        if gitignore_dir(path).is_none() {
+            return Vec::new();
+        }
+        let watched = self.paths.values().cloned().collect();
+        watch_unignored(scopes, path, walk, &watched, &mut |dir| {
+            self.watch(dir, add)
+        })
+    }
+
     /// The event one inotify event amounts to, after watching any directory
     /// it brings into the tree and unwatching any it takes out.
     #[allow(clippy::too_many_arguments)]
@@ -389,10 +412,10 @@ fn os_error(raw_os_error: i32) -> io::Error {
 
 #[cfg(test)]
 fn everything(root: &str) -> WatchScope {
-    WatchScope {
-        root: PathBuf::from(root),
-        ignore: crate::matcher::TableMatcher::new(&[], &[]).unwrap(),
-    }
+    WatchScope::new(
+        PathBuf::from(root),
+        crate::matcher::TableMatcher::new(&[], &[]).unwrap(),
+    )
 }
 
 #[cfg(test)]
@@ -653,6 +676,42 @@ mod tests {
             step_failing(2),
             Some(FileEvent::Created(PathBuf::from("/r/d")))
         );
+    }
+
+    fn unignored(event: Option<FileEvent>) -> (Vec<FileEvent>, Dirs<u32>) {
+        let mut dirs = watching(&[(1, "/r")]);
+        let mut next = 100;
+        let events = dirs.unignored(
+            &[everything("/r")],
+            &|_, dir| vec![dir.to_path_buf(), dir.join("build")],
+            event.as_ref(),
+            &mut |_| {
+                next += 1;
+                Ok(next)
+            },
+        );
+        (events, dirs)
+    }
+
+    #[test]
+    fn unignored_watches_and_reports_a_directory_a_changed_gitignore_brings_in() {
+        for event in [
+            FileEvent::Created(PathBuf::from("/r/.gitignore")),
+            FileEvent::Deleted(PathBuf::from("/r/.gitignore")),
+        ] {
+            let (events, dirs) = unignored(Some(event));
+            assert_eq!(events, vec![FileEvent::Created(PathBuf::from("/r/build"))]);
+            assert_eq!(dirs.paths.get(&101), Some(&PathBuf::from("/r/build")));
+        }
+    }
+
+    #[test]
+    fn unignored_does_nothing_without_a_created_or_deleted_path() {
+        for event in [None, Some(FileEvent::Rescan)] {
+            let (events, dirs) = unignored(event);
+            assert!(events.is_empty());
+            assert_eq!(dirs.paths.len(), 1);
+        }
     }
 
     #[test]

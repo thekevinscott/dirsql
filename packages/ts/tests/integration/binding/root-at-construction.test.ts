@@ -45,4 +45,13 @@ describe("root at construction", () => {
       { path: "a.json" },
     ]);
   });
+
+  it("rejects a root that does not exist, naming it", async () => {
+    const missing = join(dir, "absent");
+    const db = new DirSQL({ root: missing });
+
+    await expect(db.ready).rejects.toThrow(
+      `root directory ${missing} does not exist`,
+    );
+  });
 });

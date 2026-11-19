@@ -10,7 +10,8 @@
 //!   reference) so it can be handed to [`dirsql::Table`]
 //! - converts row values and events between Rust and the napi shapes exposed
 //!   to JS (BLOB columns cross as Node `Buffer`s via [`JsRowValue`])
-//! - forwards `openAsync` / `query` / `startWatcher` / `pollEvents` to the
+//! - forwards `openAsync` / `query` / `startWatcher` / `stopWatcher` /
+//!   `pollEvents` to the
 //!   corresponding `DirSQL` methods
 //!
 //! `openAsync` is the single construction entry point. It accepts an optional
@@ -232,21 +233,6 @@ pub struct ExtensionSpec {
     pub entrypoint: Option<String>,
 }
 
-/// One file the initial scan could not index, with the hook's own error.
-///
-/// A scan failure is not a scan *error*: the other files are indexed and the
-/// database is usable. This is how a caller learns the index is incomplete,
-/// and which files are missing from it.
-///
-/// Output-only (`object_from_js = false`): JS never constructs one.
-#[napi(object, object_from_js = false)]
-pub struct ScanFailure {
-    /// Path relative to the scan root.
-    pub path: String,
-    /// The hook's error, as it rendered it.
-    pub message: String,
-}
-
 /// The main DirSQL class. Creates an ephemeral SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
@@ -287,6 +273,7 @@ impl DirSQL {
         extensions: Option<Vec<ExtensionSpec>>,
         suppress_config_extensions: Option<bool>,
         no_ignore: Option<bool>,
+        watch: Option<bool>,
     ) -> Result<AsyncTask<OpenTask>> {
         let rust_tables = match tables {
             Some(ts) => parse_tables_from_js(env, ts)?,
@@ -314,6 +301,7 @@ impl DirSQL {
             extensions: rust_extensions,
             suppress_config_extensions: suppress_config_extensions.unwrap_or(false),
             no_ignore: no_ignore.unwrap_or(false),
+            no_watch: !watch.unwrap_or(true),
             os_code: None,
         }))
     }
@@ -381,6 +369,16 @@ impl DirSQL {
         inner.attach_poll().map_err(to_napi_err)
     }
 
+    /// Undo startWatcher: the events waiting for pollEvents are dropped, and
+    /// none are kept until the next attach. A closed instance holds none.
+    #[napi(js_name = "stopWatcher")]
+    pub fn stop_watcher(&self) -> Result<()> {
+        match self.inner.borrow().as_ref() {
+            Some(inner) => inner.detach_poll().map_err(to_napi_err),
+            None => Ok(()),
+        }
+    }
+
     /// Poll for file events with a timeout (in milliseconds).
     /// Returns an array of RowEvent objects, possibly empty.
     ///
@@ -390,29 +388,6 @@ impl DirSQL {
     pub fn poll_events(&self, timeout_ms: u32) -> AsyncTask<PollEventsTask> {
         let inner = self.inner.borrow().as_ref().cloned();
         AsyncTask::new(PollEventsTask { inner, timeout_ms })
-    }
-
-    /// The files the initial scan could not index. Empty after a clean scan.
-    ///
-    /// Reads an in-memory list the scan already produced, so unlike the other
-    /// methods here it needs no threadpool hop and returns synchronously; the
-    /// public wrapper is what makes it a `Promise`, so that it can await the
-    /// scan first.
-    #[napi(js_name = "scanFailures")]
-    pub fn scan_failures(&self) -> Vec<ScanFailure> {
-        self.inner
-            .borrow()
-            .as_ref()
-            .map(|db| {
-                db.scan_failures()
-                    .iter()
-                    .map(|f| ScanFailure {
-                        path: f.path.clone(),
-                        message: f.message.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Explicitly close the database connection. Called for cleanup or to
@@ -448,6 +423,7 @@ pub struct OpenTask {
     extensions: Vec<Extension>,
     suppress_config_extensions: bool,
     no_ignore: bool,
+    no_watch: bool,
     os_code: Option<&'static str>,
 }
 
@@ -467,7 +443,8 @@ impl Task for OpenTask {
             .ignore(ignore)
             .extensions(extensions)
             .suppress_config_extensions(self.suppress_config_extensions)
-            .no_ignore(self.no_ignore);
+            .no_ignore(self.no_ignore)
+            .no_watch(self.no_watch);
         if let Some(root) = self.root.take() {
             builder = builder.root(root);
         }
@@ -783,8 +760,26 @@ impl FnRef {
         Ok(result)
     }
 
-    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    /// [`Self::call_on_file_unscoped`] inside a handle scope of its own. A
+    /// build calls onFile once per file from a single native frame, so without
+    /// it every call's path and rows stay reachable until the build returns.
+    #[expect(unsafe_code, reason = "raw napi_sys handle scope")]
     unsafe fn call_on_file(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
+        let env = self.raw_env;
+        let mut scope = std::ptr::null_mut();
+        if napi::sys::napi_open_handle_scope(env, &mut scope) != napi::sys::Status::napi_ok {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to open handle scope",
+            ));
+        }
+        let rows = self.call_on_file_unscoped(abs_path);
+        napi::sys::napi_close_handle_scope(env, scope);
+        rows
+    }
+
+    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    unsafe fn call_on_file_unscoped(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 

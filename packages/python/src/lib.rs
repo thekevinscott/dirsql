@@ -4,7 +4,8 @@
 //! - wraps a Python `on_file` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
-//! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
+//! - forwards `new` / `query` / `_start_watcher` / `_stop_watcher` /
+//!   `_poll_events` to the
 //!   corresponding `DirSQL` methods
 //!
 //! The Python-side async wrapper (`dirsql._async.DirSQL`) drives this binding
@@ -98,31 +99,6 @@ mod python {
         }
     }
 
-    /// One file the initial scan could not index, with the hook's own error.
-    ///
-    /// A scan failure is not a scan *error*: the other files are indexed and
-    /// the database is usable. This is how a caller learns the index is
-    /// incomplete, and which files are missing from it.
-    #[pyclass(name = "ScanFailure", frozen)]
-    struct PyScanFailure {
-        /// Path relative to the scan root.
-        #[pyo3(get)]
-        path: String,
-        /// The hook's error, as it rendered it.
-        #[pyo3(get)]
-        message: String,
-    }
-
-    #[pymethods]
-    impl PyScanFailure {
-        fn __repr__(&self) -> String {
-            format!(
-                "ScanFailure(path={:?}, message={:?})",
-                self.path, self.message
-            )
-        }
-    }
-
     /// Synchronous binding class. `dirsql._async.DirSQL` wraps it with
     /// `asyncio.to_thread` to produce the async public API.
     #[pyclass(name = "DirSQL")]
@@ -138,7 +114,7 @@ mod python {
         /// which the core lacks) and passing the resolved literal paths via
         /// `extensions`, so the entries are not loaded twice.
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, no_ignore=false, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, no_ignore=false, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false, watch=true))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
@@ -150,6 +126,7 @@ mod python {
             persist_path: Option<PathBuf>,
             extensions: Option<Vec<PyExtensionSpec>>,
             suppress_config_extensions: bool,
+            watch: bool,
         ) -> PyResult<Self> {
             let rust_tables: Vec<Table> = tables
                 .as_deref()
@@ -177,7 +154,7 @@ mod python {
                     if let Some(ig) = ignore {
                         builder = builder.ignore(ig);
                     }
-                    builder = builder.no_ignore(no_ignore);
+                    builder = builder.no_ignore(no_ignore).no_watch(!watch);
                     for c in config.into_iter().flatten() {
                         builder = builder.config(c);
                     }
@@ -216,20 +193,14 @@ mod python {
             Ok(list.unbind())
         }
 
-        fn scan_failures(&self) -> Vec<PyScanFailure> {
-            self.inner
-                .scan_failures()
-                .iter()
-                .map(|f| PyScanFailure {
-                    path: f.path.clone(),
-                    message: f.message.clone(),
-                })
-                .collect()
-        }
-
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
             let db = self.inner.clone();
             py.detach(move || db.attach_poll()).map_err(to_py_err)
+        }
+
+        fn _stop_watcher(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.detach_poll()).map_err(to_py_err)
         }
 
         fn _lock(&self, py: Python<'_>) -> PyResult<()> {
@@ -609,7 +580,6 @@ mod python {
         m.add_class::<PyTable>()?;
         m.add_class::<PyDirSQL>()?;
         m.add_class::<PyRowEvent>()?;
-        m.add_class::<PyScanFailure>()?;
         m.add_function(wrap_pyfunction!(run_cli, m)?)?;
         m.add_function(wrap_pyfunction!(config_paths_from_argv, m)?)?;
         m.add_function(wrap_pyfunction!(plan_config_extensions, m)?)?;

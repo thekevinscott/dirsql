@@ -52,12 +52,12 @@ describe("CoreModule contract", () => {
 });
 
 describe("NativeDirSQLConstructor contract", () => {
-  it("accepts extensions, suppressConfigExtensions, and noIgnore as openAsync's trailing arguments (#230 / #313 / #746)", () => {
+  it("accepts extensions, suppressConfigExtensions, noIgnore, and watch as openAsync's trailing arguments", () => {
     const openAsync = vi.fn().mockResolvedValue({});
     const ctor = { openAsync } as unknown as NativeDirSQLConstructor;
-    // Typed against the real interface: dropping the 7th, 8th, or 9th
+    // Typed against the real interface: dropping the 7th to 10th
     // argument would fail to compile, so this call pins the extensions,
-    // suppressConfigExtensions, and noIgnore parameters into the contract
+    // suppressConfigExtensions, noIgnore, and watch parameters into the contract
     // the `DirSQL` wrapper relies on.
     ctor.openAsync(
       "/r",
@@ -69,6 +69,7 @@ describe("NativeDirSQLConstructor contract", () => {
       [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
       true,
       true,
+      false,
     );
     expect(openAsync).toHaveBeenCalledWith(
       "/r",
@@ -80,6 +81,7 @@ describe("NativeDirSQLConstructor contract", () => {
       [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
       true,
       true,
+      false,
     );
   });
 
@@ -98,6 +100,7 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
       null,
+      null,
     );
     expect(openAsync).toHaveBeenCalledWith(
       "/r",
@@ -109,30 +112,12 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
       null,
+      null,
     );
   });
 });
 
 describe("NativeDirSQL interface", () => {
-  it("includes a synchronous scanFailures() (#715)", () => {
-    // Synchronous by design: it reads a list the scan already produced, so it
-    // needs no threadpool hop. A `Promise`-returning shape here would be a
-    // real defect -- the wrapper awaits `ready` and then returns this value
-    // directly, so a thenable would leak into the caller's array.
-    const failures = [{ path: "bad.json", message: "boom" }];
-    const instance = {
-      query: vi.fn().mockResolvedValue([]),
-      startWatcher: vi.fn(),
-      pollEvents: vi.fn().mockResolvedValue([]),
-      scanFailures: vi.fn(() => failures),
-      close: vi.fn(),
-    } as unknown as NativeDirSQL;
-
-    const result = instance.scanFailures();
-    expect(result).toEqual(failures);
-    expect(result).not.toBeInstanceOf(Promise);
-  });
-
   it("includes queryOrdered() resolving to columns plus rows", async () => {
     const result = { columns: ["b", "a"], rows: [{ a: 1, b: 2 }] };
     const queryOrdered: NativeDirSQL["queryOrdered"] = vi
@@ -163,5 +148,11 @@ describe("NativeDirSQL interface", () => {
     // that the method exists and is callable.
     instance.close();
     expect(instance.close).toHaveBeenCalledOnce();
+  });
+
+  it("includes a synchronous stopWatcher() beside startWatcher()", () => {
+    const stopWatcher: NativeDirSQL["stopWatcher"] = vi.fn();
+    expect(stopWatcher()).toBeUndefined();
+    expect(stopWatcher).toHaveBeenCalledOnce();
   });
 });

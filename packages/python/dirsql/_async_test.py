@@ -1,6 +1,7 @@
 """Unit tests for the DirSQL async wrapper."""
 
 import asyncio
+import gc
 import os
 import threading
 import weakref
@@ -24,6 +25,7 @@ class _FakeRustDirSQL:
         persist_path=None,
         extensions=None,
         suppress_config_extensions=False,
+        watch=True,
     ):
         self.root = root
         self.tables = tables
@@ -34,31 +36,36 @@ class _FakeRustDirSQL:
         self.persist_path = persist_path
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
+        self.watch = watch
         self.query_calls = []
         self.query_params = []
-        self.scan_failures_value = []
         self.watchers_started = 0
+        self.watchers_stopped = 0
 
     def _start_watcher(self):
         self.watchers_started += 1
+
+    def _stop_watcher(self):
+        self.watchers_stopped += 1
 
     def query(self, sql, params=None):
         self.query_calls.append(sql)
         self.query_params.append(params)
         return [{"sql": sql}]
 
-    def scan_failures(self):
-        return self.scan_failures_value
-
 
 class _FakeWatcherDb:
     def __init__(self, events):
         self.events = list(events)
         self.started = 0
+        self.stopped = 0
         self.poll_calls = []
 
     def _start_watcher(self):
         self.started += 1
+
+    def _stop_watcher(self):
+        self.stopped += 1
 
     def _poll_events(self, timeout_ms):
         self.poll_calls.append(timeout_ms)
@@ -67,12 +74,35 @@ class _FakeWatcherDb:
         return []
 
 
-class _Failure:
-    """Stand-in for the core's ScanFailure; the wrapper only passes it along."""
+class _HeldPollDb(_FakeWatcherDb):
+    """A watcher whose poll does not return until ``release`` is set."""
 
-    def __init__(self, path, message):
-        self.path = path
-        self.message = message
+    def __init__(self, events):
+        super().__init__(events)
+        self.release = threading.Event()
+
+    def _poll_events(self, timeout_ms):
+        self.release.wait()
+        return super()._poll_events(timeout_ms)
+
+
+class _HeldStartDb(_FakeWatcherDb):
+    """A watcher whose start does not return until ``release`` is set."""
+
+    def __init__(self, events):
+        super().__init__(events)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def _start_watcher(self):
+        self.entered.set()
+        self.release.wait()
+        super()._start_watcher()
+
+
+async def _until(condition):
+    while not condition():
+        await asyncio.sleep(0)
 
 
 class _ReadyOwner:
@@ -116,10 +146,8 @@ def describe_DirSQL_async():
                 assert db._db.root == os.path.abspath("/tmp/root")
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
-                # Programmatic entries resolve against the cwd and keep
-                # relative paths relative (unlike config-file entries).
                 resolver.assert_called_once_with(
-                    "ext/a.so", base=os.getcwd(), resolve_relative=False
+                    "ext/a.so", base=os.getcwd(), resolve_relative=True
                 )
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
@@ -151,27 +179,6 @@ def describe_DirSQL_async():
                 await db.ready()
 
                 assert db._db.no_ignore is False
-
-        @pytest.mark.asyncio
-        async def it_awaits_ready_then_forwards_scan_failures():
-            # Awaiting ready first is the point: reading before the scan
-            # finishes would report an empty list for a scan that had simply
-            # not reached the failing file yet.
-            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-                db = async_mod.DirSQL("/tmp/root")
-                await db.ready()
-                db._db.scan_failures_value = [_Failure("bad.json", "boom")]
-
-                (failure,) = await db.scan_failures()
-
-                assert failure.path == "bad.json"
-                assert failure.message == "boom"
-
-        @pytest.mark.asyncio
-        async def it_reports_no_scan_failures_for_a_clean_scan():
-            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-                db = async_mod.DirSQL("/tmp/root")
-                assert await db.scan_failures() == []
 
         @pytest.mark.asyncio
         async def it_passes_no_extensions_through_unresolved():
@@ -448,6 +455,234 @@ def describe_DirSQL_async():
             assert await kept.__anext__() == "event-a"
             assert list(owner._watch_streams) == [kept]
 
+        @pytest.mark.asyncio
+        async def it_raises_the_error_of_a_failed_poll():
+            class _BoomDb(_FakeWatcherDb):
+                def _poll_events(self, timeout_ms):
+                    raise RuntimeError("poll failed")
+
+            stream = async_mod._WatchStream(_ReadyOwner(_BoomDb(events=[])))
+
+            with pytest.raises(RuntimeError, match="poll failed"):
+                await stream.__anext__()
+
+    def describe_dropped_stream():
+        @pytest.mark.asyncio
+        async def it_stops_the_core_when_the_last_stream_is_dropped():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            await stream.__anext__()
+
+            del stream
+            gc.collect()
+
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_leaves_the_core_alone_at_interpreter_exit():
+            stream = async_mod._WatchStream(_ReadyOwner(_FakeWatcherDb(events=[])))
+
+            assert stream._dropped.atexit is False
+
+        @pytest.mark.asyncio
+        async def it_keeps_the_core_attached_while_another_stream_lives():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            kept = async_mod._WatchStream(owner)
+            dropped = async_mod._WatchStream(owner)
+            await dropped.__anext__()
+
+            del dropped
+            gc.collect()
+
+            assert fake_db.stopped == 0
+            assert await kept.__anext__() == "event-a"
+
+        @pytest.mark.asyncio
+        async def it_leaves_the_stop_to_a_poll_in_flight():
+            fake_db = _HeldPollDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            stream = async_mod._WatchStream(owner)
+            waiting = asyncio.ensure_future(stream.__anext__())
+            await _until(lambda: owner._watch_poll is not None)
+            waiting.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting
+
+            del stream, waiting
+            gc.collect()
+            stopped_under_the_poll = fake_db.stopped
+            fake_db.release.set()
+            await owner._watch_poll
+
+            assert stopped_under_the_poll == 0
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_has_nothing_to_stop_before_the_core_is_built():
+            class _UnbuiltOwner:
+                _db = None
+                _watch_poll = None
+
+                def __init__(self):
+                    self._watch_streams = weakref.WeakSet()
+
+            owner = _UnbuiltOwner()
+            stream = async_mod._WatchStream(owner)
+
+            del stream
+            gc.collect()
+
+            assert list(owner._watch_streams) == []
+
+    def describe_aclose():
+        @pytest.mark.asyncio
+        async def it_ends_iteration():
+            fake_db = _FakeWatcherDb(events=[["event-a", "event-b"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            assert await stream.__anext__() == "event-a"
+
+            await stream.aclose()
+
+            with pytest.raises(StopAsyncIteration):
+                await stream.__anext__()
+            assert fake_db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_releases_the_buffer():
+            fake_db = _FakeWatcherDb(events=[["event-a", "event-b"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            await stream.__anext__()
+            assert stream._buffer == ["event-b"]
+
+            await stream.aclose()
+
+            assert stream._buffer == []
+
+        @pytest.mark.asyncio
+        async def it_stops_the_core_when_the_last_stream_closes():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            first = async_mod._WatchStream(owner)
+            second = async_mod._WatchStream(owner)
+            await first.__anext__()
+
+            await first.aclose()
+            assert fake_db.stopped == 0
+            assert list(owner._watch_streams) == [second]
+
+            await second.aclose()
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_stops_feeding_a_closed_stream():
+            fake_db = _FakeWatcherDb(events=[["event-a"], ["event-b"]])
+            owner = _ReadyOwner(fake_db)
+            closed = async_mod._WatchStream(owner)
+            kept = async_mod._WatchStream(owner)
+            await closed.__anext__()
+            await closed.aclose()
+            await kept.__anext__()
+
+            assert await kept.__anext__() == "event-b"
+            assert closed._buffer == []
+
+        @pytest.mark.asyncio
+        async def it_can_be_closed_twice():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            await stream.__anext__()
+
+            await stream.aclose()
+            await stream.aclose()
+
+            with pytest.raises(StopAsyncIteration):
+                await stream.__anext__()
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_leaves_nothing_to_stop_when_a_closed_stream_is_dropped():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            await stream.aclose()
+
+            del stream
+            gc.collect()
+
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_never_starts_the_watcher_for_a_stream_closed_unread():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+
+            await stream.aclose()
+
+            with pytest.raises(StopAsyncIteration):
+                await stream.__anext__()
+            assert fake_db.started == 0
+            assert fake_db.poll_calls == []
+
+        @pytest.mark.asyncio
+        async def it_wakes_a_consumer_waiting_in_another_task():
+            fake_db = _HeldPollDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            stream = async_mod._WatchStream(owner)
+            waiting = asyncio.ensure_future(stream.__anext__())
+
+            try:
+                await _until(lambda: stream._waiter is not None)
+                await stream.aclose()
+                with pytest.raises(StopAsyncIteration):
+                    await waiting
+                stopped_under_the_poll = fake_db.stopped
+            finally:
+                fake_db.release.set()
+            await owner._watch_poll
+
+            assert stopped_under_the_poll == 0
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_stops_the_core_again_when_closed_while_the_watcher_starts():
+            fake_db = _HeldStartDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+            starting = asyncio.ensure_future(stream.__anext__())
+            await _until(fake_db.entered.is_set)
+
+            try:
+                await stream.aclose()
+                stopped_on_close = fake_db.stopped
+            finally:
+                fake_db.release.set()
+
+            with pytest.raises(StopAsyncIteration):
+                await starting
+            assert stopped_on_close == 1
+            assert fake_db.stopped == 2
+            assert fake_db.poll_calls == []
+
+        @pytest.mark.asyncio
+        async def it_closes_the_stream_on_leaving_async_with():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
+
+            async with stream as events:
+                assert events is stream
+                assert await events.__anext__() == "event-a"
+
+            with pytest.raises(StopAsyncIteration):
+                await stream.__anext__()
+            assert fake_db.stopped == 1
+
+        @pytest.mark.asyncio
+        async def it_lets_an_error_leave_async_with():
+            stream = async_mod._WatchStream(_ReadyOwner(_FakeWatcherDb(events=[])))
+
+            with pytest.raises(RuntimeError, match="consumer failed"):
+                async with stream:
+                    raise RuntimeError("consumer failed")
+
     def describe_construction():
         @pytest.mark.asyncio
         async def it_roots_at_the_cwd_without_a_root_or_config():
@@ -479,11 +714,73 @@ def describe_DirSQL_async():
 
             assert db._db.root is None
 
+        @pytest.mark.asyncio
+        async def it_resolves_extensions_against_the_cwd_at_construction():
+            built = os.path.abspath("/built")
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_extension_path", return_value="R"
+                ) as resolver,
+            ):
+                with patch.object(async_mod.os, "getcwd", return_value=built):
+                    db = async_mod.DirSQL("/data", extensions=[{"path": "ext/a.so"}])
+                await db.ready()
+
+            resolver.assert_called_once_with(
+                "ext/a.so", base=built, resolve_relative=True
+            )
+
+        @pytest.mark.asyncio
+        async def it_reads_an_unreadable_construction_cwd_again_for_extensions():
+            later = os.path.abspath("/later")
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_extension_path", return_value="R"
+                ) as resolver,
+            ):
+                with patch.object(
+                    async_mod.os, "getcwd", side_effect=FileNotFoundError
+                ):
+                    db = async_mod.DirSQL("/data", extensions=[{"path": "ext/a.so"}])
+                with patch.object(async_mod.os, "getcwd", return_value=later):
+                    await db.ready()
+
+            resolver.assert_called_once_with(
+                "ext/a.so", base=later, resolve_relative=True
+            )
+
     def describe_docstring():
         def it_names_no_cache_path_inside_the_root():
             assert ".dirsql/cache.db" not in async_mod.DirSQL.__doc__
 
     def describe_watch():
+        @pytest.mark.asyncio
+        async def it_forwards_watch_to_the_core():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                on = async_mod.DirSQL("/tmp/root")
+                off = async_mod.DirSQL("/tmp/root", watch=False)
+                await on.ready()
+                await off.ready()
+
+                assert on._db.watch is True
+                assert off._db.watch is False
+
+        @pytest.mark.asyncio
+        async def it_raises_without_starting_the_watcher_when_built_unwatched():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root", watch=False)
+
+                with pytest.raises(RuntimeError, match="watching is off"):
+                    db.watch()
+                await db.ready()
+                with pytest.raises(RuntimeError, match="watching is off"):
+                    db.watch()
+
+                assert db._db.watchers_started == 0
+                assert len(db._watch_streams) == 0
+
         @pytest.mark.asyncio
         async def it_returns_a_watch_stream_bound_to_the_owner():
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
@@ -523,6 +820,43 @@ def describe_DirSQL_async():
                 await db.ready()
 
                 assert db._db.watchers_started == 0
+
+        @pytest.mark.asyncio
+        async def it_starts_the_watcher_again_after_the_last_stream_closed():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+                await db.watch().aclose()
+                assert db._db.watchers_stopped == 1
+
+                db.watch()
+
+                assert db._db.watchers_started == 2
+
+        @pytest.mark.asyncio
+        async def it_stops_the_core_when_the_early_stream_goes_as_the_watcher_starts():
+            entered = threading.Event()
+            release = threading.Event()
+
+            class _HeldStartDirSQL(_FakeRustDirSQL):
+                def _start_watcher(self):
+                    entered.set()
+                    release.wait()
+                    super()._start_watcher()
+
+            with patch.object(async_mod, "_RustDirSQL", _HeldStartDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                stream = db.watch()
+                await _until(entered.is_set)
+
+                try:
+                    await stream.aclose()
+                finally:
+                    release.set()
+                await db.ready()
+
+                assert db._db.watchers_started == 1
+                assert db._db.watchers_stopped == 2
 
         @pytest.mark.asyncio
         async def it_leaves_an_early_start_failure_to_the_stream():

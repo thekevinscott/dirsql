@@ -5,7 +5,6 @@ import type {
   QueryParams,
   QueryResult,
   RowEvent,
-  ScanFailure,
 } from "./dirsql.js";
 import { loadNativeCore as defaultLoadNativeCore } from "./load-native-core.js";
 import type { TableDef } from "./table.js";
@@ -16,9 +15,8 @@ export interface NativeDirSQL {
   queryOrdered(sql: string, params?: QueryParams): Promise<QueryResult>;
   // Synchronous so that `watch()` can return a stream whose watcher is live.
   startWatcher(): void;
+  stopWatcher(): void;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
-  // Synchronous: reads a list the scan already produced, no threadpool hop.
-  scanFailures(): ScanFailure[];
   close(): void;
 }
 
@@ -35,6 +33,7 @@ export interface NativeDirSQLConstructor {
     // entries; set by the wrapper after resolving them itself.
     suppressConfigExtensions: boolean | null,
     noIgnore: boolean | null,
+    watch: boolean | null,
   ): Promise<NativeDirSQL>;
 }
 

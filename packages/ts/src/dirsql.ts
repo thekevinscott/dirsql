@@ -12,8 +12,8 @@ import type { TableDef } from "./table.js";
 export interface ExtensionSpec {
   /**
    * Path to the extension's shared library (`.so` / `.dylib` / `.dll`).
-   * Taken verbatim — relative paths resolve against the process working
-   * directory at load time (config-file paths, by contrast, resolve against
+   * A relative path resolves against the process working directory when
+   * `new DirSQL` is called (config-file paths, by contrast, resolve against
    * the config file's parent directory).
    */
   path: string;
@@ -74,6 +74,13 @@ export interface DirSQLOptions {
    * `.git`) and any `ignore` patterns still apply.
    */
   noIgnore?: boolean;
+  /**
+   * Set `false` for a tree nothing writes to while the instance lives: the
+   * index is built from one walk, no watcher ever starts, and every query
+   * reads that walk. {@link DirSQL.watch}, {@link DirSQL.startWatcher} and
+   * {@link DirSQL.pollEvents} then throw. Defaults to `true`.
+   */
+  watch?: boolean;
 }
 
 /** A row-level event emitted by the file watcher. */
@@ -108,20 +115,6 @@ export interface QueryResult {
   columns: string[];
   /** The rows, exactly as {@link DirSQL.query} returns them. */
   rows: Record<string, unknown>[];
-}
-
-/**
- * One file the initial scan could not index.
- *
- * A scan failure is not a scan *error*: the other files are indexed and the
- * database is usable. This is how a caller learns the index is incomplete,
- * and which files are missing from it.
- */
-export interface ScanFailure {
-  /** Path relative to the scan root. */
-  path: string;
-  /** The hook's error, as it rendered it. */
-  message: string;
 }
 
 /**
@@ -175,6 +168,12 @@ export class DirSQL {
   private readonly _watchStreams = new Set<WeakRef<RowEvent[]>>();
   private _watchPoll?: Promise<void>;
   private _watcherStarted = false;
+  // Set once the caller attaches directly, through startWatcher() or
+  // pollEvents(): their events must outlive every watch() stream.
+  private _directlyAttached = false;
+  private readonly _droppedStreams = new FinalizationRegistry<null>(() =>
+    this._stopUnwatched(),
+  );
   // Constructor options preserved verbatim; public-by-design.
   readonly _options: DirSQLOptions;
 
@@ -195,11 +194,15 @@ export class DirSQL {
           ? [options.config]
           : options.config;
     // Read now: the core is built after the constructor returns, and a chdir
-    // in between must not move the root. An unreadable cwd stays the core's
-    // error, rejecting `ready` like any other.
+    // in between must not move the root or a relative extension path. An
+    // unreadable cwd stays the core's error, rejecting `ready` like any other.
     let root = options.root ?? null;
     try {
       root = resolve(root ?? process.cwd());
+    } catch {}
+    let cwd: string | null = null;
+    try {
+      cwd = process.cwd();
     } catch {}
     const Ctor = getCore().DirSQL;
     // Extension paths (possibly bare package names) are resolved inside the
@@ -209,7 +212,7 @@ export class DirSQL {
       .then(() => {
         const extensions =
           options.extensions?.map((e) => ({
-            path: resolveExtensionPath(e.path, process.cwd(), false),
+            path: resolveExtensionPath(e.path, cwd ?? process.cwd(), true),
             entrypoint: e.entrypoint,
           })) ?? null;
         // The SDK resolves the config's [[dirsql.extension]] entries itself
@@ -234,6 +237,7 @@ export class DirSQL {
           merged,
           configExtensions !== null,
           options.noIgnore ?? null,
+          options.watch ?? null,
         );
       })
       .then((inner) => {
@@ -245,6 +249,8 @@ export class DirSQL {
             // A watcher that cannot start is the stream's error, not init's:
             // the stream's first next() retries the start and throws there.
           }
+          // Every stream may have been collected before the core was built.
+          this._stopUnwatched();
         }
       });
     this._ready.catch(() => {});
@@ -294,22 +300,6 @@ export class DirSQL {
   }
 
   /**
-   * The files the initial scan could not index, each with its root-relative
-   * `path` and the hook's own `message`.
-   *
-   * Empty after a clean scan, which is the signal to check: a non-empty list
-   * means the index is *incomplete*, not wrong, and those files are retried
-   * on the next scan.
-   *
-   * Awaits the initial scan first, so a caller cannot see an empty list
-   * merely because the scan had not yet reached the failing file.
-   */
-  async scanFailures(): Promise<ScanFailure[]> {
-    await this.ready;
-    return this._inner.scanFailures();
-  }
-
-  /**
    * Attach to the file watcher, which runs from the moment the instance is
    * built. Idempotent — safe to call multiple times. {@link pollEvents}
    * attaches on its own, so calling this first is optional.
@@ -320,6 +310,7 @@ export class DirSQL {
    */
   async startWatcher(): Promise<void> {
     await this.ready;
+    this._directlyAttached = true;
     this._ensureWatcher();
   }
 
@@ -328,6 +319,48 @@ export class DirSQL {
       this._inner.startWatcher();
       this._watcherStarted = true;
     }
+  }
+
+  private _stopUnwatched(): void {
+    // A poll in flight runs this check itself when it ends: stopping under it
+    // would be undone, since a poll attaches the core again.
+    if (
+      this._watchPoll !== undefined ||
+      this._directlyAttached ||
+      !this._watcherStarted
+    ) {
+      return;
+    }
+    for (const reference of this._watchStreams) {
+      if (reference.deref() !== undefined) {
+        return;
+      }
+      this._watchStreams.delete(reference);
+    }
+    this._inner.stopWatcher();
+    this._watcherStarted = false;
+  }
+
+  private _pollWatch(): Promise<void> {
+    this._watchPoll ??= this._inner
+      .pollEvents(200)
+      .then((events) => {
+        for (const reference of this._watchStreams) {
+          const stream = reference.deref();
+          if (stream) {
+            for (const event of events) {
+              stream.push(event);
+            }
+          } else {
+            this._watchStreams.delete(reference);
+          }
+        }
+      })
+      .finally(() => {
+        this._watchPoll = undefined;
+        this._stopUnwatched();
+      });
+    return this._watchPoll;
   }
 
   /**
@@ -340,6 +373,7 @@ export class DirSQL {
    */
   async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     await this.ready;
+    this._directlyAttached = true;
     return this._inner.pollEvents(timeoutMs);
   }
 
@@ -363,46 +397,90 @@ export class DirSQL {
    * `for await` loop to stop.
    * Each stream receives every event observed after its creation, even
    * while another stream is consuming events on the same instance.
+   *
+   * A stream holds the events it has not returned yet. Leaving the
+   * `for await` loop closes the stream and releases them at once. A stream
+   * dropped without being closed is released when it is garbage-collected.
+   * While no stream is open no events are held, and the next `watch()` sees
+   * only the changes made after it, unless {@link startWatcher} or
+   * {@link pollEvents} was called, which keeps them for {@link pollEvents}.
    */
   watch(): AsyncGenerator<RowEvent, void, unknown> {
+    if (this._options.watch === false) {
+      throw new Error(
+        "watching is off: this instance was built with watch disabled",
+      );
+    }
     if (this._inner !== undefined) {
       this._ensureWatcher();
     }
+    const owner = this;
     const buffer: RowEvent[] = [];
     const reference = new WeakRef(buffer);
+    const wakers = new Set<() => void>();
+    let started = false;
+    let closed = false;
     this._watchStreams.add(reference);
-    const owner = this;
-    return (async function* () {
-      try {
-        await owner.ready;
-        owner._ensureWatcher();
-        while (true) {
-          while (buffer.length === 0) {
-            owner._watchPoll ??= owner._inner
-              .pollEvents(200)
-              .then((events) => {
-                for (const reference of owner._watchStreams) {
-                  const stream = reference.deref();
-                  if (stream) {
-                    for (const event of events) {
-                      stream.push(event);
-                    }
-                  } else {
-                    owner._watchStreams.delete(reference);
-                  }
-                }
-              })
-              .finally(() => {
-                owner._watchPoll = undefined;
-              });
-            await owner._watchPoll;
-          }
-          yield buffer.shift() as RowEvent;
-        }
-      } finally {
-        owner._watchStreams.delete(reference);
+    this._droppedStreams.register(buffer, null, buffer);
+    const done: IteratorReturnResult<void> = { value: undefined, done: true };
+    const close = () => {
+      if (closed) {
+        return;
       }
-    })();
+      closed = true;
+      owner._droppedStreams.unregister(buffer);
+      buffer.length = 0;
+      owner._watchStreams.delete(reference);
+      for (const wake of wakers) {
+        wake();
+      }
+      owner._stopUnwatched();
+    };
+    const stream: AsyncGenerator<RowEvent, void, unknown> = {
+      async next() {
+        try {
+          if (!started && !closed) {
+            await owner.ready;
+            if (!closed) {
+              owner._ensureWatcher();
+              started = true;
+            }
+          }
+          while (!closed) {
+            const event = buffer.shift();
+            if (event !== undefined) {
+              return { value: event, done: false };
+            }
+            let wake!: () => void;
+            const woken = new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+            wakers.add(wake);
+            try {
+              await Promise.race([owner._pollWatch(), woken]);
+            } finally {
+              wakers.delete(wake);
+            }
+          }
+          return done;
+        } catch (error) {
+          close();
+          throw error;
+        }
+      },
+      async return() {
+        close();
+        return done;
+      },
+      async throw(error: unknown) {
+        close();
+        throw error;
+      },
+      [Symbol.asyncIterator]() {
+        return stream;
+      },
+    };
+    return stream;
   }
 
   /**

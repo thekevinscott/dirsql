@@ -1,6 +1,7 @@
 use crate::matcher::TableMatcher;
 use crate::watcher::{
-    FileEvent, WatchScope, missing_root, tolerate_missing, walk_scope, watch_new_tree, watch_tree,
+    FileEvent, WatchScope, gitignore_dir, missing_root, tolerate_missing, walk_scope,
+    watch_new_tree, watch_tree,
 };
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
@@ -38,10 +39,7 @@ impl Watcher {
         Self::scoped(
             paths
                 .iter()
-                .map(|root| WatchScope {
-                    root: root.clone(),
-                    ignore: everything.clone(),
-                })
+                .map(|root| WatchScope::new(root.clone(), everything.clone()))
                 .collect(),
         )
     }
@@ -166,6 +164,21 @@ fn forward(
                 };
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
                 if let Err(fault) = watch_new_tree(scopes, path, &walk_scope, &mut |dir| {
+                    watcher.watch(dir, RecursiveMode::NonRecursive)
+                }) && tx.send(FileEvent::Fault(fault)).is_err()
+                {
+                    return;
+                }
+            }
+            if let FileEvent::Created(path) | FileEvent::Modified(path) | FileEvent::Deleted(path) =
+                &fe
+                && let Some(dir) = gitignore_dir(path)
+            {
+                let Some(watcher) = watcher.upgrade() else {
+                    return;
+                };
+                let mut watcher = watcher.lock().expect("watching a directory does not panic");
+                if let Err(fault) = watch_new_tree(scopes, dir, &walk_scope, &mut |dir| {
                     watcher.watch(dir, RecursiveMode::NonRecursive)
                 }) && tx.send(FileEvent::Fault(fault)).is_err()
                 {
@@ -381,6 +394,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let got = forwarded(vec![
             create_event(vec![root.path().to_path_buf()]),
+            modify_event(vec![PathBuf::from("/nowhere/a")]),
+        ]);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn forward_stops_at_a_gitignore_change_once_the_watcher_is_gone() {
+        let got = forwarded(vec![
+            modify_event(vec![PathBuf::from("/nowhere/.gitignore")]),
             modify_event(vec![PathBuf::from("/nowhere/a")]),
         ]);
         assert!(got.is_empty());

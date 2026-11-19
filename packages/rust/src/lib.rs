@@ -81,7 +81,7 @@ use crate::persist::{
     resolve_persist_path, upsert_file, write_meta,
 };
 use crate::progress::Progress;
-use crate::scanner::{Found, scan_directory_reporting};
+use crate::scanner::{Found, UnlistableFolder, scan_directory_reporting};
 use crate::watcher::{FileEvent, WatchFault, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -141,16 +141,6 @@ enum Hook {
 /// root-relative path is empty, so it never collides with a per-file owner
 /// and never sits beneath any directory a watcher reports deleted.
 const BATCH_OWNER: &str = "";
-
-/// One file whose on-file hook failed, carried so a scan can report every
-/// failure rather than only whichever came first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnFileFailure {
-    /// Path relative to the scan root.
-    pub path: String,
-    /// The hook's error, as rendered by its `Display`.
-    pub message: String,
-}
 
 /// An error the OS reported, which each binding raises as its own native OS
 /// error. Carried inside [`DirSqlError::Io`].
@@ -224,6 +214,12 @@ pub enum DirSqlError {
 
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
+
+    #[error("root directory {} does not exist", .0.display())]
+    MissingRoot(PathBuf),
+
+    #[error("table '{table}': its directory {} does not exist", .dir.display())]
+    MissingAnchor { table: String, dir: PathBuf },
 
     #[error("config error: {message}")]
     Config {
@@ -486,9 +482,9 @@ struct DirSqlInner {
     /// batch until one lands them.
     held: Mutex<Held>,
     fault: OnceLock<WatchFault>,
-    /// Files the initial scan could not index. Empty for a clean scan.
-    scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Arc<Watcher>>>,
+    /// Built from one walk: no watcher ever starts.
+    no_watch: bool,
     /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
     /// both would drain the same underlying watcher.
     poll_used: AtomicBool,
@@ -580,6 +576,30 @@ impl FreshState {
     }
 }
 
+/// Fails when `exists` says the index root is missing: nothing above it is
+/// watched, so it could never be seen to appear.
+fn check_root(root: &Path, exists: &dyn Fn(&Path) -> bool) -> Result<()> {
+    if exists(root) {
+        Ok(())
+    } else {
+        Err(DirSqlError::MissingRoot(root.to_path_buf()))
+    }
+}
+
+/// Fails on the first table whose own anchor `exists` says is missing:
+/// nothing watches above an anchor, so it could never be seen to appear.
+fn check_anchors(tables: &[Table], exists: &dyn Fn(&Path) -> bool) -> Result<()> {
+    for table in tables {
+        if let Some(anchor) = table.anchor.as_ref().filter(|anchor| !exists(anchor)) {
+            return Err(DirSqlError::MissingAnchor {
+                table: table.name.clone(),
+                dir: anchor.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The watcher the build keeps, given how starting it went.
 fn watcher_at_build<W>(started: std::result::Result<W, notify::Error>) -> Result<Option<W>> {
     match started {
@@ -616,9 +636,11 @@ impl From<&WatchFault> for DirSqlError {
 fn build_watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
     groups
         .iter()
-        .map(|group| WatchScope {
-            root: PathBuf::from(canonical_root(&group.anchor)),
-            ignore: group.matcher.clone(),
+        .map(|group| {
+            WatchScope::new(
+                PathBuf::from(canonical_root(&group.anchor)),
+                group.matcher.clone(),
+            )
         })
         .collect()
 }
@@ -626,10 +648,7 @@ fn build_watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
 fn watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
     groups
         .iter()
-        .map(|group| WatchScope {
-            root: group.watch_anchor.clone(),
-            ignore: group.matcher.clone(),
-        })
+        .map(|group| WatchScope::new(group.watch_anchor.clone(), group.matcher.clone()))
         .collect()
 }
 
@@ -683,7 +702,7 @@ type ScanFn<'a> = &'a dyn Fn(
     &mut dyn FnMut(u64),
     &mut dyn FnMut(&Path, &str),
     &(dyn Fn(&Path) + Sync),
-) -> Vec<Found>;
+) -> std::result::Result<Vec<Found>, UnlistableFolder>;
 
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
@@ -967,11 +986,19 @@ impl DirSQL {
     /// could not. Idempotent.
     #[doc(hidden)]
     pub fn attach_watcher(&self) -> Result<()> {
+        self.require_watching()?;
         self.require_named_tables()?;
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
             let watcher = Watcher::scoped(self.watch_scopes()).map_err(DirSqlError::watch)?;
             *guard = Some(Arc::new(watcher));
+        }
+        Ok(())
+    }
+
+    fn require_watching(&self) -> Result<()> {
+        if self.inner.no_watch {
+            return Err(DirSqlError::watch_msg(WATCHING_OFF));
         }
         Ok(())
     }
@@ -1016,6 +1043,7 @@ impl DirSQL {
     /// waiting: changes applied from here on reach the next `poll_events`.
     #[doc(hidden)]
     pub fn attach_poll(&self) -> Result<()> {
+        self.require_watching()?;
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "watch() is active; cannot mix with poll_events()",
@@ -1028,6 +1056,18 @@ impl DirSQL {
             let (tx, rx) = std::sync::mpsc::channel();
             *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Poll(tx));
             *polled = Some(rx);
+        }
+        Ok(())
+    }
+
+    /// Undo [`attach_poll`](Self::attach_poll): the batches still waiting for
+    /// [`poll_events`](Self::poll_events) are dropped, and none are kept until
+    /// the next attach.
+    #[doc(hidden)]
+    pub fn detach_poll(&self) -> Result<()> {
+        let mut polled = self.inner.polled.lock().map_err(DirSqlError::lock)?;
+        if polled.take().is_some() {
+            *self.inner.stream.lock().map_err(DirSqlError::lock)? = None;
         }
         Ok(())
     }
@@ -1239,24 +1279,31 @@ impl DirSQL {
 
     /// Channel-based watch API. The returned stream receives the [`RowEvent`]s
     /// of every change applied from now on. Intended for long-running Rust
-    /// consumers (e.g. a CLI `watch` command). Can only be called once per
-    /// `DirSQL` instance.
+    /// consumers (e.g. a CLI `watch` command). A `DirSQL` instance has one
+    /// stream at a time: a call while the last stream is alive is an error.
+    /// Dropping the stream releases the events it holds, and a later call
+    /// returns a new stream.
     ///
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
+        self.require_watching()?;
         self.require_named_tables()?;
         if self.inner.poll_used.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "poll_events() already in use; cannot call watch()",
             ));
         }
-        if self.inner.watch_thread_started.swap(true, Ordering::SeqCst) {
-            return Err(DirSqlError::WatchAlreadyStarted);
-        }
         self.attach_watcher()?;
 
+        let mut stream = self.inner.stream.lock().map_err(DirSqlError::lock)?;
+        if matches!(stream.as_ref(), Some(Sink::Stream(live)) if !live.is_closed()) {
+            return Err(DirSqlError::WatchAlreadyStarted);
+        }
+        self.inner
+            .watch_thread_started
+            .store(true, Ordering::SeqCst);
         let (tx, rx) = unbounded();
-        *self.inner.stream.lock().map_err(DirSqlError::lock)? = Some(Sink::Stream(tx));
+        *stream = Some(Sink::Stream(tx));
         Ok(rx)
     }
 
@@ -1818,9 +1865,10 @@ impl DirSQL {
     }
 
     /// Test-seam build path: identical to [`build_from_resolved`] but stores
-    /// the supplied [`FileSystem`] double on the resulting instance. The
-    /// prepare phase still uses [`RealFs`] (it has no instance yet), so
-    /// callers must build over an empty temp dir.
+    /// the supplied [`FileSystem`] double on the resulting instance, and it
+    /// skips the root check, so a double may stand in for a root that is not
+    /// on disk. The prepare phase still uses [`RealFs`] (it has no instance
+    /// yet), so callers must build over an empty or missing directory.
     #[cfg(test)]
     pub(crate) fn with_ignore_and_fs<I, S>(
         root: impl Into<PathBuf>,
@@ -1844,8 +1892,9 @@ impl DirSQL {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            no_watch: false,
         };
-        let prepared = Self::prepare_resolved(resolved)?;
+        let prepared = Self::prepare_resolved_with(resolved, &scan_directory_reporting)?;
         Self::finish_build_with_fs(prepared, fs, Progress::indexing())
     }
 
@@ -1860,6 +1909,7 @@ impl DirSQL {
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
     pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
+        check_root(&resolved.root, &|root| root.exists())?;
         Self::prepare_resolved_with(resolved, &scan_directory_reporting)
     }
 
@@ -1900,7 +1950,9 @@ impl DirSQL {
             hint_legacy_files_table,
             path_table_parser,
             no_ignore,
+            no_watch,
         } = resolved;
+        check_anchors(&tables, &|anchor| anchor.exists())?;
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
         let groups = groups
             .into_iter()
@@ -1933,9 +1985,9 @@ impl DirSQL {
         } else {
             (HashMap::new(), Vec::new())
         };
-        // A watcher that cannot start yet (an anchor not created) does not
+        // A watcher whose directory vanished after the checks above does not
         // fail the build; watching starts it.
-        let watcher = if table_names.is_empty() {
+        let watcher = if table_names.is_empty() || no_watch {
             None
         } else {
             watcher_at_build(Watcher::scoped(build_watch_scopes(&groups)))?
@@ -1980,7 +2032,7 @@ impl DirSQL {
                 // The walk reports a running count rather than a fraction: it does
                 // not know how many files there are until it has found them all.
                 let mut progress = Progress::scanning();
-                let (scanned, seen) = scan_groups(
+                let scanned = scan_groups(
                     &groups,
                     scan,
                     &mut progress,
@@ -1997,6 +2049,7 @@ impl DirSQL {
                     },
                 );
                 drop(feeds);
+                let (scanned, seen) = scanned.map_err(std::io::Error::from)?;
                 progress.finish(seen);
                 for warning in empty_table_warnings(&tables, &anchors, &scanned) {
                     eprintln!("{warning}");
@@ -2045,13 +2098,8 @@ impl DirSQL {
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             watcher,
+            no_watch,
         })
-    }
-
-    /// Always empty: a hook that fails, or returns a row the table rejects,
-    /// fails the build with [`DirSqlError::OnFile`] instead.
-    pub fn scan_failures(&self) -> &[OnFileFailure] {
-        &self.inner.scan_failures
     }
 
     /// Split-phase construction — part 2. Consumes the intermediate state from
@@ -2071,7 +2119,7 @@ impl DirSQL {
     /// Apply the watcher's events on a thread of the instance's own, from now
     /// until it is dropped.
     fn start_applier(&self) {
-        if self.inner.groups.is_empty() {
+        if self.inner.groups.is_empty() || self.inner.no_watch {
             return;
         }
         let inner = Arc::downgrade(&self.inner);
@@ -2105,6 +2153,7 @@ impl DirSQL {
             no_ignore,
             links,
             watcher,
+            no_watch,
         } = prepared;
 
         let (mut db, fresh_ddl, ddl_warnings, persist_ready, needs_sweep) = match persist {
@@ -2379,8 +2428,8 @@ impl DirSQL {
                 batch_files: Mutex::new(batch_files),
                 held: Mutex::new(Held::default()),
                 fault: OnceLock::new(),
-                scan_failures: Vec::new(),
                 watcher: Mutex::new(watcher.map(Arc::new)),
+                no_watch,
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
                 stream: Mutex::new(None),
@@ -2462,6 +2511,7 @@ pub struct DirSQLBuilder {
     poll_interval: Option<Duration>,
     path_table_parser: Option<String>,
     no_ignore: bool,
+    no_watch: bool,
 }
 
 impl DirSQLBuilder {
@@ -2590,6 +2640,14 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Build from one walk and never start a watcher: for a tree nothing
+    /// writes to while the instance lives. Watching such an instance fails.
+    #[doc(hidden)]
+    pub fn no_watch(mut self, no_watch: bool) -> Self {
+        self.no_watch = no_watch;
+        self
+    }
+
     fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
@@ -2603,6 +2661,7 @@ impl DirSQLBuilder {
             poll_interval,
             path_table_parser,
             no_ignore,
+            no_watch,
         } = self;
 
         // The index root is an operational fact owned by the runner: the
@@ -2692,6 +2751,7 @@ impl DirSQLBuilder {
             hint_legacy_files_table,
             path_table_parser,
             no_ignore,
+            no_watch,
         })
     }
 
@@ -2717,6 +2777,8 @@ impl DirSQLBuilder {
         Ok(AsyncDirSQL::spawn_build(resolved))
     }
 }
+
+const WATCHING_OFF: &str = "watching is off: this instance was built with watch disabled";
 
 /// Default poll interval for the channel-based watch loop.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -2753,6 +2815,8 @@ pub struct ResolvedBuild {
     /// When set (the CLI's `--no-ignore`), path-table scans do not respect
     /// `.gitignore` files.
     pub no_ignore: bool,
+    /// When set, the build walks once and no watcher ever starts.
+    pub no_watch: bool,
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
@@ -2828,6 +2892,7 @@ pub struct PreparedBuild {
     links: Vec<PathBuf>,
     /// Started before the walk, so it holds every change the walk may miss.
     watcher: Option<Watcher>,
+    no_watch: bool,
 }
 
 #[doc(hidden)]
@@ -2915,7 +2980,7 @@ fn scan_groups(
     progress: &mut Progress,
     on_match: &mut dyn FnMut(&Path, &str),
     on_link: &(dyn Fn(&Path) + Sync),
-) -> (Vec<Found>, u64) {
+) -> std::result::Result<(Vec<Found>, u64), UnlistableFolder> {
     let mut seen = 0;
     let mut scanned = Vec::new();
     for group in groups {
@@ -2929,9 +2994,9 @@ fn scan_groups(
             },
             on_match,
             on_link,
-        ));
+        )?);
     }
-    (scanned, seen)
+    Ok((scanned, seen))
 }
 
 fn compile_groups(
@@ -4134,12 +4199,12 @@ mod internal_tests {
             _matcher: &TableMatcher,
             on_file: &mut dyn FnMut(u64),
             _on_match: &mut dyn FnMut(&Path, &str),
-        ) -> Vec<Found> {
+        ) -> std::result::Result<Vec<Found>, UnlistableFolder> {
             self.calls.set(self.calls.get() + 1);
             for (index, _) in self.found.iter().enumerate() {
                 on_file(index as u64 + 1);
             }
-            self.found.clone()
+            Ok(self.found.clone())
         }
     }
 
@@ -4156,6 +4221,7 @@ mod internal_tests {
             hint_legacy_files_table: false,
             path_table_parser: None,
             no_ignore: false,
+            no_watch: false,
         }
     }
 
@@ -4185,7 +4251,7 @@ mod internal_tests {
                 wait_for_db.recv_timeout(Duration::from_secs(5)).is_ok(),
                 "database creation must finish before the scan completes"
             );
-            Vec::new()
+            Ok(Vec::new())
         };
         let new_db = move || {
             wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -4220,7 +4286,7 @@ mod internal_tests {
                 wait_for_ddl.recv_timeout(Duration::from_secs(5)).is_ok(),
                 "table DDL must finish before the scan completes"
             );
-            Vec::new()
+            Ok(Vec::new())
         };
         let ddl = move |db: &Db, tables: &[Table]| {
             wait_for_scan.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -4254,7 +4320,7 @@ mod internal_tests {
         let called = Arc::clone(&ddl_called);
         let prepared = DirSQL::prepare_resolved_with_setup(
             resolved,
-            &|_, _, _, _, _| Vec::new(),
+            &|_, _, _, _, _| Ok(Vec::new()),
             Db::new,
             move |_, _| {
                 called.store(true, Ordering::SeqCst);
@@ -4327,7 +4393,7 @@ mod internal_tests {
         let called = Arc::clone(&ddl_called);
         let prepared = DirSQL::prepare_resolved_with_setup(
             resolved,
-            &|_, _, _, _, _| Vec::new(),
+            &|_, _, _, _, _| Ok(Vec::new()),
             Db::new,
             move |_, _| {
                 called.store(true, Ordering::SeqCst);
@@ -4464,11 +4530,11 @@ mod internal_tests {
                     .recv_timeout(std::time::Duration::from_secs(5))
                     .is_ok(),
             );
-            vec![Found {
+            Ok(vec![Found {
                 path: found.clone(),
                 rel_path: "a.txt".into(),
                 table_name: "items".into(),
-            }]
+            }])
         })
         .unwrap();
         assert!(hook_saw_it_mid_walk.get());
@@ -4484,7 +4550,7 @@ mod internal_tests {
             resolved.no_ignore = no_ignore;
             DirSQL::prepare_resolved_with(resolved, &|_, matcher, _, _, _| {
                 honored.set(Some(matcher.respects_gitignore()));
-                Vec::new()
+                Ok(Vec::new())
             })
             .unwrap();
             assert_eq!(honored.get(), Some(!no_ignore));
@@ -4572,6 +4638,7 @@ mod internal_tests {
             no_ignore: false,
             links: Vec::new(),
             watcher: None,
+            no_watch: false,
         };
         assert!(DirSQL::finish_build(prepared).is_err());
     }
@@ -5019,7 +5086,7 @@ mod internal_tests {
                     _: &mut dyn FnMut(&Path, &str),
                     _: &(dyn Fn(&Path) + Sync)| {
             report(3);
-            vec![found_at(anchor, &anchor.join("f.txt"), "t")]
+            Ok(vec![found_at(anchor, &anchor.join("f.txt"), "t")])
         };
 
         let (scanned, seen) = scan_groups(
@@ -5028,10 +5095,69 @@ mod internal_tests {
             &mut Progress::scanning(),
             &mut |_, _| {},
             &|_| {},
-        );
+        )
+        .unwrap();
 
         assert_eq!(seen, 6);
         assert_eq!(scanned.len(), 2);
+    }
+
+    #[test]
+    fn scan_groups_fails_on_a_folder_a_scan_could_not_list() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("b", "*.txt", "/two"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let scan = |anchor: &Path,
+                    _: &TableMatcher,
+                    _: &mut dyn FnMut(u64),
+                    _: &mut dyn FnMut(&Path, &str),
+                    _: &(dyn Fn(&Path) + Sync)| {
+            if anchor.ends_with("two") {
+                return Err(unlistable(anchor));
+            }
+            Ok(vec![found_at(anchor, &anchor.join("f.txt"), "t")])
+        };
+
+        let failed = scan_groups(
+            &groups,
+            &scan,
+            &mut Progress::scanning(),
+            &mut |_, _| {},
+            &|_| {},
+        )
+        .unwrap_err();
+
+        assert!(failed.path.ends_with("two"), "{failed}");
+    }
+
+    fn unlistable(path: &Path) -> UnlistableFolder {
+        UnlistableFolder {
+            path: path.to_path_buf(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        }
+    }
+
+    #[test]
+    fn a_build_fails_naming_a_folder_its_scan_could_not_list() {
+        let dir = TempDir::new().unwrap();
+        let locked = dir.path().join("locked");
+        let failed = DirSQL::prepare_resolved_with(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &|_, _, _, _, _| Err(unlistable(&locked)),
+        )
+        .err()
+        .unwrap();
+
+        let DirSqlError::Io(io) = &failed else {
+            panic!("not an io error: {failed:?}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            failed.to_string().contains(&locked.display().to_string()),
+            "{failed}"
+        );
     }
 
     #[test]
@@ -5701,6 +5827,53 @@ mod internal_tests {
     }
 
     #[test]
+    fn detach_poll_drops_the_queue_and_keeps_no_later_batch() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "b", "x".into())]);
+
+        assert!(db.inner.polled.lock().unwrap().is_none());
+        assert!(db.inner.stream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn poll_events_after_detach_poll_returns_only_later_batches() {
+        let (_dir, db) = simple_db();
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "before", "x".into())]);
+        db.detach_poll().unwrap();
+
+        db.attach_poll().unwrap();
+        db.deliver(vec![error_event(None, "after", "x".into())]);
+
+        let events = db.poll_events(Duration::ZERO).unwrap();
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        assert!(format!("{:?}", events[0]).contains("after"));
+    }
+
+    #[test]
+    fn detach_poll_leaves_a_watch_stream_attached() {
+        let (_dir, db) = simple_db();
+        let mut stream = db.watch().unwrap();
+
+        db.detach_poll().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
+    }
+
+    #[test]
+    fn detach_poll_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.polled);
+        let err = db.detach_poll().unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    #[test]
     fn deliver_detaches_a_stream_whose_receiver_is_gone() {
         let (_dir, db) = simple_db();
         drop(db.watch().unwrap());
@@ -5999,6 +6172,55 @@ mod internal_tests {
         );
     }
 
+    fn unwatched_db() -> (TempDir, DirSQL) {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "").unwrap();
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .table(Table::new("t", "CREATE TABLE t (x TEXT)", "*.txt", |_| {
+                vec![HashMap::from([("x".to_string(), Value::Text("a".into()))])]
+            }))
+            .no_watch(true)
+            .build()
+            .unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn builder_no_watch_flows_into_the_resolved_build() {
+        let resolved = DirSQL::builder()
+            .root("/idx")
+            .no_watch(true)
+            .resolve()
+            .unwrap();
+        assert!(resolved.no_watch);
+        assert!(!DirSQL::builder().root("/idx").resolve().unwrap().no_watch);
+    }
+
+    #[test]
+    fn no_watch_reads_the_build_walk_without_a_watcher() {
+        let (_dir, db) = unwatched_db();
+        assert!(db.inner.watcher.lock().unwrap().is_none());
+        assert_eq!(Arc::weak_count(&db.inner), 0, "no applier thread");
+        assert_eq!(db.query("SELECT x FROM t").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn no_watch_refuses_every_way_to_watch() {
+        let (_dir, db) = unwatched_db();
+        for err in [
+            db.watch().map(|_| ()).unwrap_err(),
+            db.poll_events(Duration::ZERO).map(|_| ()).unwrap_err(),
+            db.attach_poll().unwrap_err(),
+            db.attach_watcher().unwrap_err(),
+        ] {
+            assert_eq!(err.to_string(), format!("watcher error: {WATCHING_OFF}"));
+        }
+        assert!(db.inner.watcher.lock().unwrap().is_none());
+        assert!(!db.inner.poll_used.load(Ordering::SeqCst));
+        assert!(!db.inner.watch_thread_started.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn watch_twice_reports_already_started() {
         let (_dir, db) = simple_db();
@@ -6008,6 +6230,17 @@ mod internal_tests {
             matches!(err, DirSqlError::WatchAlreadyStarted),
             "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn watch_after_its_stream_is_dropped_attaches_a_fresh_stream() {
+        let (_dir, db) = simple_db();
+        drop(db.watch().unwrap());
+
+        let mut stream = db.watch().unwrap();
+        db.deliver(vec![error_event(None, "a", "x".into())]);
+
+        assert!(stream.try_recv().is_ok());
     }
 
     #[test]
@@ -7181,6 +7414,7 @@ mod internal_tests {
             no_ignore: false,
             links: Vec::new(),
             watcher: None,
+            no_watch: false,
         }
     }
 
@@ -7310,7 +7544,6 @@ mod internal_tests {
             db.query("SELECT name FROM items ORDER BY rowid").unwrap(),
             vec![name_row("b.txt"), name_row("a.txt")]
         );
-        assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
     }
 
     fn streaming_per_table(
@@ -8128,7 +8361,46 @@ mod internal_tests {
     }
 
     #[test]
-    fn a_build_over_a_missing_anchor_starts_no_watcher() {
+    fn check_root_names_a_missing_root() {
+        let err = check_root(Path::new("/gone"), &|_| false).unwrap_err();
+
+        assert_eq!(err.to_string(), "root directory /gone does not exist");
+    }
+
+    #[test]
+    fn check_root_passes_an_existing_root() {
+        assert!(check_root(Path::new("/here"), &|root| root == Path::new("/here")).is_ok());
+    }
+
+    #[test]
+    fn check_anchors_names_the_first_table_whose_anchor_is_missing() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+            anchored_table("gone", "*.md", "/gone"),
+            anchored_table("also_gone", "*.md", "/also-gone"),
+        ];
+
+        let err = check_anchors(&tables, &|anchor| anchor == Path::new("/here")).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "table 'gone': its directory /gone does not exist"
+        );
+    }
+
+    #[test]
+    fn check_anchors_passes_when_every_anchor_exists_and_ignores_unanchored_tables() {
+        let tables = vec![
+            anchored_table("here", "*.md", "/here"),
+            Table::new("rooted", "CREATE TABLE rooted (x TEXT)", "*.md", |_| vec![]),
+        ];
+
+        assert!(check_anchors(&tables, &|anchor| anchor == Path::new("/here")).is_ok());
+    }
+
+    #[test]
+    fn a_build_whose_watched_directory_vanished_starts_no_watcher() {
         assert_eq!(
             watcher_at_build::<()>(Err(path_not_found_error())).unwrap(),
             None
@@ -8226,6 +8498,8 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
         let two = dir.path().join("two");
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&two).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![
@@ -8246,6 +8520,7 @@ mod internal_tests {
     fn an_event_under_no_anchor_is_offered_raw_to_every_group() {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
+        std::fs::create_dir(&one).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![anchored_table("a", "*.txt", one.to_str().unwrap())],
@@ -9144,7 +9419,7 @@ mod internal_tests {
         let link = dir.path().join("link");
         let prepared = DirSQL::prepare_resolved_with(resolved, &|_, _, _, _, on_link| {
             on_link(&link);
-            Vec::new()
+            Ok(Vec::new())
         })
         .unwrap();
         assert_eq!(prepared.links, vec![link.clone()]);
