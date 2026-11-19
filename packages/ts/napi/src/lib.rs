@@ -749,8 +749,26 @@ impl FnRef {
         Ok(result)
     }
 
-    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    /// [`Self::call_on_file_unscoped`] inside a handle scope of its own. A
+    /// build calls onFile once per file from a single native frame, so without
+    /// it every call's path and rows stay reachable until the build returns.
+    #[expect(unsafe_code, reason = "raw napi_sys handle scope")]
     unsafe fn call_on_file(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
+        let env = self.raw_env;
+        let mut scope = std::ptr::null_mut();
+        if napi::sys::napi_open_handle_scope(env, &mut scope) != napi::sys::Status::napi_ok {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to open handle scope",
+            ));
+        }
+        let rows = self.call_on_file_unscoped(abs_path);
+        napi::sys::napi_close_handle_scope(env, scope);
+        rows
+    }
+
+    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    unsafe fn call_on_file_unscoped(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 
