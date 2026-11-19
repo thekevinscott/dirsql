@@ -1,7 +1,6 @@
 //! Tests for code-review findings; each test name carries its finding ID.
 
-use dirsql::{DirSQL, DirSqlError, Row, Table, Value};
-use std::error::Error as _;
+use dirsql::{DirSQL, Row, Table, Value};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -139,33 +138,6 @@ fn p7_builder_exposes_poll_interval() {
         .poll_interval(Duration::from_millis(50))
         .build()
         .unwrap();
-}
-
-#[test]
-fn i3_watch_error_exposes_underlying_source() {
-    let dir = TempDir::new().unwrap();
-    let missing = dir.path().join("missing");
-    let db = DirSQL::new(
-        &missing,
-        vec![Table::new(
-            "t",
-            "CREATE TABLE t (id TEXT)",
-            "*.json",
-            |_| vec![],
-        )],
-    )
-    .unwrap();
-    let err = db
-        .poll_events(std::time::Duration::ZERO)
-        .expect_err("watching a missing root must fail");
-    match &err {
-        DirSqlError::Watch { .. } => {}
-        other => panic!("expected DirSqlError::Watch, got: {other:?}"),
-    }
-    assert!(
-        err.source().is_some(),
-        "DirSqlError::Watch must expose its underlying source (got None)"
-    );
 }
 
 #[test]

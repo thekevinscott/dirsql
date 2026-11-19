@@ -149,4 +149,10 @@ describe("NativeDirSQL interface", () => {
     instance.close();
     expect(instance.close).toHaveBeenCalledOnce();
   });
+
+  it("includes a synchronous stopWatcher() beside startWatcher()", () => {
+    const stopWatcher: NativeDirSQL["stopWatcher"] = vi.fn();
+    expect(stopWatcher()).toBeUndefined();
+    expect(stopWatcher).toHaveBeenCalledOnce();
+  });
 });

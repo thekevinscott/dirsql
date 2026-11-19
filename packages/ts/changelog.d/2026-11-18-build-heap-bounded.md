@@ -1,0 +1,1 @@
+**Fixed** Building a `DirSQL` over many files no longer runs out of JS heap: what each `onFile` call allocates is released when the call returns, instead of staying reachable until the whole build finished.

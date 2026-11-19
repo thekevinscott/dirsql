@@ -88,6 +88,8 @@ for await (const event of db.watch()) {
 }
 ```
 
+Leaving the `for await` loop closes the stream, which releases the events it has not returned yet. A stream dropped without being closed is released when it is garbage-collected.
+
 Each event has `.action` (`'insert'` | `'update'` | `'delete'` | `'error'`), `.table`, `.row` (the new row, or the deleted row on `delete`), `.oldRow` (the previous row, on `update`), `.filePath`, and `.error` (on `error`).
 
 ## CLI

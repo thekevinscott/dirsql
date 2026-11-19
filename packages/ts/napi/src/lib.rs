@@ -10,7 +10,8 @@
 //!   reference) so it can be handed to [`dirsql::Table`]
 //! - converts row values and events between Rust and the napi shapes exposed
 //!   to JS (BLOB columns cross as Node `Buffer`s via [`JsRowValue`])
-//! - forwards `openAsync` / `query` / `startWatcher` / `pollEvents` to the
+//! - forwards `openAsync` / `query` / `startWatcher` / `stopWatcher` /
+//!   `pollEvents` to the
 //!   corresponding `DirSQL` methods
 //!
 //! `openAsync` is the single construction entry point. It accepts an optional
@@ -366,6 +367,16 @@ impl DirSQL {
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner.attach_poll().map_err(to_napi_err)
+    }
+
+    /// Undo startWatcher: the events waiting for pollEvents are dropped, and
+    /// none are kept until the next attach. A closed instance holds none.
+    #[napi(js_name = "stopWatcher")]
+    pub fn stop_watcher(&self) -> Result<()> {
+        match self.inner.borrow().as_ref() {
+            Some(inner) => inner.detach_poll().map_err(to_napi_err),
+            None => Ok(()),
+        }
     }
 
     /// Poll for file events with a timeout (in milliseconds).
@@ -749,8 +760,26 @@ impl FnRef {
         Ok(result)
     }
 
-    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    /// [`Self::call_on_file_unscoped`] inside a handle scope of its own. A
+    /// build calls onFile once per file from a single native frame, so without
+    /// it every call's path and rows stay reachable until the build returns.
+    #[expect(unsafe_code, reason = "raw napi_sys handle scope")]
     unsafe fn call_on_file(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
+        let env = self.raw_env;
+        let mut scope = std::ptr::null_mut();
+        if napi::sys::napi_open_handle_scope(env, &mut scope) != napi::sys::Status::napi_ok {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to open handle scope",
+            ));
+        }
+        let rows = self.call_on_file_unscoped(abs_path);
+        napi::sys::napi_close_handle_scope(env, scope);
+        rows
+    }
+
+    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
+    unsafe fn call_on_file_unscoped(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 
