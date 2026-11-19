@@ -194,7 +194,7 @@ fn scan_glob_stops_outer_gitignore_rules_at_nested_repo() {
 
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob("**").unwrap();
-    let results = scan_glob(outer.path(), &glob, &ignore, true);
+    let results = scan_glob(outer.path(), &glob, &ignore, true).unwrap();
 
     assert_eq!(results, vec![std::path::PathBuf::from("repo/z.log")]);
 }
@@ -214,7 +214,7 @@ fn scan_glob_applies_gitignore_only_inside_a_repo() {
 
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob("**").unwrap();
-    let results = scan_glob(outer.path(), &glob, &ignore, true);
+    let results = scan_glob(outer.path(), &glob, &ignore, true).unwrap();
 
     assert_eq!(results, vec![std::path::PathBuf::from("zz-sibling/z.log")]);
 }
@@ -241,6 +241,7 @@ fn scan_paths(root: &TempDir, pattern: &str) -> Vec<String> {
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob(pattern).unwrap();
     scan_glob(root.path(), &glob, &ignore, false)
+        .unwrap()
         .into_iter()
         .map(|p| {
             p.components()
@@ -363,4 +364,42 @@ fn scan_dirs_from_a_directory_under_a_link_lists_it_at_its_target() {
         scan_dirs(root, &root.join("link/sub"), &matcher),
         vec![root.join("real/sub")]
     );
+}
+
+fn repo_ignoring_build() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    fs::create_dir_all(root.join("build/sub")).unwrap();
+    fs::create_dir(root.join("docs")).unwrap();
+    dir
+}
+
+#[test]
+fn scan_dirs_leaves_out_a_gitignored_directory_a_glob_reaches() {
+    let dir = repo_ignoring_build();
+    let root = dir.path();
+    let matcher = TableMatcher::new(&[("**/*.md", "t")], &[])
+        .unwrap()
+        .with_gitignore(true);
+
+    let mut dirs = scan_dirs(root, root, &matcher);
+    dirs.sort();
+
+    assert_eq!(dirs, vec![root.to_path_buf(), root.join("docs")]);
+}
+
+#[test]
+fn scan_dirs_enters_a_gitignored_directory_a_glob_spells() {
+    let dir = repo_ignoring_build();
+    let root = dir.path();
+    let matcher = TableMatcher::new(&[("build/x.md", "t")], &[])
+        .unwrap()
+        .with_gitignore(true);
+
+    let mut dirs = scan_dirs(root, root, &matcher);
+    dirs.sort();
+
+    assert_eq!(dirs, vec![root.to_path_buf(), root.join("build")]);
 }

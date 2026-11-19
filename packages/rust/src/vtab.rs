@@ -525,7 +525,9 @@ impl TableSource for ScanSpec {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
         let mut chunk = Vec::with_capacity(STREAM_CHUNK_ROWS);
-        scan_glob_rows(
+        // A statement's rows have no way to fail yet, so a folder that cannot
+        // be listed holds nothing here.
+        let _ = scan_glob_rows(
             &self.root,
             &self.glob,
             &self.ignore,

@@ -317,6 +317,64 @@ fn scoped_watcher_puts_no_watch_on_a_directory_no_table_glob_reaches() {
     assert!(!created_under(&events, &unmatched), "saw: {events:?}");
 }
 
+/// A repo ignoring `build/`, holding `docs` and each of `dirs`, watched by one
+/// `**/*.md` table that honors `.gitignore`.
+fn gitignored_repo(dirs: &[&str]) -> (TempDir, std::path::PathBuf, Watcher) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    for sub in dirs.iter().chain(&["docs"]) {
+        fs::create_dir(root.join(sub)).unwrap();
+    }
+    let watcher = Watcher::scoped(vec![WatchScope::new(
+        root.clone(),
+        TableMatcher::new(&[("**/*.md", "t")], &[])
+            .unwrap()
+            .with_gitignore(true),
+    )])
+    .unwrap();
+    (dir, root, watcher)
+}
+
+fn wrote_in_docs_but_not(watcher: &Watcher, root: &std::path::Path, ignored: &std::path::Path) {
+    fs::write(ignored.join("a.md"), "x").unwrap();
+    fs::write(root.join("docs").join("a.md"), "x").unwrap();
+    let kept = root.join("docs").join("a.md");
+    let events = collect_events_until(watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(kept.clone()))
+    });
+    assert!(
+        events.contains(&FileEvent::Created(kept.clone())),
+        "saw: {events:?}"
+    );
+    assert!(
+        !events.contains(&FileEvent::Created(ignored.join("a.md"))),
+        "saw: {events:?}"
+    );
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn scoped_watcher_puts_no_watch_on_a_gitignored_directory_a_glob_reaches() {
+    let (_dir, root, watcher) = gitignored_repo(&["build"]);
+
+    wrote_in_docs_but_not(&watcher, &root, &root.join("build"));
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn scoped_watcher_puts_no_watch_on_a_gitignored_directory_made_later() {
+    let (_dir, root, watcher) = gitignored_repo(&[]);
+    let build = root.join("build");
+    fs::create_dir(&build).unwrap();
+    collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(build.clone()))
+    });
+
+    wrote_in_docs_but_not(&watcher, &root, &build);
+}
+
 #[test]
 fn scoped_watcher_reports_files_in_a_new_directory_a_table_glob_reaches() {
     let dir = TempDir::new().unwrap();

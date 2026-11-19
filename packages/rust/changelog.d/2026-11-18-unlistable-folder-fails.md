@@ -1,0 +1,3 @@
+**Changed**
+
+- **A folder a glob reaches that exists but cannot be listed is now an error naming it, for config tables and parsed path-tables.** A config table's build fails, and so does a query over a parsed path-table (one read through `--on-file`), with `cannot list folder '<path>': <reason>`. Before, the folder was read as empty and the result came back short with exit status 0. A folder that does not exist still holds nothing. Bash skips such a folder silently, so this is a listed divergence from bash. `scanner::scan_directory_reporting`, `scanner::scan_glob` and `scanner::scan_glob_checking_root` now return `Result<_, scanner::UnlistableFolder>`.
