@@ -1124,6 +1124,18 @@ mod tests {
         }
 
         #[test]
+        fn a_parent_relative_config_glob_climbs_out_of_a_verbatim_config_directory() {
+            assert_eq!(
+                config_anchor_as::<Utf8WindowsEncoding>(
+                    "../data/*.json",
+                    Path::new(r"\\?\C:\work\cfg"),
+                    None
+                ),
+                Some((PathBuf::from(r"\\?\C:\work\data"), "*.json".to_string()))
+            );
+        }
+
+        #[test]
         fn a_drive_letter_path_folds_a_parent_component_as_windows_does() {
             let t = table(r"C:\var\x\..\log\*.log", &nothing_is_a_dir);
             assert_eq!(t.path_prefix, "C:/var/log");
