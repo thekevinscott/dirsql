@@ -59,6 +59,7 @@ DirSQL(
     persist: bool = False,
     persist_path: str | None = None,
     extensions: list[dict] | None = None,  # [{ "path": str, "entrypoint"?: str }]
+    watch: bool = True,
 )
 ```
 
@@ -74,6 +75,7 @@ new DirSQL({
     persist?: boolean,
     persistPath?: string,
     extensions?: ExtensionSpec[],  // [{ path: string, entrypoint?: string }]
+    watch?: boolean,               // default true
 })
 ```
 
@@ -128,6 +130,10 @@ shortcut was removed in #603 — use
   [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by
   default; the built-in `.git` skip and the `ignore` parameter's patterns
   still apply. The CLI's [`--no-ignore`](./cli.md#flags).
+- `watch` — Pass `False` (TypeScript: `false`) for a tree nothing writes to
+  while the instance lives. The index is built from one walk, no watcher ever
+  starts, and every query reads that walk. Calling `watch()` (TypeScript also
+  `startWatcher()` and `pollEvents()`) then raises `watching is off`.
 - `config` — Path to a [`.dirsql.toml`](./config.md). Its `[[table]]`
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The
@@ -159,8 +165,8 @@ shortcut was removed in #603 — use
   `node_modules`) — for both the programmatic list and a `config` file's
   `[[dirsql.extension]]` entries. The Rust SDK is file-path-only.
   Programmatic entries load first, then the config's. A relative
-  programmatic path is used verbatim (resolved by the OS against the
-  process working directory); config-file paths resolve against the config
+  programmatic path resolves against the process working directory when the
+  instance is constructed; config-file paths resolve against the config
   file's parent.
 
 **Construction is asynchronous in Python and TypeScript.** The constructor
@@ -399,8 +405,9 @@ integers always enumerate first.
 ::: code-group
 
 ```python [Python]
-async for event in db.watch():   # AsyncIterator[RowEvent]
-    ...
+async with db.watch() as events:   # AsyncIterator[RowEvent]
+    async for event in events:
+        ...
 ```
 
 ```typescript [TypeScript]
@@ -436,8 +443,26 @@ Python/TypeScript: each `watch()` call returns an independent stream, and every 
 on one instance receives every event observed after it was created, so
 several consumers (one per client, say) can share one instance.
 
-Rust: `watch()` may be called once per instance and is mutually exclusive
-with the polling API below — mixing them returns an error.
+Python: a stream holds the events it has not returned yet. `async with`
+closes the stream when the block exits, and `await stream.aclose()` closes
+it directly; either releases those events at once. Iterating a closed
+stream ends, including an iteration waiting in another task, and closing
+twice is harmless. A stream dropped without being closed is released when
+Python collects it. While no stream is open no events are held, and the
+next `watch()` sees only the changes made after it.
+
+TypeScript: a stream holds the events it has not returned yet. Leaving the
+`for await` loop closes the stream and releases those events at once. A
+stream dropped without being closed is released when it is garbage-collected.
+While no stream is open no events are held, and the next `watch()` sees only
+the changes made after it. Calling `startWatcher()` or `pollEvents()`
+directly keeps the events for `pollEvents()` instead.
+
+Rust: an instance has one stream at a time, and `watch()` is mutually
+exclusive with the polling API below — a second `watch()` while the stream
+is alive, or mixing the two, returns an error. Dropping the stream releases
+the events it holds, and a later `watch()` returns a new stream that sees
+only the changes made after it.
 
 ### Low-level watch primitives
 

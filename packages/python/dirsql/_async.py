@@ -9,49 +9,106 @@ from dirsql._dirsql import DirSQL as _RustDirSQL
 from dirsql.resolve_configs_extension_specs import resolve_configs_extension_specs
 from dirsql.resolve_extension import resolve_extension_path
 
+_WATCHING_OFF = "watching is off: this instance was built with watch disabled"
+
+
+def _stop_unwatched(owner):
+    """Have the core stop holding events once ``owner`` has no stream left."""
+    poll = owner._watch_poll
+    # A poll in flight makes this check itself when it ends: stopping under
+    # it would be undone, since a poll attaches the core again.
+    if poll is not None and not poll.done():
+        return
+    db = owner._db
+    if db is not None and not list(owner._watch_streams):
+        db._stop_watcher()
+
 
 class _WatchStream:
     """Async iterator of file events.
 
     Every stream on one ``DirSQL`` receives every event observed after it
     was created: one shared poll fills the buffer of each live stream.
+
+    A stream holds the events it has not yet returned until it is closed or
+    garbage-collected. ``async with db.watch() as events:`` closes it on
+    exit; :meth:`aclose` closes it directly.
     """
 
     def __init__(self, owner):
         self._owner = owner
         self._db = None
         self._started = False
+        self._closed = False
+        self._waiter = None
         self._buffer = []
         owner._watch_streams.add(self)
+        self._dropped = weakref.finalize(self, _stop_unwatched, owner)
+        self._dropped.atexit = False
+
+    @staticmethod
+    async def _poll(owner, db):
+        events = await asyncio.to_thread(db._poll_events, 200)
+        streams = list(owner._watch_streams)
+        for stream in streams:
+            stream._buffer.extend(events)
+        if not streams:
+            db._stop_watcher()
 
     def __aiter__(self):
         return self
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.aclose()
+        return False
+
+    async def aclose(self):
+        """Close the stream and release the events it holds.
+
+        Iteration ends, including one waiting in another task. When the last
+        stream on a ``DirSQL`` closes, no events are held until the next
+        :meth:`DirSQL.watch`. Closing twice is harmless.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        self._dropped.detach()
+        self._buffer.clear()
+        self._owner._watch_streams.discard(self)
+        if self._waiter is not None and not self._waiter.done():
+            self._waiter.set_result(None)
+        _stop_unwatched(self._owner)
+
     async def __anext__(self):
-        if not self._started:
-            await self._owner.ready()
-            db = self._owner._db
+        owner = self._owner
+        if not self._started and not self._closed:
+            await owner.ready()
+            db = owner._db
             assert db is not None  # ready() returned, so _init_bg set _db
             self._db = db
             await asyncio.to_thread(db._start_watcher)
             self._started = True
+            # The stream may have closed while the watcher started.
+            _stop_unwatched(owner)
 
-        owner = self._owner
-        while not self._buffer:
+        while not self._closed:
+            if self._buffer:
+                return self._buffer.pop(0)
             poll = owner._watch_poll
             if poll is None or poll.done():
-                poll = owner._watch_poll = asyncio.ensure_future(self._poll())
-            # Shielded so a cancelled consumer cannot drop a batch that the
-            # other streams are still waiting on.
-            await asyncio.shield(poll)
-        return self._buffer.pop(0)
-
-    async def _poll(self):
-        db = self._db
-        assert db is not None
-        events = await asyncio.to_thread(db._poll_events, 200)
-        for stream in list(self._owner._watch_streams):
-            stream._buffer.extend(events)
+                poll = owner._watch_poll = asyncio.ensure_future(
+                    self._poll(owner, self._db)
+                )
+            self._waiter = asyncio.get_running_loop().create_future()
+            # wait() leaves the poll running when this consumer is cancelled,
+            # so the other streams still get its batch.
+            await asyncio.wait({poll, self._waiter}, return_when="FIRST_COMPLETED")
+            if poll.done():
+                poll.result()
+        raise StopAsyncIteration
 
 
 class _IndexLock:
@@ -107,7 +164,12 @@ class DirSQL:
     at startup. Any ``[[dirsql.extension]]`` entries in a ``config`` file are
     appended after the programmatic ones. A ``path`` (programmatic or
     config-file) may be a bare **package name**, resolved from the installed
-    package in the runtime env.
+    package in the runtime env. A relative programmatic ``path`` resolves
+    against the cwd when ``DirSQL()`` is called.
+
+    Pass ``watch=False`` for a tree nothing writes to while the instance
+    lives: the index is built from one walk, no watcher ever starts, and
+    every query reads that walk. :meth:`watch` then raises.
     """
 
     def __init__(
@@ -121,13 +183,18 @@ class DirSQL:
         persist=False,
         persist_path=None,
         extensions=None,
+        watch=True,
     ):
         # Read now: the core is built on a worker thread after the first
-        # await, and a chdir in between must not move the root. An unreadable
-        # cwd stays the core's error, raised from ready() like any other.
+        # await, and a chdir in between must not move the root or a relative
+        # extension path. An unreadable cwd stays the core's error, raised
+        # from ready() like any other.
         with contextlib.suppress(OSError):
             root = os.path.abspath(os.getcwd() if root is None else root)
         self._root = root
+        self._cwd = None
+        with contextlib.suppress(OSError):
+            self._cwd = os.getcwd()
         self._tables = tables
         self._ignore = ignore
         self._no_ignore = no_ignore
@@ -144,6 +211,7 @@ class DirSQL:
         self._persist = persist
         self._persist_path = persist_path
         self._extensions = extensions
+        self._watch = watch
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
@@ -157,6 +225,8 @@ class DirSQL:
             self._db = await asyncio.to_thread(self._build_db)
             if self._watch_streams:
                 await asyncio.to_thread(self._start_watcher_quietly, self._db)
+                # Every stream may have gone while the watcher started.
+                _stop_unwatched(self)
         except Exception as exc:
             self._init_error = exc
         finally:
@@ -198,6 +268,7 @@ class DirSQL:
             persist_path=self._persist_path,
             extensions=extensions,
             suppress_config_extensions=suppress,
+            watch=self._watch,
         )
 
     def _new_core(self, root, **kwargs):
@@ -207,7 +278,8 @@ class DirSQL:
         """Resolve each programmatic extension's ``path`` to a loadable file.
 
         A bare package name is resolved to the loadable installed in the
-        runtime env; path-looking values pass through verbatim. Config-file
+        runtime env; a relative path-looking value is made absolute against
+        the cwd at construction. Config-file
         ``[[dirsql.extension]]`` entries are handled by ``_build_db``.
         """
         if not self._extensions:
@@ -215,7 +287,7 @@ class DirSQL:
         return [
             {
                 "path": resolve_extension_path(
-                    e["path"], base=os.getcwd(), resolve_relative=False
+                    e["path"], base=self._cwd or os.getcwd(), resolve_relative=True
                 ),
                 "entrypoint": e.get("entrypoint"),
             }
@@ -277,7 +349,24 @@ class DirSQL:
         Each call returns an independent stream, and every stream receives
         every event observed after it was created, so several consumers
         (one per client, say) can share one instance.
+
+        A stream holds the events it has not returned yet. Close it when
+        done, so they are released at once::
+
+            async with db.watch() as events:
+                async for event in events:
+                    ...
+
+        ``await stream.aclose()`` does the same without the ``with`` block.
+        Iterating a closed stream ends. A stream that is dropped without
+        being closed is released when Python collects it. While no stream
+        is open, no events are held, and the next ``watch()`` sees only
+        changes made after it.
+
+        Raises ``RuntimeError`` on an instance built with ``watch=False``.
         """
+        if not self._watch:
+            raise RuntimeError(_WATCHING_OFF)
         stream = _WatchStream(self)
         if self._db is not None:
             self._db._start_watcher()

@@ -4,7 +4,8 @@
 //! - wraps a Python `on_file` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
-//! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
+//! - forwards `new` / `query` / `_start_watcher` / `_stop_watcher` /
+//!   `_poll_events` to the
 //!   corresponding `DirSQL` methods
 //!
 //! The Python-side async wrapper (`dirsql._async.DirSQL`) drives this binding
@@ -113,7 +114,7 @@ mod python {
         /// which the core lacks) and passing the resolved literal paths via
         /// `extensions`, so the entries are not loaded twice.
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, no_ignore=false, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, no_ignore=false, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false, watch=true))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
@@ -125,6 +126,7 @@ mod python {
             persist_path: Option<PathBuf>,
             extensions: Option<Vec<PyExtensionSpec>>,
             suppress_config_extensions: bool,
+            watch: bool,
         ) -> PyResult<Self> {
             let rust_tables: Vec<Table> = tables
                 .as_deref()
@@ -152,7 +154,7 @@ mod python {
                     if let Some(ig) = ignore {
                         builder = builder.ignore(ig);
                     }
-                    builder = builder.no_ignore(no_ignore);
+                    builder = builder.no_ignore(no_ignore).no_watch(!watch);
                     for c in config.into_iter().flatten() {
                         builder = builder.config(c);
                     }
@@ -194,6 +196,11 @@ mod python {
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
             let db = self.inner.clone();
             py.detach(move || db.attach_poll()).map_err(to_py_err)
+        }
+
+        fn _stop_watcher(&self, py: Python<'_>) -> PyResult<()> {
+            let db = self.inner.clone();
+            py.detach(move || db.detach_poll()).map_err(to_py_err)
         }
 
         fn _lock(&self, py: Python<'_>) -> PyResult<()> {

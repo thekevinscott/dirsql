@@ -305,6 +305,37 @@ fn scan_dirs_lists_the_directories_the_scan_enters() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn scan_dirs_lists_a_symlinked_directory_a_glob_reaches_once_at_its_target() {
+    let dir = TempDir::new().unwrap();
+    let root = &fs::canonicalize(dir.path()).unwrap();
+    fs::create_dir_all(root.join("real/sub")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+    let matcher = TableMatcher::new(&[("link/**/*.txt", "t")], &[]).unwrap();
+    let mut dirs = scan_dirs(root, root, &matcher);
+    dirs.sort();
+
+    assert_eq!(
+        dirs,
+        vec![root.to_path_buf(), root.join("real"), root.join("real/sub")]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn scan_dirs_leaves_out_a_symlink_target_outside_the_root() {
+    let dir = TempDir::new().unwrap();
+    let away = TempDir::new().unwrap();
+    let root = &fs::canonicalize(dir.path()).unwrap();
+    std::os::unix::fs::symlink(away.path(), root.join("link")).unwrap();
+
+    let matcher = TableMatcher::new(&[("link/*.txt", "t")], &[]).unwrap();
+
+    assert_eq!(scan_dirs(root, root, &matcher), vec![root.to_path_buf()]);
+}
+
 #[test]
 fn scan_dirs_starts_below_the_root_under_the_root_s_rules() {
     let dir = TempDir::new().unwrap();
@@ -317,4 +348,20 @@ fn scan_dirs_starts_below_the_root_under_the_root_s_rules() {
     dirs.sort();
 
     assert_eq!(dirs, vec![root.join("src"), root.join("src/lib")]);
+}
+
+#[cfg(unix)]
+#[test]
+fn scan_dirs_from_a_directory_under_a_link_lists_it_at_its_target() {
+    let dir = TempDir::new().unwrap();
+    let root = &fs::canonicalize(dir.path()).unwrap();
+    fs::create_dir_all(root.join("real/sub")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+    let matcher = TableMatcher::new(&[("link/**/*.txt", "t")], &[]).unwrap();
+
+    assert_eq!(
+        scan_dirs(root, &root.join("link/sub"), &matcher),
+        vec![root.join("real/sub")]
+    );
 }

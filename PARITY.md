@@ -92,13 +92,14 @@ core, so all three SDKs change at once. **No drift.**
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
-| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |
+| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None, watch=True)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore?, watch? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Query carrying the projection order | `db.query(sql)`: each row dict is keyed in projection order | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | `await db.queryOrdered(sql) -> QueryResult` (`columns` + `rows`) |
 | Query with bind parameters (sequence -> `?`, mapping -> `:name`) | `await db.query(sql, params)` | `db.query_with(sql, &Params)` (also `query_ordered_with`, `query_each_with`, `AsyncDirSQL::query_with`) | `await db.query(sql, params)` (array -> `?`, plain object -> `:name`; also `queryOrdered(sql, params)`) |
 | Attach to the watcher (it runs from instantiation) | `db._start_watcher()` (attaches)  | **N** (`watch()` / `poll_events()` attach)           | `await db.startWatcher()` (optional: attaches on the JS thread; `pollEvents()` attaches on its own) |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
+| Close a watch stream       | `async with db.watch() as events:` / `await stream.aclose()` | **N** (drop the `WatchStream`)            | **N** (leave the `for await` loop)                      |
 | Hold the index still during a multi-file write | `with db.lock:` | **N** (core `lock_index` / `unlock_index` are `#[doc(hidden)]` binding plumbing) | **N** |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
@@ -107,7 +108,8 @@ core, so all three SDKs change at once. **No drift.**
 **Multiple watch streams — TypeScript restored to Python parity.** Every
 `watch()` stream on one instance receives all events observed after its
 creation. Both SDKs share one poll and buffer events per live stream. Rust
-retains its documented single-stream, mutually exclusive watch/poll API.
+retains its documented single-stream, mutually exclusive watch/poll API; a
+new stream may be taken once the previous one is dropped.
 
 **Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /
@@ -309,6 +311,13 @@ with no binding work. The *opt-out* is at parity too: the CLI has
 `DirSQL(..., no_ignore=True)` (#745, plumbed through the PyO3 binding to the
 core builder), and **TypeScript** has the `noIgnore` constructor option
 (#746).
+
+**Opting out of the watcher — Python and TypeScript only.** Python
+`DirSQL(..., watch=False)` and TypeScript `new DirSQL({ watch: false })`
+build from one walk and never start a watcher; watching such an instance
+raises `watching is off`. Both plumb into the core builder's
+`.no_watch(bool)`, which is `#[doc(hidden)]` binding plumbing, so **Rust** has
+no public equivalent, and the **CLI** has no flag.
 
 **Path-table parity proven per binding (#629, epic path-as-table close) —
 restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the

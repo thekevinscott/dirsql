@@ -1,0 +1,1 @@
+**Added** `new DirSQL({ watch: false })` builds the index from one walk and never starts a watcher; every query reads that walk, and `watch()`, `startWatcher()` and `pollEvents()` throw ("watching is off"). For trees nothing writes to while the instance lives. Defaults to `true`.

@@ -250,10 +250,10 @@ fn over_detects_events_in_every_directory() {
 }
 
 fn scoped(root: &std::path::Path, ignore: &[&str]) -> Watcher {
-    Watcher::scoped(vec![WatchScope {
-        root: root.to_path_buf(),
-        ignore: TableMatcher::new(&[], ignore).unwrap(),
-    }])
+    Watcher::scoped(vec![WatchScope::new(
+        root.to_path_buf(),
+        TableMatcher::new(&[], ignore).unwrap(),
+    )])
     .unwrap()
 }
 
@@ -286,6 +286,63 @@ fn scoped_watcher_puts_no_watch_on_an_ignored_subtree() {
     });
     assert!(created_under(&events, &kept), "saw: {events:?}");
     assert!(!created_under(&events, &ignored), "saw: {events:?}");
+}
+
+fn globbed(root: &std::path::Path, glob: &str) -> Watcher {
+    Watcher::scoped(vec![WatchScope::new(
+        root.to_path_buf(),
+        TableMatcher::new(&[(glob, "t")], &[]).unwrap(),
+    )])
+    .unwrap()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn scoped_watcher_puts_no_watch_on_a_directory_no_table_glob_reaches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let unmatched = root.join("src");
+    let kept = root.join("docs");
+    fs::create_dir_all(&unmatched).unwrap();
+    fs::create_dir_all(&kept).unwrap();
+    let watcher = globbed(&root, "docs/*.md");
+
+    fs::write(unmatched.join("a.md"), "x").unwrap();
+    fs::write(kept.join("a.md"), "x").unwrap();
+
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        created_under(seen, &kept)
+    });
+    assert!(created_under(&events, &kept), "saw: {events:?}");
+    assert!(!created_under(&events, &unmatched), "saw: {events:?}");
+}
+
+#[test]
+fn scoped_watcher_reports_files_in_a_new_directory_a_table_glob_reaches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir(root.join("docs")).unwrap();
+    let watcher = globbed(&root, "docs/**/*.md");
+    let fresh = root.join("docs").join("fresh");
+
+    fs::create_dir(&fresh).unwrap();
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(fresh.clone()))
+    });
+    assert!(
+        events.contains(&FileEvent::Created(fresh.clone())),
+        "saw: {events:?}"
+    );
+
+    let file = fresh.join("note.md");
+    fs::write(&file, "x").unwrap();
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(file.clone()))
+    });
+    assert!(
+        events.contains(&FileEvent::Created(file.clone())),
+        "saw: {events:?}"
+    );
 }
 
 #[test]

@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1795020217,
+  "exit_code": 0,
+  "commit": "2a9c7a474ca770df37291f9da1be8114b961fa3d",
+  "branch": "bot/1721-missing-anchor-fails-1118"
+}

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCore } from "./core.js";
-import { DirSQL } from "./dirsql.js";
+import { DirSQL, type RowEvent } from "./dirsql.js";
 import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 
@@ -31,6 +31,7 @@ type FakeInner = {
   query: ReturnType<typeof vi.fn>;
   queryOrdered: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
+  stopWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 };
@@ -43,11 +44,24 @@ function installFakeCore(inner: FakeInner) {
   return openAsync;
 }
 
+// Resolves to the promise's value, or to "still pending" once a short wait
+// passes, so a close that never wakes a waiting next() fails an assertion
+// rather than hanging the test.
+function settledSoon<T>(promise: Promise<T>): Promise<T | "still pending"> {
+  return Promise.race([
+    promise,
+    new Promise<"still pending">((resolve) =>
+      setTimeout(() => resolve("still pending"), 200),
+    ),
+  ]);
+}
+
 function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
   return {
     query: vi.fn().mockResolvedValue([]),
     queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
     startWatcher: vi.fn(),
+    stopWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
     close: vi.fn(),
     ...overrides,
@@ -78,6 +92,7 @@ describe("DirSQL", () => {
         null,
         false,
         null,
+        null,
       );
       expect(resolveConfigsExtensionSpecs).not.toHaveBeenCalled();
     });
@@ -105,6 +120,7 @@ describe("DirSQL", () => {
         null,
         false,
         null,
+        null,
       );
     });
 
@@ -121,7 +137,7 @@ describe("DirSQL", () => {
       expect(resolveExtensionPath).toHaveBeenCalledWith(
         "sqlite-vec",
         process.cwd(),
-        false,
+        true,
       );
       expect(openAsync).toHaveBeenCalledWith(
         resolve("/data"),
@@ -136,6 +152,42 @@ describe("DirSQL", () => {
         ],
         false,
         null,
+        null,
+      );
+    });
+
+    it("resolves extension paths against the cwd at construction", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue("/built");
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockRestore();
+      await db.ready;
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/built",
+        true,
+      );
+    });
+
+    it("reads an unreadable construction cwd again when resolving extensions", async () => {
+      installFakeCore(makeInner());
+      const cwd = vi.spyOn(process, "cwd").mockImplementationOnce(() => {
+        throw new Error("ENOENT: uv_cwd");
+      });
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      cwd.mockReturnValue("/later");
+      await db.ready;
+      cwd.mockRestore();
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "ext/a.so",
+        "/later",
+        true,
       );
     });
 
@@ -153,6 +205,7 @@ describe("DirSQL", () => {
         null,
         false,
         true,
+        null,
       );
     });
 
@@ -170,6 +223,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
         null,
       );
       expect(db._options).toEqual({ config: "/cfg.toml" });
@@ -194,6 +248,7 @@ describe("DirSQL", () => {
         null,
         false,
         null,
+        null,
       );
     });
 
@@ -211,6 +266,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
         null,
       );
     });
@@ -257,6 +313,7 @@ describe("DirSQL", () => {
         ],
         true,
         null,
+        null,
       );
     });
 
@@ -276,6 +333,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "/env/pkg/ext.so", entrypoint: undefined }],
         true,
+        null,
         null,
       );
     });
@@ -297,6 +355,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "R:ext/a.so", entrypoint: undefined }],
         false,
+        null,
         null,
       );
     });
@@ -384,6 +443,23 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
+    it("forwards watch: false as openAsync's tenth arg", async () => {
+      const openAsync = installFakeCore(makeInner());
+      const db = new DirSQL({ root: "/data", watch: false });
+      await db.ready;
+      expect(openAsync.mock.calls[0]?.[9]).toBe(false);
+    });
+
+    it("throws on watch() without starting the watcher when built unwatched", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({ watch: false });
+      expect(() => db.watch()).toThrow(/watching is off/);
+      await db.ready;
+      expect(() => db.watch()).toThrow(/watching is off/);
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+    });
+
     it("starts the watcher before returning once ready", async () => {
       const inner = makeInner();
       installFakeCore(inner);
@@ -520,7 +596,7 @@ describe("DirSQL", () => {
       try {
         expect((await second.next()).value).toEqual(event);
         expect((await second.next()).value).toEqual(event);
-        expect(deref).toHaveBeenCalledOnce();
+        expect(deref).toHaveBeenCalledTimes(2);
         await second.return();
       } finally {
         deref.mockRestore();
@@ -534,6 +610,7 @@ describe("DirSQL", () => {
       });
       installFakeCore(inner);
       const db = new DirSQL({});
+      await db.ready;
       db.watch();
       const kept = db.watch();
       const deref = vi
@@ -541,9 +618,9 @@ describe("DirSQL", () => {
         .mockReturnValueOnce(undefined);
       try {
         expect((await kept.next()).value).toEqual(event);
-        expect(deref).toHaveBeenCalledTimes(2);
-        expect((await kept.next()).value).toEqual(event);
         expect(deref).toHaveBeenCalledTimes(3);
+        expect((await kept.next()).value).toEqual(event);
+        expect(deref).toHaveBeenCalledTimes(5);
         await kept.return();
       } finally {
         deref.mockRestore();
@@ -629,6 +706,319 @@ describe("DirSQL", () => {
 
       expect(timerFired).toBe(true);
       expect(inner.pollEvents).toHaveBeenCalled();
+    });
+  });
+
+  describe("closing a stream", () => {
+    it("ends iteration", async () => {
+      const events = [
+        { table: "t", action: "insert" as const },
+        { table: "t", action: "delete" as const },
+      ];
+      const inner = makeInner({
+        pollEvents: vi.fn().mockResolvedValue(events),
+      });
+      installFakeCore(inner);
+      const stream = new DirSQL({}).watch();
+      expect((await stream.next()).value).toEqual(events[0]);
+
+      expect(await stream.return()).toEqual({ value: undefined, done: true });
+
+      expect(await stream.next()).toEqual({ value: undefined, done: true });
+      expect(inner.pollEvents).toHaveBeenCalledOnce();
+    });
+
+    it("stops the core when the last stream closes", async () => {
+      const inner = makeInner({
+        pollEvents: vi
+          .fn()
+          .mockResolvedValue([{ table: "t", action: "insert" }]),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const first = db.watch();
+      const second = db.watch();
+      await first.next();
+
+      await first.return();
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+
+      await second.return();
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("stops feeding a closed stream", async () => {
+      const a = { table: "a", action: "insert" as const };
+      const b = { table: "b", action: "insert" as const };
+      const inner = makeInner({
+        pollEvents: vi.fn().mockResolvedValueOnce([a]).mockResolvedValue([b]),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const closed = db.watch();
+      const kept = db.watch();
+      await closed.next();
+      await closed.return();
+      await kept.next();
+
+      expect((await kept.next()).value).toEqual(b);
+      expect(await closed.next()).toEqual({ value: undefined, done: true });
+    });
+
+    it("can be closed twice", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      const stream = db.watch();
+
+      await stream.return();
+      await stream.return();
+
+      expect(await stream.next()).toEqual({ value: undefined, done: true });
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("never starts the watcher for a stream closed before the scan ends", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const stream = db.watch();
+
+      await stream.return();
+      await db.ready;
+
+      expect(await stream.next()).toEqual({ value: undefined, done: true });
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+      expect(inner.pollEvents).not.toHaveBeenCalled();
+    });
+
+    it("never starts the watcher when closed while its first next() awaits the scan", async () => {
+      const inner = makeInner({
+        pollEvents: vi.fn(() => new Promise(() => {})),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const stream = db.watch();
+      const first = stream.next();
+
+      const closing = stream.return();
+
+      expect(await settledSoon(first)).toEqual({
+        value: undefined,
+        done: true,
+      });
+      await closing;
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+      expect(inner.pollEvents).not.toHaveBeenCalled();
+    });
+
+    it("wakes a next() waiting on a poll, and leaves the stop to that poll", async () => {
+      let release!: (events: RowEvent[]) => void;
+      const inner = makeInner({
+        pollEvents: vi.fn(
+          () =>
+            new Promise<RowEvent[]>((resolve) => {
+              release = resolve;
+            }),
+        ),
+      });
+      installFakeCore(inner);
+      const stream = new DirSQL({}).watch();
+      const waiting = stream.next();
+      await vi.waitFor(() => expect(inner.pollEvents).toHaveBeenCalled());
+
+      const closing = stream.return();
+
+      expect(await settledSoon(waiting)).toEqual({
+        value: undefined,
+        done: true,
+      });
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+      release([{ table: "t", action: "insert" }]);
+      await closing;
+      await vi.waitFor(() => expect(inner.stopWatcher).toHaveBeenCalledOnce());
+    });
+
+    it("closes the stream when a poll fails", async () => {
+      const inner = makeInner({
+        pollEvents: vi.fn().mockRejectedValue(new Error("poll failed")),
+      });
+      installFakeCore(inner);
+      const stream = new DirSQL({}).watch();
+
+      await expect(stream.next()).rejects.toThrow("poll failed");
+
+      expect(await stream.next()).toEqual({ value: undefined, done: true });
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("closes the stream on throw() and rejects with the error", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      const stream = db.watch();
+
+      await expect(stream.throw(new Error("consumer failed"))).rejects.toThrow(
+        "consumer failed",
+      );
+
+      expect(await stream.next()).toEqual({ value: undefined, done: true });
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("is its own async iterator", () => {
+      installFakeCore(makeInner());
+      const stream = new DirSQL({}).watch();
+      expect(stream[Symbol.asyncIterator]()).toBe(stream);
+    });
+
+    it("stops the core when the loop is left", async () => {
+      const inner = makeInner({
+        pollEvents: vi
+          .fn()
+          .mockResolvedValue([{ table: "t", action: "insert" }]),
+      });
+      installFakeCore(inner);
+      for await (const _ of new DirSQL({}).watch()) {
+        break;
+      }
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("starts the watcher again after the last stream closed", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      await db.watch().return();
+
+      db.watch();
+
+      expect(inner.startWatcher).toHaveBeenCalledTimes(2);
+    });
+
+    it("has nothing to stop when the stream closes before the core is built", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+
+      await db.watch().return();
+      await db.ready;
+
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+      expect(inner.startWatcher).not.toHaveBeenCalled();
+    });
+
+    it("keeps the core attached for a caller of startWatcher()", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.startWatcher();
+
+      await db.watch().return();
+
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+    });
+
+    it("keeps the core attached for a caller of pollEvents()", async () => {
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.pollEvents(0);
+
+      await db.watch().return();
+
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dropped stream", () => {
+    type Registry = {
+      cleanups: ((held: unknown) => void)[];
+      registered: object[];
+      unregistered: object[];
+    };
+
+    function stubFinalizationRegistry(): Registry {
+      const registry: Registry = {
+        cleanups: [],
+        registered: [],
+        unregistered: [],
+      };
+      vi.stubGlobal(
+        "FinalizationRegistry",
+        class {
+          constructor(cleanup: (held: unknown) => void) {
+            registry.cleanups.push(cleanup);
+          }
+          register(_target: object, _held: unknown, token: object) {
+            registry.registered.push(token);
+          }
+          unregister(token: object) {
+            registry.unregistered.push(token);
+            return true;
+          }
+        },
+      );
+      return registry;
+    }
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("stops the core when the last stream is collected", async () => {
+      const registry = stubFinalizationRegistry();
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      db.watch();
+      expect(registry.cleanups).toHaveLength(1);
+      expect(registry.registered).toHaveLength(1);
+      const deref = vi
+        .spyOn(WeakRef.prototype, "deref")
+        .mockReturnValue(undefined);
+      try {
+        registry.cleanups[0]?.(null);
+      } finally {
+        deref.mockRestore();
+      }
+
+      expect(inner.stopWatcher).toHaveBeenCalledOnce();
+    });
+
+    it("keeps the core attached while another stream lives", async () => {
+      const registry = stubFinalizationRegistry();
+      const inner = makeInner();
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      await db.ready;
+      db.watch();
+      const kept = db.watch();
+      const deref = vi
+        .spyOn(WeakRef.prototype, "deref")
+        .mockReturnValueOnce(undefined);
+      try {
+        expect(registry.cleanups).toHaveLength(1);
+        registry.cleanups[0]?.(null);
+      } finally {
+        deref.mockRestore();
+      }
+
+      expect(inner.stopWatcher).not.toHaveBeenCalled();
+      await kept.return();
+    });
+
+    it("has nothing to collect once the stream is closed", async () => {
+      const registry = stubFinalizationRegistry();
+      installFakeCore(makeInner());
+      const stream = new DirSQL({}).watch();
+
+      await stream.return();
+
+      expect(registry.registered).toHaveLength(1);
+      expect(registry.unregistered).toEqual(registry.registered);
     });
   });
 });

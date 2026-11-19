@@ -39,6 +39,7 @@ type FakeInner = {
   query: ReturnType<typeof vi.fn>;
   queryOrdered: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
+  stopWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
 };
 
@@ -47,6 +48,7 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
     query: vi.fn().mockResolvedValue([]),
     queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
     startWatcher: vi.fn(),
+    stopWatcher: vi.fn(),
     pollEvents: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
@@ -72,6 +74,7 @@ describe("DirSQL construction", () => {
       null,
       null,
       false,
+      null,
       null,
     );
   });
@@ -104,6 +107,7 @@ describe("DirSQL construction", () => {
       "/cache.db",
       null,
       false,
+      null,
       null,
     );
   });
@@ -139,6 +143,16 @@ describe("DirSQL construction", () => {
     ]);
   });
 
+  it("forwards watch: false and refuses to watch", async () => {
+    const inner = makeInner();
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data", watch: false });
+    await db.ready;
+    expect(openAsync.mock.calls[0]?.[9]).toBe(false);
+    expect(() => db.watch()).toThrow(/watching is off/);
+    expect(inner.startWatcher).not.toHaveBeenCalled();
+  });
+
   it("forwards noIgnore as openAsync's ninth arg (#746)", async () => {
     openAsync.mockResolvedValue(makeInner());
     const db = new DirSQL({ root: "/data", noIgnore: true });
@@ -153,6 +167,7 @@ describe("DirSQL construction", () => {
       null,
       false,
       true,
+      null,
     );
   });
 
@@ -282,5 +297,54 @@ describe("DirSQL watch", () => {
     }
     expect(inner.startWatcher).toHaveBeenCalledOnce();
     expect(seen.map((e) => e.action)).toEqual(["insert", "insert", "delete"]);
+  });
+
+  it("stops the core when the last stream's loop is left", async () => {
+    const inner = makeInner({
+      pollEvents: vi.fn().mockResolvedValue([{ table: "t", action: "insert" }]),
+    });
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    const kept = db.watch();
+    for await (const _ of db.watch()) {
+      break;
+    }
+    expect(inner.stopWatcher).not.toHaveBeenCalled();
+
+    for await (const _ of kept) {
+      break;
+    }
+
+    expect(inner.stopWatcher).toHaveBeenCalledOnce();
+  });
+
+  it("attaches again for a stream opened after the last one closed", async () => {
+    const later: RowEvent = { table: "t", action: "insert", row: { n: 2 } };
+    const inner = makeInner({
+      pollEvents: vi.fn().mockResolvedValue([later]),
+    });
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    await db.ready;
+    await db.watch().return();
+
+    const stream = db.watch();
+    try {
+      expect(inner.startWatcher).toHaveBeenCalledTimes(2);
+      expect((await stream.next()).value).toEqual(later);
+    } finally {
+      await stream.return();
+    }
+  });
+
+  it("keeps the core attached for a direct poller", async () => {
+    const inner = makeInner();
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    await db.pollEvents(0);
+
+    await db.watch().return();
+
+    expect(inner.stopWatcher).not.toHaveBeenCalled();
   });
 });
