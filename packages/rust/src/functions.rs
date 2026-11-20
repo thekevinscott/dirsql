@@ -93,8 +93,8 @@ pub struct ResolvedFunction {
 }
 
 /// Register every resolved function on `conn`, once per accepted arity.
-/// Purely registration — no worker is spawned here. Returns the workers that
-/// batch, for the query path to run collect passes over.
+/// Purely registration — no worker is spawned here. Returns each function's
+/// worker, in order.
 ///
 /// Every function shares one `calls` reporter: what a user waiting on a query
 /// wants to know is how many round trips it is paying for, not which function
@@ -104,15 +104,13 @@ pub(crate) fn register_all(
     functions: &[ResolvedFunction],
     calls: &Arc<CallReporter>,
 ) -> rusqlite::Result<Vec<Arc<Worker>>> {
-    let mut batched = Vec::new();
+    let mut workers = Vec::new();
     for function in functions {
         let worker = Arc::new(Worker::for_process(function, Arc::clone(calls)));
         register_worker(conn, &worker, &function.args, function.deterministic)?;
-        if function.batch.is_some() {
-            batched.push(worker);
-        }
+        workers.push(worker);
     }
-    Ok(batched)
+    Ok(workers)
 }
 
 /// Register one worker's function on `conn` under each arity in `arities`.
@@ -1223,23 +1221,22 @@ mod tests {
         }
     }
 
-    /// Registration makes each function callable and hands back exactly the
-    /// workers that batch, which is what the query path runs collect passes
-    /// over.
+    /// Registration makes each function callable and hands back every
+    /// function's worker, in order.
     #[test]
-    fn register_all_registers_every_function_and_returns_the_batching_workers() {
+    fn register_all_registers_every_function_and_returns_their_workers() {
         let conn = Connection::open_in_memory().unwrap();
         let calls = Arc::new(reporter().0);
 
-        let batched = register_all(
+        let workers = register_all(
             &conn,
             &[resolved("plain", None), resolved("bulk", Some(4))],
             &calls,
         )
         .unwrap();
 
-        let names: Vec<&str> = batched.iter().map(|w| w.name.as_str()).collect();
-        assert_eq!(names, ["bulk"]);
+        let names: Vec<&str> = workers.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["plain", "bulk"]);
         assert!(conn.prepare("SELECT plain(1), bulk(1)").is_ok());
         assert!(
             conn.prepare("SELECT bulk(1, 2)").is_err(),
