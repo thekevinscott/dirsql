@@ -7,8 +7,6 @@ use dirsql::{DirSQL, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -84,13 +82,14 @@ fn count(db: &DirSQL, sql: &str) -> i64 {
 #[test]
 fn queries_never_fail_while_a_writer_creates_parents_then_children() {
     let (_dir, root, db) = open();
-    let stop = Arc::new(AtomicBool::new(false));
+    // The writer stops by its own clock: a query waits for a writer that
+    // creates folders faster than they are walked, so it could never stop it.
     let writer = {
         let root = root.clone();
-        let stop = Arc::clone(&stop);
         thread::spawn(move || {
+            let end = Instant::now() + Duration::from_secs(3);
             let mut n = 0;
-            while !stop.load(Ordering::SeqCst) {
+            while Instant::now() < end {
                 write_pair(&root, n);
                 n += 1;
                 thread::sleep(Duration::from_millis(1));
@@ -99,8 +98,7 @@ fn queries_never_fail_while_a_writer_creates_parents_then_children() {
     };
     let mut failures = Vec::new();
     let mut queries = 0;
-    let end = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < end {
+    while !writer.is_finished() {
         queries += 1;
         if let Err(e) =
             db.query("SELECT count(*) AS n FROM turn JOIN advice ON advice.id = turn.advice")
@@ -108,7 +106,6 @@ fn queries_never_fail_while_a_writer_creates_parents_then_children() {
             failures.push(e.to_string());
         }
     }
-    stop.store(true, Ordering::SeqCst);
     writer.join().unwrap();
     assert!(
         failures.is_empty(),
