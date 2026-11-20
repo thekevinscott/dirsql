@@ -336,7 +336,7 @@ fn a_timeout_wrapped_hook_that_overruns_fails_the_build() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "timeout 0.5 sh slow.sh"
+on-file = '''perl -e 'alarm shift; exec @ARGV' 1 sh slow.sh'''
 "#,
     )
     .unwrap();
