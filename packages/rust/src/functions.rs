@@ -328,6 +328,10 @@ struct Collect {
 }
 
 impl Worker {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     fn for_process(function: &ResolvedFunction, calls: Arc<CallReporter>) -> Self {
         let command = function.command.clone();
         let cwd = function.cwd.clone();

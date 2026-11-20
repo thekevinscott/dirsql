@@ -500,8 +500,8 @@ struct DirSqlInner {
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
-    /// Held across every change to the index and every query, so a query
-    /// never reads a batch half applied.
+    /// Held across every change to the index, and across every query until
+    /// queries move to readers, so a query never reads a batch half applied.
     fresh: Mutex<FreshState>,
     /// How many times the index has been asked for. Each caller's count is
     /// its turn.
@@ -515,6 +515,15 @@ struct DirSqlInner {
     /// The error of each file, by table and path, whose hook or rows failed
     /// after the build. Every query raises the first while any stands.
     failed_files: Mutex<BTreeMap<(String, String), String>>,
+    /// Set while a query holds the index on the writer's connection.
+    querying: AtomicBool,
+    /// Set by a query that found another query holding the index: the next
+    /// turn moves queries to readers.
+    contended: AtomicBool,
+    /// Idle reader connections, one per query that has run at once.
+    readers: Mutex<Vec<Db>>,
+    /// Held by a query on a reader that may call a batched function.
+    batched_turn: Mutex<()>,
 }
 
 /// A symlinked directory at `path`, under a watch anchor, resolving to
@@ -569,6 +578,9 @@ struct FreshState {
     locked: bool,
     /// The turn the index goes to next.
     serving: u64,
+    /// Queries run on reader connections, each on a snapshot of its own,
+    /// and hold the index only for their turn.
+    on_readers: bool,
 }
 
 impl FreshState {
@@ -772,6 +784,12 @@ impl DirSQL {
     /// split, so a query reads whole batches only. `on_file` runs once per
     /// change: under a writer that never pauses, a slow callback lets one
     /// batch grow large, and the query waits as long as that batch takes.
+    ///
+    /// Queries wait for one another until one has had to. From then on, the
+    /// index lives in a file in SQLite's temp directory (copied there once,
+    /// while queries and batches wait), and each query reads a snapshot on a
+    /// connection of its own while other queries and later batches proceed.
+    /// Queries that name a batched function still run one at a time.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
         self.query_ordered(sql).map(|result| result.rows)
     }
@@ -793,9 +811,7 @@ impl DirSQL {
     /// [`query_ordered`](Self::query_ordered), binding `params` as
     /// [`query_with`](Self::query_with) does.
     pub fn query_ordered_with(&self, sql: &str, params: &Params) -> Result<QueryResult> {
-        let _fresh = self.refresh()?;
-        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_ordered_with(sql, params).map_err(map_db_error)
+        self.read(sql, |db| db.query_ordered_with(sql, params))
     }
 
     /// [`query_ordered`](Self::query_ordered), abandoned once `cancelled` is
@@ -806,9 +822,75 @@ impl DirSQL {
         sql: &str,
         cancelled: Arc<AtomicBool>,
     ) -> Result<QueryResult> {
-        let _fresh = self.refresh()?;
+        self.read(sql, |db| db.query_ordered_until(sql, cancelled))
+    }
+
+    /// Run `run` once the index is fresh. Until a query has had to wait for
+    /// another, every query runs on the writer's connection holding the
+    /// index; from then on each takes its turn, so it still waits for a batch
+    /// in progress, then runs on a reader in a read transaction of its own
+    /// while later batches and queries go ahead.
+    fn read<T>(&self, sql: &str, run: impl FnOnce(&Db) -> crate::db::Result<T>) -> Result<T> {
+        if self.inner.querying.load(Ordering::SeqCst) {
+            self.inner.contended.store(true, Ordering::SeqCst);
+        }
+        let fresh = self.refresh()?;
+        if !fresh.on_readers {
+            let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+            self.inner.querying.store(true, Ordering::SeqCst);
+            let out = run(&db);
+            self.inner.querying.store(false, Ordering::SeqCst);
+            return out.map_err(map_db_error);
+        }
+        let reader = self.take_reader()?;
+        drop(fresh);
+        let out = self.read_on(&reader, sql, run);
+        if let Ok(mut idle) = self.inner.readers.lock() {
+            idle.push(reader);
+        }
+        out
+    }
+
+    fn read_on<T>(
+        &self,
+        reader: &Db,
+        sql: &str,
+        run: impl FnOnce(&Db) -> crate::db::Result<T>,
+    ) -> Result<T> {
+        let _batched = if reader.may_call_batched(sql) {
+            Some(self.inner.batched_turn.lock().map_err(DirSqlError::lock)?)
+        } else {
+            None
+        };
+        let snapshot = reader
+            .conn()
+            .unchecked_transaction()
+            .map_err(|e| map_db_error(DbError::from(e)))?;
+        let out = run(reader);
+        drop(snapshot);
+        out.map_err(map_db_error)
+    }
+
+    fn take_reader(&self) -> Result<Db> {
+        if let Some(reader) = self.inner.readers.lock().map_err(DirSqlError::lock)?.pop() {
+            return Ok(reader);
+        }
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_ordered_until(sql, cancelled).map_err(map_db_error)
+        db.reader().map_err(map_db_error)
+    }
+
+    /// Move queries to readers once one found another holding the index,
+    /// first copying an anonymous database into a file they can open. Runs
+    /// holding the index, so batches and queries wait for the copy. If the
+    /// copy fails, queries stay on the writer.
+    fn move_to_readers_if_contended(&self, state: &mut FreshState) {
+        if state.on_readers || !self.inner.contended.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mut db) = self.inner.db.lock() else {
+            return;
+        };
+        state.on_readers = db.promote().is_ok();
     }
 
     /// Hold the index still until [`unlock_index`](Self::unlock_index): no
@@ -862,6 +944,7 @@ impl DirSQL {
         if self.inner.fresh.is_poisoned() {
             return Err(PoisonError::new(state));
         }
+        self.move_to_readers_if_contended(&mut state);
         Ok(state)
     }
 
@@ -962,10 +1045,7 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
-        let _fresh = self.refresh()?;
-        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_each_with(sql, params, start, on_row)
-            .map_err(map_db_error)
+        self.read(sql, |db| db.query_each_with(sql, params, start, on_row))
     }
 
     /// [`query_each`](Self::query_each) handing each row's cells as SQLite
@@ -977,10 +1057,9 @@ impl DirSQL {
         start: impl FnOnce(&[String]) -> S,
         on_row: impl FnMut(&mut S, &[rusqlite::types::ValueRef<'_>]),
     ) -> Result<S> {
-        let _fresh = self.refresh()?;
-        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query_each_ref(sql, &Params::default(), start, on_row)
-            .map_err(map_db_error)
+        self.read(sql, |db| {
+            db.query_each_ref(sql, &Params::default(), start, on_row)
+        })
     }
 
     /// Attach to the watcher the build started, starting it if the build
@@ -2442,6 +2521,10 @@ impl DirSQL {
                 unlocked: Condvar::new(),
                 links: Mutex::new(links),
                 failed_files: Mutex::new(BTreeMap::new()),
+                querying: AtomicBool::new(false),
+                contended: AtomicBool::new(false),
+                readers: Mutex::new(Vec::new()),
+                batched_turn: Mutex::new(()),
             }),
         };
         built.apply_queued_at_build()?;
@@ -9106,6 +9189,105 @@ mod internal_tests {
         assert!(db.inner.fresh.try_lock().is_ok());
     }
 
+    fn on_readers(db: &DirSQL) -> bool {
+        db.inner.fresh.lock().unwrap().on_readers
+    }
+
+    #[test]
+    fn queries_one_after_another_stay_on_the_writer() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        row_names(&db);
+        row_names(&db);
+        assert!(!on_readers(&db));
+        assert!(db.inner.db.lock().unwrap().reader().is_err());
+    }
+
+    #[test]
+    fn a_query_on_the_writer_holds_the_index_and_marks_itself_querying() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        db.read("SELECT 1", |_| {
+            assert!(db.inner.fresh.try_lock().is_err());
+            assert!(db.inner.querying.load(Ordering::SeqCst));
+            Ok(())
+        })
+        .unwrap();
+        assert!(!db.inner.querying.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_query_finding_another_querying_moves_queries_to_readers() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.inner.querying.store(true, Ordering::SeqCst);
+        assert_eq!(row_names(&db), ["one"]);
+        assert!(on_readers(&db));
+        assert!(!db.inner.contended.load(Ordering::SeqCst));
+        assert!(db.inner.db.lock().unwrap().reader().is_ok());
+        assert_eq!(db.inner.readers.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_batch_taking_the_turn_after_contention_moves_queries_to_readers() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        db.inner.contended.store(true, Ordering::SeqCst);
+        db.apply_file_events(Vec::new());
+        assert!(on_readers(&db));
+    }
+
+    #[test]
+    fn a_query_on_a_reader_releases_the_index_and_reuses_the_reader() {
+        let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
+        db.inner.contended.store(true, Ordering::SeqCst);
+        row_names(&db);
+        db.read("SELECT 1", |_| {
+            assert!(db.inner.fresh.try_lock().is_ok());
+            assert!(!db.inner.querying.load(Ordering::SeqCst));
+            assert!(db.inner.readers.lock().unwrap().is_empty());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.inner.readers.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_query_on_a_reader_that_names_a_batched_function_waits_its_turn() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        let held = db.inner.batched_turn.lock().unwrap();
+        let read_on = |sql: &str| {
+            let mut reader = Db::new().unwrap();
+            let (worker, _) = functions::test_support::batched_worker(
+                "embed",
+                8,
+                functions::CallReporter::new(),
+                vec![],
+            );
+            reader.register_batched_worker(worker, &[1]);
+            db.read_on(&reader, sql, |_| Ok(())).unwrap();
+        };
+        thread::scope(|scope| {
+            scope.spawn(|| read_on("SELECT 1")).join().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                read_on("SELECT embed(1)");
+                tx.send(()).unwrap();
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+            drop(held);
+            rx.recv().unwrap();
+        });
+    }
+
+    #[test]
+    fn a_query_on_a_reader_reads_one_snapshot() {
+        let (_dir, _root, db, _) = fresh_fixture(&[]);
+        let reader = Db::new().unwrap();
+        db.read_on(&reader, "SELECT 1", |reader| {
+            assert!(!reader.conn().is_autocommit());
+            Ok(())
+        })
+        .unwrap();
+        assert!(reader.conn().is_autocommit());
+    }
+
     #[test]
     fn index_arrivals_counts_each_query_and_each_batch() {
         let (_dir, _root, db, _) = fresh_fixture(&[("a.txt", "one")]);
@@ -9117,7 +9299,11 @@ mod internal_tests {
 
     #[test]
     fn a_caller_waits_while_the_index_is_locked_or_the_turn_is_not_its_own() {
-        let state = |locked, serving| FreshState { locked, serving };
+        let state = |locked, serving| FreshState {
+            locked,
+            serving,
+            on_readers: false,
+        };
         assert!(!state(false, 3).must_wait(3));
         assert!(state(true, 3).must_wait(3));
         assert!(state(false, 3).must_wait(4));
