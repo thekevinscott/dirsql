@@ -1367,9 +1367,11 @@ impl DirSQL {
                 continue;
             }
             if group.matcher.respects_gitignore()
-                && scanner::is_gitignored_path(
+                && scanner::gitignore_drops(
                     &abs_path,
+                    &rel_path_buf,
                     self.inner.fs.is_dir(&abs_path).unwrap_or(false),
+                    &group.matcher,
                 )
             {
                 continue;
