@@ -17,20 +17,25 @@ use tempfile::TempDir;
 /// Long enough for any read of a one-byte file; a blocked open never ends.
 const READ_BOUND: Duration = Duration::from_secs(30);
 
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    #[expect(
+        unsafe_code,
+        reason = "no safe API makes a FIFO on every unix: rustix has none on macOS"
+    )]
+    let made = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
+    assert_eq!(made, 0, "mkfifo {}", path.display());
+}
+
 /// What `kind` replaces the file at `path` with.
 fn swap(path: &Path, kind: &str) {
     fs::remove_file(path).unwrap();
     match kind {
         "directory" => fs::create_dir(path).unwrap(),
         #[cfg(unix)]
-        "fifo" => rustix::fs::mknodat(
-            rustix::fs::CWD,
-            path,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_raw_mode(0o644),
-            0,
-        )
-        .unwrap(),
+        "fifo" => mkfifo(path),
         #[cfg(unix)]
         "device" => std::os::unix::fs::symlink("/dev/null", path).unwrap(),
         #[cfg(windows)]

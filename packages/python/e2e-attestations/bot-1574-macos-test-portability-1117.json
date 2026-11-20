@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/cli_version_test.py tests/e2e/on_file_query_test.py tests/e2e/on_file_failure_test.py -x -q",
+  "ran_at": 1794884205,
+  "exit_code": 0,
+  "commit": "da18e5c856b7f5eb2002257e46cac3d994a514af",
+  "branch": "bot/1574-macos-test-portability-1117"
+}

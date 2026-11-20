@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use rusqlite::backup::Backup;
 use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
@@ -6,6 +7,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 
 use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
@@ -16,6 +18,7 @@ use crate::path_table::{self, DEFAULT_IGNORES, PathTable, Resolution};
 use crate::scanner;
 use crate::sql_literal::{quote_identifier, quote_literal};
 use crate::table_refs::{case_alias, table_refs};
+use crate::temp_db_file::TempDbFile;
 use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
@@ -29,6 +32,12 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 pub enum DbError {
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+
+    #[error("cannot create the index database file: {0}")]
+    TempFile(#[from] std::io::Error),
+
+    #[error("an anonymous database has no file another connection can open; promote it first")]
+    Anonymous,
 
     #[error("Schema mismatch: {0}")]
     SchemaMismatch(String),
@@ -574,6 +583,16 @@ pub struct Db {
     /// An in-memory database [`Self::as_stored`] stores rows in to read them
     /// back after column affinity, opened on first use.
     scratch: OnceCell<Connection>,
+    /// Every declared function's worker with its arities and determinism, so
+    /// a [`Self::reader`] registers the same workers.
+    registered: Vec<(Arc<Worker>, Vec<u8>, bool)>,
+    /// The extensions loaded on this connection, in load order.
+    extensions: Vec<(PathBuf, Option<String>)>,
+    /// This database's file; `None` while the database is anonymous.
+    path: Option<PathBuf>,
+    /// The default database's file, deleted once the last connection sharing
+    /// it drops. Declared after `conn` so the connection closes first.
+    file: Option<Arc<TempDbFile>>,
 }
 
 /// A table's `PRIMARY KEY` column names, then each plain `UNIQUE` index's.
@@ -589,6 +608,27 @@ impl Drop for ClearOnDrop<'_> {
             let _ = worker.clear();
         }
     }
+}
+
+/// A connection to a WAL-mode database file.
+fn open_wal_connection(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    // Best-effort: WAL is unavailable on some filesystems (SQLite keeps the
+    // prior journal mode and returns it); the database still works there,
+    // with readers and the writer taking turns.
+    let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    Ok(conn)
+}
+
+/// A connection to the default database's temp file.
+fn open_temp_connection(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    // The files are deleted on close, so copying the WAL back first is wasted.
+    conn.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+        true,
+    )?;
+    Ok(conn)
 }
 
 /// A worker failure outside any SQL call, surfaced the way a failing call
@@ -608,42 +648,53 @@ impl Db {
     /// scale with the indexed corpus. The file lands in the directory
     /// SQLite's VFS picks (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` →
     /// `/usr/tmp` → `/tmp`); export `SQLITE_TMPDIR` to steer it off a
-    /// tmpfs mount.
+    /// tmpfs mount. No other connection can open it until [`Self::promote`].
     pub fn new() -> Result<Self> {
         let conn = Connection::open("")?;
         // The database is a private temp file that dies with the process, so
         // durability buys nothing.
         conn.pragma_update(None, "synchronous", "OFF")?;
-        // Lets a GROUP BY or ORDER BY over a large table sort on background threads.
-        conn.pragma_update(None, "threads", 8)?;
         ensure_internal_rows_table(&conn)?;
-        let scope = StatementScope::new();
-        vtab::load_module(&conn, Arc::clone(&scope))?;
-        parsed_vtab::load_module(&conn, Arc::clone(&scope))?;
-        Ok(Self {
-            conn,
-            scope,
-            path_table_root: None,
-            hint_legacy_files_table: false,
-            path_table_ignore: Vec::new(),
-            path_table_gitignore: true,
-            path_table_parser: None,
-            calls: CallReporter::new(),
-            batched: Vec::new(),
-            keys: RefCell::default(),
-            scratch: OnceCell::new(),
-        })
+        Self::with_connection(conn, None, None)
+    }
+
+    /// Move an anonymous database into a file other connections can open:
+    /// copy it into a new WAL-mode file in SQLite's temp directory (the
+    /// order above; `std::env::temp_dir()` on Windows) and make that file
+    /// this `Db`'s connection, keeping its path-table settings, extensions
+    /// and declared functions. The file and its `-journal`, `-wal` and
+    /// `-shm` companions are deleted once the last connection to it drops;
+    /// a crash leaves them behind. A database that already has a file is
+    /// left as it is.
+    pub fn promote(&mut self) -> Result<()> {
+        if self.path.is_some() {
+            return Ok(());
+        }
+        let file = Arc::new(TempDbFile::create()?);
+        let mut conn = open_temp_connection(file.path())?;
+        conn.pragma_update(None, "synchronous", "OFF")?;
+        Backup::new(&self.conn, &mut conn)?.run_to_completion(i32::MAX, Duration::ZERO, None)?;
+        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        *self = self.sibling(conn, Some(file.path().to_path_buf()), Some(file))?;
+        Ok(())
     }
 
     /// Open a `Db` backed by a named on-disk SQLite file. Used by the
-    /// persistent cache path; the anonymous temp database is the default.
+    /// persistent cache path; the temp database is the default.
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        // Best-effort: WAL is unavailable on some filesystems (SQLite keeps the
-        // prior journal mode and returns it); the cache still works there.
-        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        let conn = open_wal_connection(path)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
+        Self::with_connection(conn, Some(path.to_path_buf()), None)
+    }
+
+    fn with_connection(
+        conn: Connection,
+        path: Option<PathBuf>,
+        file: Option<Arc<TempDbFile>>,
+    ) -> Result<Self> {
+        // Lets a GROUP BY or ORDER BY over a large table sort on background threads.
+        conn.pragma_update(None, "threads", 8)?;
         let scope = StatementScope::new();
         vtab::load_module(&conn, Arc::clone(&scope))?;
         parsed_vtab::load_module(&conn, Arc::clone(&scope))?;
@@ -659,7 +710,52 @@ impl Db {
             batched: Vec::new(),
             keys: RefCell::default(),
             scratch: OnceCell::new(),
+            registered: Vec::new(),
+            extensions: Vec::new(),
+            path,
+            file,
         })
+    }
+
+    /// Another connection to this database, set up as this one is: the same
+    /// path-table settings, extensions and declared functions (sharing their
+    /// workers). It reads a snapshot while this connection writes. An
+    /// anonymous database has no file to open; [`Self::promote`] it first.
+    pub fn reader(&self) -> Result<Self> {
+        let Some(path) = &self.path else {
+            return Err(DbError::Anonymous);
+        };
+        let conn = match self.file {
+            Some(_) => open_temp_connection(path)?,
+            None => open_wal_connection(path)?,
+        };
+        self.sibling(conn, Some(path.clone()), self.file.clone())
+    }
+
+    /// A `Db` on `conn` with this one's path-table settings, extensions and
+    /// declared functions.
+    fn sibling(
+        &self,
+        conn: Connection,
+        path: Option<PathBuf>,
+        file: Option<Arc<TempDbFile>>,
+    ) -> Result<Self> {
+        let mut reader = Self::with_connection(conn, path, file)?;
+        reader.path_table_root = self.path_table_root.clone();
+        reader.hint_legacy_files_table = self.hint_legacy_files_table;
+        reader.path_table_ignore = self.path_table_ignore.clone();
+        reader.path_table_gitignore = self.path_table_gitignore;
+        reader.path_table_parser = self.path_table_parser.clone();
+        for (path, entrypoint) in &self.extensions {
+            reader.load_extension(path, entrypoint.as_deref())?;
+        }
+        for (worker, arities, deterministic) in &self.registered {
+            functions::register_worker(&reader.conn, worker, arities, *deterministic)?;
+        }
+        reader.registered = self.registered.clone();
+        reader.batched = self.batched.clone();
+        reader.calls = Arc::clone(&self.calls);
+        Ok(reader)
     }
 
     /// Set the directory a path-table's glob resolves against — the index
@@ -701,15 +797,22 @@ impl Db {
         &mut self,
         functions: &[ResolvedFunction],
     ) -> rusqlite::Result<()> {
-        let batched = functions::register_all(&self.conn, functions, &self.calls)?;
-        self.batched.extend(batched);
+        let workers = functions::register_all(&self.conn, functions, &self.calls)?;
+        for (worker, function) in workers.into_iter().zip(functions) {
+            if function.batch.is_some() {
+                self.batched.push(Arc::clone(&worker));
+            }
+            self.registered
+                .push((worker, function.args.clone(), function.deterministic));
+        }
         Ok(())
     }
 
     #[cfg(test)]
     fn register_batched_worker(&mut self, worker: Arc<Worker>, arities: &[u8]) {
         functions::register_worker(&self.conn, &worker, arities, true).unwrap();
-        self.batched.push(worker);
+        self.batched.push(Arc::clone(&worker));
+        self.registered.push((worker, arities.to_vec(), true));
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -730,7 +833,7 @@ impl Db {
         unsafe_code,
         reason = "rusqlite's load_extension API is unsafe by design"
     )]
-    pub fn load_extension(&self, path: &Path, entrypoint: Option<&str>) -> Result<()> {
+    pub fn load_extension(&mut self, path: &Path, entrypoint: Option<&str>) -> Result<()> {
         // SAFETY: loading an extension executes native code from `path`. The
         // path is operator-supplied configuration (a `[[dirsql.extension]]`
         // entry), at the same trust level as the DDL the operator already
@@ -741,6 +844,8 @@ impl Db {
             let _guard = rusqlite::LoadExtensionGuard::new(&self.conn)?;
             self.conn.load_extension(path, entrypoint)?;
         }
+        self.extensions
+            .push((path.to_path_buf(), entrypoint.map(str::to_owned)));
         Ok(())
     }
 
@@ -3803,17 +3908,70 @@ mod tests {
         assert_eq!(deleted, 0);
     }
 
-    #[test]
-    fn new_is_disk_backed_not_memory() {
-        // An in-memory SQLite database is pinned to journal_mode=memory; a
-        // file-backed one — including the anonymous temp database `Db::new`
-        // opens — defaults to journal_mode=delete.
-        let db = Db::new().unwrap();
-        let mode: String = db
-            .conn()
+    fn journal_mode(db: &Db) -> String {
+        db.conn()
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(mode, "delete");
+            .unwrap()
+    }
+
+    fn promoted() -> Db {
+        let mut db = Db::new().unwrap();
+        db.promote().unwrap();
+        db
+    }
+
+    #[test]
+    fn new_is_anonymous_and_opens_no_reader() {
+        let db = Db::new().unwrap();
+        assert!(db.path.is_none());
+        assert!(matches!(db.reader(), Err(DbError::Anonymous)));
+    }
+
+    #[test]
+    fn promote_moves_the_database_into_a_wal_temp_file() {
+        let db = promoted();
+        assert_eq!(journal_mode(&db), "wal");
+        let file = db.file.as_ref().unwrap();
+        assert_eq!(db.path.as_deref(), Some(file.path()));
+    }
+
+    #[test]
+    fn promote_keeps_the_rows() {
+        let mut db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+        db.promote().unwrap();
+        assert_eq!(count_t(&db), 1);
+    }
+
+    #[test]
+    fn promote_again_keeps_the_same_file() {
+        let mut db = promoted();
+        let path = db.path.clone();
+        db.promote().unwrap();
+        assert_eq!(db.path, path);
+    }
+
+    #[test]
+    fn promote_leaves_an_opened_file_where_it_is() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cache.db");
+        let mut db = Db::open(&path).unwrap();
+        db.promote().unwrap();
+        assert_eq!(db.path, Some(path));
+        assert!(db.file.is_none());
+    }
+
+    #[test]
+    fn promote_keeps_the_declared_functions_on_the_writer() {
+        let mut db = Db::new().unwrap();
+        let (worker, _sent) =
+            functions::test_support::batched_worker("up", 8, Arc::clone(&db.calls), vec![]);
+        db.register_batched_worker(Arc::clone(&worker), &[1]);
+        db.promote().unwrap();
+        assert!(db.conn().prepare("SELECT up(1)").is_ok());
+        assert!(Arc::ptr_eq(&db.batched[0], &worker));
     }
 
     #[test]
@@ -3825,6 +3983,97 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(pragma("synchronous"), 0);
+    }
+
+    fn count_t(db: &Db) -> i64 {
+        db.conn()
+            .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn reader_reads_what_the_writer_committed() {
+        let db = promoted();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let reader = db.reader().unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+        assert_eq!(count_t(&reader), 1);
+    }
+
+    #[test]
+    fn reader_keeps_the_database_after_the_writer_drops() {
+        let db = promoted();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let reader = db.reader().unwrap();
+        drop(db);
+        assert_eq!(count_t(&reader), 0);
+    }
+
+    #[test]
+    fn reader_of_an_opened_file_reads_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Db::open(&dir.path().join("cache.db")).unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let reader = db.reader().unwrap();
+        assert_eq!(count_t(&reader), 0);
+        assert!(reader.file.is_none());
+    }
+
+    #[test]
+    fn reader_carries_the_path_table_settings() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/root"));
+        db.set_hint_legacy_files_table(true);
+        db.add_path_table_ignore(vec!["skip".into()]);
+        db.set_path_table_gitignore(false);
+        db.set_path_table_parser("cat".into());
+
+        db.promote().unwrap();
+        let reader = db.reader().unwrap();
+
+        assert_eq!(reader.path_table_root, Some(PathBuf::from("/root")));
+        assert!(reader.hint_legacy_files_table);
+        assert_eq!(reader.path_table_ignore, ["skip"]);
+        assert!(!reader.path_table_gitignore);
+        assert_eq!(reader.path_table_parser.as_deref(), Some("cat"));
+    }
+
+    #[test]
+    fn reader_registers_the_same_workers() {
+        let mut db = Db::new().unwrap();
+        let (worker, _sent) =
+            functions::test_support::batched_worker("up", 8, Arc::clone(&db.calls), vec![]);
+        db.register_batched_worker(Arc::clone(&worker), &[1]);
+
+        db.promote().unwrap();
+        let reader = db.reader().unwrap();
+
+        assert!(reader.conn().prepare("SELECT up(1)").is_ok());
+        assert!(reader.conn().prepare("SELECT up(1, 2)").is_err());
+        assert_eq!(reader.batched.len(), 1);
+        assert!(Arc::ptr_eq(&reader.batched[0], &worker));
+        assert_eq!(reader.registered.len(), 1);
+        assert!(Arc::ptr_eq(&reader.registered[0].0, &worker));
+        assert!(Arc::ptr_eq(&reader.calls, &db.calls));
+    }
+
+    #[test]
+    fn reader_has_its_own_path_table_scope() {
+        let db = promoted();
+        let reader = db.reader().unwrap();
+        assert!(!Arc::ptr_eq(&reader.scope, &db.scope));
+    }
+
+    #[test]
+    fn reader_sorts_on_background_threads() {
+        let db = promoted();
+        let reader = db.reader().unwrap();
+        let threads: i64 = reader
+            .conn()
+            .query_row("PRAGMA threads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(threads, 8);
     }
 
     #[test]
@@ -4062,7 +4311,7 @@ mod tests {
 
     #[test]
     fn load_extension_missing_file_errors() {
-        let db = Db::new().unwrap();
+        let mut db = Db::new().unwrap();
         let err = db
             .load_extension(Path::new("/nonexistent/dirsql-no-such-ext.so"), None)
             .unwrap_err();

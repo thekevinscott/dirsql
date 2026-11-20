@@ -123,6 +123,9 @@ than it delivers:
    indexed, and without `--persist` nothing is written at all.
 3. **The index itself is ephemeral and off to the side.** Without persist, the
    database is an anonymous disk-backed temp database discarded on shutdown.
+   Promoting it copies it into a WAL-mode file in SQLite's temp directory
+   (never the indexed tree) that other connections can open, deleted with its
+   journal, `-wal` and `-shm` files on shutdown.
 
 ## Core Principle: One Implementation, Thin Bindings
 

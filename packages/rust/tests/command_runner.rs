@@ -124,11 +124,17 @@ fn a_signal_terminated_child_reports_code_signal() {
 
 #[test]
 fn a_timeout_wrapped_command_that_overruns_reports_nonzero_exit() {
-    // The runner itself is unbounded; bounding is the command's job via
-    // timeout(1), whose kill surfaces as an ordinary non-zero exit.
+    // The runner itself is unbounded; bounding is the command's job via a
+    // timeout(1)-style wrapper, whose kill surfaces as an ordinary non-zero
+    // exit. perl's alarm stands in for timeout(1), which macOS does not ship.
     let dir = TempDir::new().unwrap();
-    let err = run_command("timeout 0.2 sleep 30", &[], dir.path(), None)
-        .expect_err("timeout(1) kills the child");
+    let err = run_command(
+        "perl -e 'alarm shift; exec @ARGV' 1 sleep 30",
+        &[],
+        dir.path(),
+        None,
+    )
+    .expect_err("the alarm kills the child");
     assert!(
         matches!(err, CommandError::NonZeroExit { .. }),
         "expected NonZeroExit, got {err:?}"

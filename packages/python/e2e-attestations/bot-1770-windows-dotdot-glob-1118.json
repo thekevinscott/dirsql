@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1795054070,
+  "exit_code": 0,
+  "commit": "48d903c7b99300cbc90c02f9771c6273ba76aa4e",
+  "branch": "bot/1770-windows-dotdot-glob-1118"
+}

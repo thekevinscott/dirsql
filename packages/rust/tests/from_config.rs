@@ -89,7 +89,7 @@ fn from_config_exposes_stat_virtuals() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for f; do p=$(printf %s "$f" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$f" | tr -d " "); mtime=$(stat -c %Y "$f"); printf "{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}\n" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; done' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for f; do p=$(printf %s "$f" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$f" | tr -d " "); mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"); printf "{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}\n" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; done' sh {root}'''
 "#,
     )
     .unwrap();
