@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/stat_speed_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/many_dirs_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/use_case_join_test.py -x -q",
+  "ran_at": 1795198404,
+  "exit_code": 0,
+  "commit": "2e2cea5ff906de73e3d394f2a9d8c6897549b129",
+  "branch": "bot/1740-streamed-unlistable-1120"
+}

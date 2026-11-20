@@ -12,6 +12,7 @@ struct Streamed<R> {
     chunks: Vec<Arc<Vec<R>>>,
     done: bool,
     failed: bool,
+    error: Option<String>,
 }
 
 impl<R> Default for RowStream<R> {
@@ -21,6 +22,7 @@ impl<R> Default for RowStream<R> {
                 chunks: Vec::new(),
                 done: false,
                 failed: false,
+                error: None,
             }),
             grown: Condvar::new(),
         }
@@ -53,6 +55,12 @@ impl<R> RowStream<R> {
         self.grown.notify_all();
     }
 
+    /// Fail every read past the rows already made with `message`, the
+    /// statement's error, once the stream finishes.
+    pub fn fail(&self, message: String) {
+        self.lock().error = Some(message);
+    }
+
     fn settled(&self) -> MutexGuard<'_, Streamed<R>> {
         let state = self.lock();
         let state = self
@@ -64,20 +72,28 @@ impl<R> RowStream<R> {
     }
 
     /// Chunk `n`, waiting for the scan to make it; `None` once the scan
-    /// finished short of it.
-    pub fn chunk(&self, n: usize) -> Option<Arc<Vec<R>>> {
+    /// finished short of it, or its error when it failed.
+    pub fn chunk(&self, n: usize) -> Result<Option<Arc<Vec<R>>>, String> {
         let state = self.lock();
         let state = self
             .grown
             .wait_while(state, |state| !state.done && state.chunks.len() <= n)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!state.failed, "the scan feeding this table panicked");
-        state.chunks.get(n).cloned()
+        match (state.chunks.get(n), &state.error) {
+            (Some(chunk), _) => Ok(Some(Arc::clone(chunk))),
+            (None, Some(error)) => Err(error.clone()),
+            (None, None) => Ok(None),
+        }
     }
 
-    /// Every row, once the scan is through.
-    pub fn all(&self) -> Settled<R> {
-        Settled::new(self.settled().chunks.clone())
+    /// Every row, once the scan is through; its error when it failed.
+    pub fn all(&self) -> Result<Settled<R>, String> {
+        let state = self.settled();
+        match &state.error {
+            Some(error) => Err(error.clone()),
+            None => Ok(Settled::new(state.chunks.clone())),
+        }
     }
 
     /// The rows made so far.
@@ -135,23 +151,23 @@ mod tests {
     #[test]
     fn chunks_come_back_in_push_order_then_none() {
         let stream = stream_of(&[&[1, 2], &[3]]);
-        assert_eq!(*stream.chunk(0).unwrap(), vec![1, 2]);
-        assert_eq!(*stream.chunk(1).unwrap(), vec![3]);
-        assert!(stream.chunk(2).is_none());
+        assert_eq!(*stream.chunk(0).unwrap().unwrap(), vec![1, 2]);
+        assert_eq!(*stream.chunk(1).unwrap().unwrap(), vec![3]);
+        assert!(stream.chunk(2).unwrap().is_none());
     }
 
     #[test]
     fn an_empty_chunk_is_never_handed_out() {
         let stream = stream_of(&[&[], &[1], &[]]);
-        assert_eq!(*stream.chunk(0).unwrap(), vec![1]);
-        assert!(stream.chunk(1).is_none());
+        assert_eq!(*stream.chunk(0).unwrap().unwrap(), vec![1]);
+        assert!(stream.chunk(1).unwrap().is_none());
     }
 
     #[test]
     fn a_made_chunk_is_read_before_the_scan_finishes() {
         let stream = RowStream::default();
         stream.push(Arc::new(vec![7]));
-        assert_eq!(*stream.chunk(0).unwrap(), vec![7]);
+        assert_eq!(*stream.chunk(0).unwrap().unwrap(), vec![7]);
     }
 
     #[test]
@@ -160,9 +176,21 @@ mod tests {
         stream.finish(true);
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stream.chunk(0)));
         assert!(read.is_err());
-        let read =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stream.all().iter().count()));
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stream.all().map(|all| all.iter().count())
+        }));
         assert!(read.is_err());
+    }
+
+    #[test]
+    fn a_scan_error_fails_a_read_past_the_rows_made() {
+        let stream = RowStream::default();
+        stream.push(Arc::new(vec![1]));
+        stream.fail("cannot list".into());
+        stream.finish(false);
+        assert_eq!(*stream.chunk(0).unwrap().unwrap(), vec![1]);
+        assert_eq!(stream.chunk(1).unwrap_err(), "cannot list");
+        assert_eq!(stream.all().err().unwrap(), "cannot list");
     }
 
     #[test]
@@ -176,7 +204,7 @@ mod tests {
 
     #[test]
     fn settled_rows_are_found_by_position_across_chunks() {
-        let all = stream_of(&[&[10, 11], &[12], &[13, 14]]).all();
+        let all = stream_of(&[&[10, 11], &[12], &[13, 14]]).all().unwrap();
         let found: Vec<_> = (0..6).map(|p| all.get(p).copied()).collect();
         assert_eq!(
             found,
@@ -187,6 +215,6 @@ mod tests {
 
     #[test]
     fn nothing_is_found_in_an_empty_stream() {
-        assert!(stream_of(&[]).all().get(0).is_none());
+        assert!(stream_of(&[]).all().unwrap().get(0).is_none());
     }
 }
