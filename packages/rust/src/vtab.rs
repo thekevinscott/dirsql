@@ -446,10 +446,10 @@ impl ScanSpec {
             .current
             .lock()
             .map_or_else(|_| Weak::new(), |c| c.clone());
-        if let Some(rows) = current.upgrade() {
-            stat_rows(&rows.all().iter().collect::<Vec<_>>(), &|row| {
-                self.stat(row)
-            });
+        if let Some(rows) = current.upgrade()
+            && let Ok(all) = rows.all()
+        {
+            stat_rows(&all.iter().collect::<Vec<_>>(), &|row| self.stat(row));
         }
         **row.facts.get_or_init(|| Box::new(self.stat(row)))
     }
@@ -525,9 +525,7 @@ impl TableSource for ScanSpec {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
         let mut chunk = Vec::with_capacity(STREAM_CHUNK_ROWS);
-        // A statement's rows have no way to fail yet, so a folder that cannot
-        // be listed holds nothing here.
-        let _ = scan_glob_rows(
+        let scanned = scan_glob_rows(
             &self.root,
             &self.glob,
             &self.ignore,
@@ -543,6 +541,9 @@ impl TableSource for ScanSpec {
             },
         );
         rows.push(Arc::new(chunk));
+        if let Err(unlistable) = scanned {
+            rows.fail(unlistable.to_string());
+        }
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
@@ -1148,7 +1149,7 @@ mod tests {
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
         let spec = parse_module_args(&args, usize::MAX).unwrap();
         let rows = scanned(&spec);
-        let rows = rows.all();
+        let rows = rows.all().unwrap();
         assert!(rows.iter().all(|row| row.facts.get().is_none()));
 
         assert_eq!(spec.facts(rows.get(0).unwrap()).size, Some(2));
@@ -1179,10 +1180,10 @@ mod tests {
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
         let rows = scanned(&parse_module_args(&args, usize::MAX).unwrap());
 
-        assert_eq!(rows.chunk(0).unwrap().len(), STREAM_CHUNK_ROWS);
-        assert_eq!(rows.chunk(1).unwrap().len(), 1);
-        assert!(rows.chunk(2).is_none());
-        let all = rows.all();
+        assert_eq!(rows.chunk(0).unwrap().unwrap().len(), STREAM_CHUNK_ROWS);
+        assert_eq!(rows.chunk(1).unwrap().unwrap().len(), 1);
+        assert!(rows.chunk(2).unwrap().is_none());
+        let all = rows.all().unwrap();
         let paths: Vec<&str> = all.iter().map(|row| utf8(row.path())).collect();
         assert_eq!(paths, names);
     }

@@ -209,7 +209,7 @@ mod tests {
         };
         let stream = Arc::new(RowStream::default());
         table.rows(&stream);
-        assert!(Arc::ptr_eq(&stream.chunk(0).unwrap(), &table.rows));
+        assert!(Arc::ptr_eq(&stream.chunk(0).unwrap().unwrap(), &table.rows));
     }
 
     /// The three fixed arguments SQLite prepends before the module's own.
