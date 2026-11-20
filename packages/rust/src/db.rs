@@ -809,7 +809,7 @@ impl Db {
     }
 
     #[cfg(test)]
-    fn register_batched_worker(&mut self, worker: Arc<Worker>, arities: &[u8]) {
+    pub(crate) fn register_batched_worker(&mut self, worker: Arc<Worker>, arities: &[u8]) {
         functions::register_worker(&self.conn, &worker, arities, true).unwrap();
         self.batched.push(Arc::clone(&worker));
         self.registered.push((worker, arities.to_vec(), true));
@@ -1789,6 +1789,16 @@ impl Db {
             return collected;
         }
         self.run_statement(sql, params)
+    }
+
+    /// Whether `sql` may call a batched function: it names one, in any case.
+    /// Their workers gather one statement's arguments at a time, so two such
+    /// statements must not run at once.
+    pub(crate) fn may_call_batched(&self, sql: &str) -> bool {
+        let sql = sql.to_lowercase();
+        self.batched
+            .iter()
+            .any(|worker| sql.contains(&worker.name().to_lowercase()))
     }
 
     /// [`query_ordered`](Self::query_ordered), abandoned with an interrupt
@@ -2918,6 +2928,22 @@ mod tests {
                 [Value::Text("b".into()), Value::Text("B".into())]
             ]
         );
+    }
+
+    #[test]
+    fn may_call_batched_matches_a_batched_function_name_in_any_case() {
+        let mut db = Db::new().unwrap();
+        let (worker, _) =
+            functions::test_support::batched_worker("embed", 8, Arc::clone(&db.calls), vec![]);
+        db.register_batched_worker(worker, &[1]);
+        assert!(db.may_call_batched("SELECT EMBED(x) FROM t"));
+        assert!(!db.may_call_batched("SELECT x FROM t"));
+    }
+
+    #[test]
+    fn may_call_batched_is_false_without_batched_functions() {
+        let db = Db::new().unwrap();
+        assert!(!db.may_call_batched("SELECT embed(x) FROM t"));
     }
 
     #[test]
