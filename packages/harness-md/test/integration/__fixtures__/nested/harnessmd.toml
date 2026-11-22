@@ -1,0 +1,2 @@
+[out]
+python = "elsewhere/{test}_test.py"

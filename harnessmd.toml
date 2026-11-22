@@ -1,11 +1,12 @@
 headings = ["test", "surface", "language"]
 
 [out]
-python = "tests/{language}/build/{surface}/{test}_test.py"
-typescript = "tests/{language}/build/{surface}/{test}.test.ts"
-rust = "tests/{language}/build/{surface}/{test}.rs"
+python = "tests/python/.harnessmd/{surface}/{test}_test.py"
+typescript = "tests/typescript/.harnessmd/{surface}/{test}.test.ts"
+# cargo only finds test files that sit directly in a crate's tests/ folder.
+rust = "tests/rust/tests/{surface}_{test}.rs"
 
 [cli]
-python = ["uv", "run", "--project", "{root}/packages/python", "dirsql"]
+python = ["{root}/packages/python/.venv/bin/dirsql"]
 typescript = ["node", "{root}/packages/ts/dist/cli/dirsql.js"]
-rust = ["cargo", "run", "--quiet", "--manifest-path", "{root}/packages/rust/Cargo.toml", "--features", "cli", "--bin", "dirsql", "--"]
+rust = ["{root}/target/release/dirsql"]

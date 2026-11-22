@@ -60,3 +60,22 @@ test('leaves out data under a sibling heading', async () => {
 
   expect(await readFile(path.join(root, 'build/typescript/sdk/it_runs_a_query.test.ts'), 'utf8')).not.toContain('baseline');
 });
+
+test('lets a harnessmd.toml nearer the markdown file overrule one key and keep the rest', async () => {
+  const root = await project();
+  await cp(path.join(fixtures, 'nested'), path.join(root, 'nested'), { recursive: true });
+  const written = await write(path.join(root, 'nested/deeper/data.md'), { root });
+
+  expect(written).toEqual([
+    path.join(root, 'elsewhere/it_runs_a_query_test.py'),
+    path.join(root, 'build/typescript/sdk/it_runs_a_query.test.ts'),
+    path.join(root, 'build/rust/sdk/it_runs_a_query.rs'),
+  ]);
+});
+
+test('writes into .harnessmd when there is no harnessmd.toml', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'harness-md-test-'));
+  const written = await write(path.join(fixtures, 'data.md'), { root, language: 'python' });
+
+  expect(written).toEqual([path.join(root, '.harnessmd/python/sdk/it_runs_a_query_test.py')]);
+});

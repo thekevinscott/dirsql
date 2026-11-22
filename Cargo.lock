@@ -615,6 +615,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirsql-md-tests"
+version = "0.0.0"
+dependencies = [
+ "dirsql",
+ "serde_json",
+]
+
+[[package]]
 name = "dirsql-napi"
 version = "0.1.0"
 dependencies = [

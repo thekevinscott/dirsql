@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     // napi modules need forks, as in packages/ts.
     pool: "forks",
-    include: ["build/**/*.test.ts"],
+    include: [".harnessmd/**/*.test.ts"],
     setupFiles: process.env.MEASURE ? ["measure.ts"] : [],
   },
 });

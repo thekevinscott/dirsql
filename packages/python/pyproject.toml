@@ -46,6 +46,8 @@ dev = [
     # skips itself below that (thekevinscott/curtaincall#26).
     'curtaincall>=0.3; python_version >= "3.12"',
     "pytest-memray>=1.11.0",
+    "pytest-repeat>=0.9.4",
+    "psutil>=7.2.2",
 ]
 
 [project.scripts]

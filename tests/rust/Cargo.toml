@@ -1,0 +1,9 @@
+[package]
+name = "dirsql-md-tests"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dev-dependencies]
+dirsql = { workspace = true }
+serde_json = { workspace = true }

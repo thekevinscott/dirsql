@@ -22,7 +22,7 @@ interface Leaf {
 const within = (outer: string[], inner: string[]) => outer.every((heading, depth) => inner[depth] === heading);
 
 export const write = async (file: string, { root = process.cwd(), language, out: outOverride }: WriteOptions = {}): Promise<string[]> => {
-  const { headings, out, cli = {} } = await readConfig(root);
+  const { headings, out, cli = {} } = await readConfig(root, file);
   const items = readDocument(await readFile(file, 'utf8'));
   const languageDepth = headings.indexOf('language');
   const surfaceDepth = headings.indexOf('surface');
