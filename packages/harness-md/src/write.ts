@@ -29,14 +29,13 @@ export const write = async (file: string, { root = process.cwd() }: WriteOptions
       continue;
     }
     if (item.path.length === headings.length && item.path[languageDepth] === item.language) {
-      leaves.set(item.path.join('/'), { path: item.path, fileLanguage: item.language as Language });
-    }
-    // A block right under the cli heading is written once per launcher.
-    if (item.path.length === languageDepth && item.path[surfaceDepth] === 'cli') {
-      for (const [language, launcher] of Object.entries(cli)) {
-        const leaf = [...item.path, language];
-        leaves.set(leaf.join('/'), { path: leaf, fileLanguage: item.language as Language, cli: launcher });
-      }
+      leaves.set(item.path.join('/'), {
+        path: item.path,
+        fileLanguage: item.language as Language,
+        cli: item.path[surfaceDepth] === 'cli'
+          ? cli[item.language]?.map(part => part.replaceAll('{root}', path.resolve(root)))
+          : undefined,
+      });
     }
   }
 

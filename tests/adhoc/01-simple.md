@@ -9,6 +9,7 @@ from dirsql import DirSQL
 ```
 
 ```typescript
+import { execFileSync } from 'node:child_process';
 import { test, expect } from 'vitest';
 import { DirSQL } from 'dirsql';
 ```
@@ -46,6 +47,36 @@ find . -maxdepth 1 -type f
 </data>
 
 ## CLI
+
+### Typescript
+
+```typescript
+test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb, baseline, cwd: fixture } }, ([query, expected]) => {
+  const stdout = execFileSync(cli[0], [...cli.slice(1), 'query', query], { cwd: fixture, encoding: 'utf8' });
+  expect(JSON.parse(stdout)).toEqual(expected);
+});
+```
+
+### Rust
+
+```rust
+#[test]
+fn it_runs_a_query() {
+  let launcher: Vec<&str> = cli.as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect();
+  for case in cases_query.as_array().unwrap() {
+    let output = std::process::Command::new(launcher[0])
+      .args(&launcher[1..])
+      .args(["query", case[0].as_str().unwrap()])
+      .current_dir(fixture)
+      .output()
+      .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows, case[1]);
+  }
+}
+```
+
+### Python
 
 ```python
 @pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)

@@ -6,6 +6,6 @@ typescript = "tests/build/{language}/{surface}/{test}.test.ts"
 rust = "tests/build/{language}/{surface}/{test}.rs"
 
 [cli]
-python = ["uvx", "dirsql"]
-typescript = ["npx", "dirsql"]
-rust = ["dirsql"]
+python = ["uv", "run", "--project", "{root}/packages/python", "dirsql"]
+typescript = ["node", "{root}/packages/ts/dist/cli/dirsql.js"]
+rust = ["cargo", "run", "--quiet", "--manifest-path", "{root}/packages/rust/Cargo.toml", "--features", "cli", "--bin", "dirsql", "--"]
