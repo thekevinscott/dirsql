@@ -73,7 +73,7 @@ import subprocess
 
 import pytest
 
-@pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture, cli=cli)
+@pytest.mark.limits(ms=ms, mb=mb, baseline=baseline, cwd=fixture, cli=cli)
 @pytest.mark.parametrize(("query", "expected"), cases_query)
 def test_it_runs_a_query(query, expected):
   result = subprocess.run([*cli, "query", query], cwd=fixture, capture_output=True, text=True, check=True)
@@ -101,7 +101,7 @@ test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query 
 import pytest
 from dirsql import DirSQL
 
-@pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)
+@pytest.mark.limits(ms=ms, mb=mb, baseline=baseline, cwd=fixture)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("query", "expected"), cases_query)
 async def test_it_runs_a_query(query, expected):

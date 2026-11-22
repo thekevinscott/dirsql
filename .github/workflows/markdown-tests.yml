@@ -1,0 +1,71 @@
+name: Markdown tests
+
+# Hourly: the tests harness-md writes from tests/**/*.md, behavior only.
+# Daily: the same tests measured for speed and memory against their limits.
+on:
+  schedule:
+    - cron: "7 * * * *"
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+    inputs:
+      measure:
+        description: Measure speed and memory
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  markdown-tests:
+    name: ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    # One stop for a hung query; no per-test timeouts.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, typescript, rust]
+    env:
+      RECIPE: ${{ (github.event.schedule == '37 5 * * *' || inputs.measure) && 'measure-md' || 'test-md' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install dependencies
+        run: |
+          uv sync --project packages/python
+          pnpm install --dir packages/harness-md
+          pnpm install --dir packages/ts
+          pnpm install --dir tests/typescript
+
+      - name: Run
+        run: uvx --from rust-just just "$RECIPE-${{ matrix.language }}"
+
+      - name: Keep the measurements
+        if: always() && env.RECIPE == 'measure-md'
+        uses: actions/upload-artifact@v4
+        with:
+          name: measure-${{ matrix.language }}
+          path: tests/${{ matrix.language }}/.harnessmd/measure.report.json
+          include-hidden-files: true

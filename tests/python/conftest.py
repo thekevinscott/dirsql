@@ -1,111 +1,66 @@
-import statistics
+import json
+import os
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
-import psutil
 import pytest
 
-PAIRS = 5
-STEP = "__pytest_repeat_step_number"
-GNU_TIME = ["/usr/bin/time", "-f", "%M"]
-
-pairs = {}
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--measure", choices=["speed", "memory"],
-        help="enforce @pytest.mark.limits; separate passes, because tracking memory slows the test",
-    )
+# tests/measure.py sets MEASURE to a results file and runs pytest once per repeat.
+RESULTS = os.environ.get("MEASURE")
+GNU_TIME = ["/usr/bin/time", "-f", "%M", "-o"]
 
 
 def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "limits(ms_max, mb_max, baseline, cwd, cli): enforced with --measure"
-    )
-    if config.getoption("--measure"):
-        # pytest-repeat: each repeat is one test run followed by one baseline run.
-        config.option.count = PAIRS
+    config.addinivalue_line("markers", "limits(ms, mb, baseline, cwd, cli): measured under tests/measure.py")
 
 
-def pytest_collection_modifyitems(config, items):
-    if config.getoption("--measure") != "memory":
-        return
-    for item in items:
-        limits = item.get_closest_marker("limits")
-        if limits and "mb_max" in limits.kwargs:
-            item.add_marker(pytest.mark.limit_memory(f"{limits.kwargs['mb_max']['max']} MB"))
+def status_mb(field):
+    line = next(line for line in Path("/proc/self/status").read_text().splitlines() if line.startswith(field))
+    return int(line.split()[1]) / 1024
 
 
-def baseline_ms(command, cwd):
-    start = time.perf_counter()
-    subprocess.run(["sh", "-c", command], cwd=cwd, stdout=subprocess.DEVNULL, check=True)
-    return (time.perf_counter() - start) * 1000
-
-
-def baseline_mb(command, cwd):
-    # GNU time, because a forked child's own peak starts at pytest's size.
-    timed = subprocess.run(
-        [*GNU_TIME, "sh", "-c", command],
-        cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True,
-    )
-    return int(timed.stderr.strip().splitlines()[-1]) / 1024
-
-
-def over(what, got, limit, unit):
-    return [f"{what} {got:.1f}{unit}, limit {limit}{unit}"] if limit is not None and got > limit else []
-
-
-def record(item, got, base):
-    params = {name: value for name, value in item.callspec.params.items() if name != STEP}
-    seen = pairs.setdefault((item.path, item.originalname, repr(params)), [])
-    seen.append((got, base))
-    return seen
-
-
-def judge(item, seen, limits, unit, verb):
-    got, base = seen[-1]
-    failures = over(verb, got, limits["max"], unit)
-    lines = [f"test {got:.1f}{unit}; baseline {base:.1f}{unit}"]
-    if len(seen) == PAIRS:
-        got, base = (statistics.mean(column) for column in zip(*seen))
-        lines.append(f"mean of {PAIRS} pairs: test {got:.1f}{unit}; baseline {base:.1f}{unit}; {got / base:.1f}x")
-        failures += over(f"mean {verb}", got, limits.get("mean"), unit)
-        failures += over("mean was", got / base, limits.get("times_baseline"), "x baseline")
-    item.add_report_section("call", "measure", "\n".join(lines))
-    if failures:
-        pytest.fail("; ".join(failures), pytrace=False)
+def peak_mb(file):
+    return int(Path(file).read_text().split()[-1]) / 1024
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
-    limits = item.get_closest_marker("limits")
-    mode = item.config.getoption("--measure")
-    if not (limits and mode):
+    if not RESULTS:
         return (yield)
-    want = limits.kwargs
-    if mode == "speed":
-        start = time.perf_counter()
-        result = yield
-        ms = (time.perf_counter() - start) * 1000
-        judge(item, record(item, ms, baseline_ms(want["baseline"], want.get("cwd"))), want["ms_max"], " ms", "took")
-        return result
-
+    marker = item.get_closest_marker("limits")
+    if marker is None:
+        pytest.fail("a measured test needs @pytest.mark.limits", pytrace=False)
+    want = marker.kwargs
     cli = want.get("cli")
-    process = psutil.Process()
-    with tempfile.NamedTemporaryFile("r") as peak:
+    with tempfile.NamedTemporaryFile() as peak:
         if cli is not None:
             # A CLI test's memory is its child's peak, so the launcher runs under GNU time.
             launcher = list(cli)
-            cli[:0] = [*GNU_TIME, "-o", peak.name]
-        rss = process.memory_info().rss
+            cli[:0] = [*GNU_TIME, peak.name]
+        # Resets this process's peak, so the peak read after the test belongs to the test.
+        Path("/proc/self/clear_refs").write_text("5")
+        before = status_mb("VmRSS")
+        start = time.perf_counter()
         try:
             result = yield
         finally:
-            grew = (process.memory_info().rss - rss) / 2**20
+            ms = (time.perf_counter() - start) * 1000
+            grew = status_mb("VmHWM") - before
             if cli is not None:
                 cli[:] = launcher
-        mb = int(peak.read().split()[-1]) / 1024 if cli is not None else grew
-    judge(item, record(item, mb, baseline_mb(want["baseline"], want.get("cwd"))), want["mb_max"], " MB", "used")
+        mb = peak_mb(peak.name) if cli is not None else grew
+
+        start = time.perf_counter()
+        subprocess.run(
+            [*GNU_TIME, peak.name, "sh", "-c", want["baseline"]],
+            cwd=want.get("cwd"), stdout=subprocess.DEVNULL, check=True,
+        )
+        base_ms = (time.perf_counter() - start) * 1000
+        base_mb = peak_mb(peak.name)
+
+    with open(RESULTS, "a") as results:
+        line = {"file": str(item.path), "ms": ms, "mb": mb, "base_ms": base_ms, "base_mb": base_mb}
+        results.write(json.dumps({**line, "limits": {"ms": want["ms"], "mb": want["mb"]}}) + "\n")
     return result
