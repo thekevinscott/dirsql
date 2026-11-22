@@ -1,16 +1,10 @@
 name: Tests
-run-name: ${{ (github.event.schedule == '37 5 * * *' || inputs.measure) && 'Measured tests' || 'Tests' }}
+run-name: ${{ github.event.schedule == '37 5 * * *' && 'Measured tests' || 'Tests' }}
 
 on:
   schedule:
     - cron: "7 * * * *"
     - cron: "37 5 * * *"
-  workflow_dispatch:
-    inputs:
-      measure:
-        description: Measure speed and memory
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -32,7 +26,7 @@ jobs:
           last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow markdown-tests.yml --limit 100 \
             --json databaseId,displayTitle,headSha \
             --jq "map(select(.databaseId != $GITHUB_RUN_ID and .displayTitle == \"$KIND\")) | .[0].headSha")
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$last" = "$GITHUB_SHA" ]; then
+          if [ "$last" = "$GITHUB_SHA" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -50,7 +44,7 @@ jobs:
       matrix:
         language: [python, typescript, rust]
     env:
-      RECIPE: ${{ (github.event.schedule == '37 5 * * *' || inputs.measure) && 'measure-md' || 'test-md' }}
+      RECIPE: ${{ github.event.schedule == '37 5 * * *' && 'measure-md' || 'test-md' }}
     steps:
       - uses: actions/checkout@v6
 
