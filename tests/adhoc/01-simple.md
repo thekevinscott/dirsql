@@ -1,23 +1,5 @@
 <data name="fixture">tests/fixtures/simple</data>
 
-```python
-import json
-import subprocess
-
-import pytest
-from dirsql import DirSQL
-```
-
-```typescript
-import { execFileSync } from 'node:child_process';
-import { test, expect } from 'vitest';
-import { DirSQL } from 'dirsql';
-```
-
-```rust
-use dirsql::{DirSQL, Value};
-```
-
 # It runs a query
 
 <data language="json" name="ms">{"max": 500, "mean": 50, "times_baseline": 20}</data>
@@ -46,7 +28,22 @@ find . -maxdepth 1 -type f
 
 </data>
 
+
 ## CLI
+
+```python
+import json
+import subprocess
+
+import pytest
+```
+
+```typescript
+import { execFileSync } from 'node:child_process';
+import { test, expect } from 'vitest';
+```
+
+
 
 ### Typescript
 
@@ -87,6 +84,22 @@ def test_it_runs_a_query(query, expected):
 ```
 
 ## SDK
+
+
+```python
+import pytest
+from dirsql import DirSQL
+```
+
+```typescript
+import { test, expect } from 'vitest';
+import { DirSQL } from 'dirsql';
+```
+
+```rust
+use dirsql::{DirSQL, Value};
+```
+
 
 ### Typescript
 
