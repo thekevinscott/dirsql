@@ -1,4 +1,4 @@
-import type { Language } from './write.js';
+export type Language = 'python' | 'typescript' | 'rust' | 'bash';
 
 const pythonLiteral = (value: unknown, indent = ''): string => {
   const inner = `${indent}  `;

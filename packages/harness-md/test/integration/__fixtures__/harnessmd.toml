@@ -1,0 +1,6 @@
+headings = ["test", "surface", "language"]
+
+[out]
+python = "build/python/{surface}/{test}_test.py"
+typescript = "build/typescript/{surface}/{test}.test.ts"
+rust = "build/rust/{surface}/{test}.rs"

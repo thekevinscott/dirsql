@@ -17,7 +17,6 @@ export default defineConfig({
     // separate V8 context where JS functions have incompatible types
     // for napi_typeof checks.
     pool: "forks",
-    setupFiles: process.env.MEASURE ? ["tests/measure.ts"] : [],
     // The `docs/` symlink at the package root points to the workspace docs,
     // which contains Playwright e2e specs. Without this exclude, vitest's
     // default test discovery picks them up and tries to load `@playwright/test`.

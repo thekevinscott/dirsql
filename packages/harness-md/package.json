@@ -40,6 +40,8 @@
   },
   "dependencies": {
     "hast-util-from-html": "^2.1.0",
-    "mdast-util-from-markdown": "^2.1.0"
+    "mdast-util-from-markdown": "^2.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "smol-toml": "^1.9.1"
   }
 }

@@ -1,0 +1,9 @@
+{
+  "name": "dirsql-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "dirsql": "link:../packages/ts",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,12 +1,13 @@
 import type { Element } from 'hast';
 import { fromHtml } from 'hast-util-from-html';
 import { fromMarkdown } from 'mdast-util-from-markdown';
+import { toString } from 'mdast-util-to-string';
 
 export interface Code {
   type: 'code';
   language: string | undefined;
   content: string;
-  path: number[];
+  path: string[];
 }
 
 export interface Data {
@@ -14,10 +15,13 @@ export interface Data {
   name: string;
   language: string | undefined;
   source: string;
-  path: number[];
+  path: string[];
 }
 
 export type Item = Code | Data;
+
+export const slug = (text: string): string =>
+  text.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
 
 const dataTag = (html: string): Element | undefined =>
   fromHtml(html, { fragment: true }).children.find(
@@ -34,28 +38,28 @@ const attribute = (element: Element, key: string): string | undefined => {
 
 export const readDocument = (markdown: string): Item[] => {
   const items: Item[] = [];
-  const path: number[] = [];
+  const path: string[] = [];
   let open: Element | undefined;
 
-  fromMarkdown(markdown).children.forEach((node, index) => {
+  for (const node of fromMarkdown(markdown).children) {
     if (node.type === 'heading') {
       path.length = node.depth - 1;
       for (let depth = 0; depth < node.depth - 1; depth++) {
-        path[depth] ??= -1;
+        path[depth] ??= '';
       }
-      path.push(index);
-      return;
+      path.push(slug(toString(node)));
+      continue;
     }
     // A one-line <data>value</data> is a paragraph in markdown, not an html block.
     const raw = markdown.slice(node.position?.start.offset, node.position?.end.offset);
     if (node.type === 'html' || (node.type === 'paragraph' && raw.startsWith('<data'))) {
       if (/^\s*<\/data>/.test(raw)) {
         open = undefined;
-        return;
+        continue;
       }
       const tag = dataTag(raw);
       if (tag === undefined) {
-        return;
+        continue;
       }
       const name = attribute(tag, 'name');
       if (name === undefined) {
@@ -66,18 +70,18 @@ export const readDocument = (markdown: string): Item[] => {
       } else {
         open = tag;
       }
-      return;
+      continue;
     }
     if (node.type !== 'code') {
-      return;
+      continue;
     }
     const language = node.lang ?? undefined;
     if (open === undefined) {
       items.push({ type: 'code', language, content: node.value, path: [...path] });
-      return;
+    } else {
+      items.push({ type: 'data', name: attribute(open, 'name')!, language, source: node.value, path: [...path] });
     }
-    items.push({ type: 'data', name: attribute(open, 'name')!, language, source: node.value, path: [...path] });
-  });
+  }
 
   return items;
 };
