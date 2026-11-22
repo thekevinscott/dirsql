@@ -1,7 +1,5 @@
-name: Markdown tests
+name: Tests
 
-# Hourly: the tests harness-md writes from tests/**/*.md, behavior only.
-# Daily: the same tests measured for speed and memory against their limits.
 on:
   schedule:
     - cron: "7 * * * *"
