@@ -48,17 +48,20 @@ test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query 
 ```rust
 #[test]
 fn it_runs_a_query() {
-  let launcher: Vec<&str> = cli.as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect();
-  for case in cases_query.as_array().unwrap() {
-    let output = std::process::Command::new(launcher[0])
-      .args(&launcher[1..])
-      .args(["query", case[0].as_str().unwrap()])
-      .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(fixture))
-      .output()
-      .unwrap();
-    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(rows, case[1]);
-  }
+  let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(fixture);
+  let launcher: Vec<String> = cli.as_array().unwrap().iter().map(|part| part.as_str().unwrap().to_string()).collect();
+  dirsql_md_tests::measured(&ms, &mb, baseline, &root, Some(&launcher), |launcher| {
+    for case in cases_query.as_array().unwrap() {
+      let output = std::process::Command::new(&launcher[0])
+        .args(&launcher[1..])
+        .args(["query", case[0].as_str().unwrap()])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+      let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+      assert_eq!(rows, case[1]);
+    }
+  });
 }
 ```
 
@@ -114,17 +117,20 @@ use dirsql::{DirSQL, Value};
 
 #[test]
 fn it_runs_a_query() {
-  for case in cases_query.as_array().unwrap() {
-    let query = case[0].as_str().unwrap();
-    let expected = case[1].as_array().unwrap();
-    let db = DirSQL::builder().root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(fixture)).build().unwrap();
-    let rows = db.query(query).unwrap();
-    assert_eq!(rows.len(), expected.len());
-    for (row, want) in rows.iter().zip(expected) {
-      for (column, value) in want.as_object().unwrap() {
-        assert_eq!(row[column], Value::Text(value.as_str().unwrap().to_string()));
+  let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(fixture);
+  dirsql_md_tests::measured(&ms, &mb, baseline, &root, None, |_| {
+    for case in cases_query.as_array().unwrap() {
+      let query = case[0].as_str().unwrap();
+      let expected = case[1].as_array().unwrap();
+      let db = DirSQL::builder().root(&root).build().unwrap();
+      let rows = db.query(query).unwrap();
+      assert_eq!(rows.len(), expected.len());
+      for (row, want) in rows.iter().zip(expected) {
+        for (column, value) in want.as_object().unwrap() {
+          assert_eq!(row[column], Value::Text(value.as_str().unwrap().to_string()));
+        }
       }
     }
-  }
+  });
 }
 ```
