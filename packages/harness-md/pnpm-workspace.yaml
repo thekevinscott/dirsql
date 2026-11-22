@@ -1,0 +1,9 @@
+# pnpm 11 fails install when a dependency's build scripts have no recorded
+# decision (ERR_PNPM_IGNORED_BUILDS). esbuild arrives via vitest. Its
+# postinstall only validates the platform binary that already ships through
+# @esbuild/* optionalDependencies; it downloads a binary only when optional
+# dependencies are disabled (--no-optional). Skipping it runs no third-party
+# code at install time and vitest works — flip to true only if you install
+# with optional dependencies disabled.
+allowBuilds:
+  esbuild: false
