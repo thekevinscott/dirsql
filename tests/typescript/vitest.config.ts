@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     // napi modules need forks, as in packages/ts.
     pool: "forks",
-    include: ["build/typescript/**/*.test.ts"],
+    include: ["build/**/*.test.ts"],
     setupFiles: process.env.MEASURE ? ["measure.ts"] : [],
   },
 });

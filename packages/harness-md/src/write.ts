@@ -7,6 +7,10 @@ import { evaluate } from './evaluate.js';
 
 export interface WriteOptions {
   root?: string;
+  /** Write only this language. */
+  language?: Language;
+  /** Path pattern for `language`, in place of the one in harnessmd.toml. */
+  out?: string;
 }
 
 interface Leaf {
@@ -17,7 +21,7 @@ interface Leaf {
 
 const within = (outer: string[], inner: string[]) => outer.every((heading, depth) => inner[depth] === heading);
 
-export const write = async (file: string, { root = process.cwd() }: WriteOptions = {}): Promise<string[]> => {
+export const write = async (file: string, { root = process.cwd(), language, out: outOverride }: WriteOptions = {}): Promise<string[]> => {
   const { headings, out, cli = {} } = await readConfig(root);
   const items = readDocument(await readFile(file, 'utf8'));
   const languageDepth = headings.indexOf('language');
@@ -41,8 +45,8 @@ export const write = async (file: string, { root = process.cwd() }: WriteOptions
 
   const written: string[] = [];
   for (const leaf of leaves.values()) {
-    const pattern = out[leaf.fileLanguage];
-    if (pattern === undefined) {
+    const pattern = outOverride ?? out[leaf.fileLanguage];
+    if (pattern === undefined || (language !== undefined && leaf.fileLanguage !== language)) {
       continue;
     }
     const pieces: string[] = leaf.cli ? [assign[leaf.fileLanguage]('cli', leaf.cli)] : [];
