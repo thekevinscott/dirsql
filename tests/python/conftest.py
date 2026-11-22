@@ -11,6 +11,8 @@ import pytest
 RESULTS = os.environ.get("MEASURE")
 GNU_TIME = ["/usr/bin/time", "-f", "%M", "-o"]
 
+began = {}
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "limits(ms, mb, baseline, cwd, cli): measured under tests/measure.py")
@@ -39,15 +41,17 @@ def pytest_runtest_call(item):
             # A CLI test's memory is its child's peak, so the launcher runs under GNU time.
             launcher = list(cli)
             cli[:0] = [*GNU_TIME, peak.name]
-        # Resets this process's peak, so the peak read after the test belongs to the test.
-        Path("/proc/self/clear_refs").write_text("5")
-        before = status_mb("VmRSS")
+        if item.path not in began:
+            # Resets this process's peak, so the peak read after a case belongs to the test.
+            # Once per test, not per case: a later case reuses memory an earlier one freed.
+            Path("/proc/self/clear_refs").write_text("5")
+            began[item.path] = status_mb("VmRSS")
         start = time.perf_counter()
         try:
             result = yield
         finally:
             ms = (time.perf_counter() - start) * 1000
-            grew = status_mb("VmHWM") - before
+            grew = status_mb("VmHWM") - began[item.path]
             if cli is not None:
                 cli[:] = launcher
         mb = peak_mb(peak.name) if cli is not None else grew

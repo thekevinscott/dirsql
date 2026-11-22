@@ -26,6 +26,8 @@ const peakMb = () => Number(readFileSync(peakFile, "utf8").trim().split("\n").at
 const statusMb = (field: string) =>
   Number(readFileSync("/proc/self/status", "utf8").split("\n").find(line => line.startsWith(field))!.split(/\s+/)[1]) / 1024;
 
+const began = new Map<string, number>();
+
 // tests/measure.py sets MEASURE to a results file and runs vitest once per repeat.
 aroundEach(async (runTest, { task }) => {
   const { ms, mb, baseline, cwd, cli } = task.meta;
@@ -35,9 +37,13 @@ aroundEach(async (runTest, { task }) => {
   // A CLI test's memory is its child's peak, so the launcher runs under GNU time.
   const launcher = cli && [...cli];
   cli?.unshift(...gnuTime);
-  // Resets this process's peak, so the peak read after the test belongs to the test.
-  writeFileSync("/proc/self/clear_refs", "5");
-  const before = statusMb("VmRSS");
+  const file = task.file.filepath;
+  if (!began.has(file)) {
+    // Resets this process's peak, so the peak read after a case belongs to the test.
+    // Once per test, not per case: a later case reuses memory an earlier one freed.
+    writeFileSync("/proc/self/clear_refs", "5");
+    began.set(file, statusMb("VmRSS"));
+  }
   const start = performance.now();
   try {
     await runTest();
@@ -45,10 +51,10 @@ aroundEach(async (runTest, { task }) => {
     if (cli && launcher) cli.splice(0, cli.length, ...launcher);
   }
   const took = performance.now() - start;
-  const used = cli ? peakMb() : statusMb("VmHWM") - before;
+  const used = cli ? peakMb() : statusMb("VmHWM") - began.get(file)!;
 
   const baselineStart = performance.now();
   execFileSync(gnuTime[0], [...gnuTime.slice(1), "sh", "-c", baseline], { cwd, stdio: "ignore" });
-  const line = { file: task.file.filepath, ms: took, mb: used, base_ms: performance.now() - baselineStart, base_mb: peakMb() };
+  const line = { file, ms: took, mb: used, base_ms: performance.now() - baselineStart, base_mb: peakMb() };
   appendFileSync(process.env.MEASURE!, `${JSON.stringify({ ...line, limits: { ms, mb } })}\n`);
 });

@@ -176,7 +176,7 @@ test-md-rust *args: build-harness-md
 
 measure-md-python: build-harness-md
     cd packages/python && uv run maturin develop --release
-    node packages/harness-md/dist/cli.js --input tests/adhoc --language python "python3 tests/measure.py --results tests/python/.harnessmd/measure.jsonl 'uv run --project packages/python pytest -q tests/python/.harnessmd'"
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language python "python3 tests/measure.py --results tests/python/.harnessmd/measure.jsonl --each 'tests/python/.harnessmd/**/*_test.py' 'uv run --project packages/python pytest -q {file}'"
 
 measure-md-typescript: build-harness-md
     cd packages/ts && pnpm run build

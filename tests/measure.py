@@ -1,13 +1,17 @@
 """Runs a test command several times, a fresh process each time, then judges what the tests recorded.
 
-    measure.py --results FILE [--pairs 5] [--timeout 600] COMMAND
+    measure.py --results FILE [--each GLOB] [--pairs 5] [--timeout 600] COMMAND
 
-Each run, every measured test appends one line to FILE: its own time and memory,
-then the same for its baseline command. A test's time is the sum over its cases
-and its memory is the largest case.
+Each run, every case of a measured test appends one line to FILE: its own time and
+memory, then the same for its baseline command. A test's time is the sum over its
+cases. Its memory is the peak across them, counted from where the first case began.
+
+With --each, COMMAND runs once per matching file with {file} replaced, for a runner
+that would otherwise run every test file in one process.
 """
 
 import argparse
+import glob
 import json
 import os
 import statistics
@@ -18,6 +22,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--results", required=True, type=Path)
+parser.add_argument("--each")
 parser.add_argument("--pairs", type=int, default=5)
 parser.add_argument("--timeout", type=int, default=600, help="seconds allowed for one run of the command")
 parser.add_argument("command")
@@ -26,16 +31,22 @@ args = parser.parse_args()
 results = args.results.resolve()
 results.parent.mkdir(parents=True, exist_ok=True)
 runs = defaultdict(list)
+commands = [args.command]
+if args.each:
+    commands = [args.command.replace("{file}", file) for file in sorted(glob.glob(args.each, recursive=True))]
+    if not commands:
+        sys.exit(f"FAIL: no file matches {args.each}")
 limits = {}
 
 for _ in range(args.pairs):
     results.write_text("")
-    try:
-        status = subprocess.run(args.command, shell=True, env={**os.environ, "MEASURE": str(results)}, timeout=args.timeout)
-    except subprocess.TimeoutExpired:
-        sys.exit(f"FAIL: ran longer than {args.timeout} s: {args.command}")
-    if status.returncode != 0:
-        sys.exit(status.returncode)
+    for command in commands:
+        try:
+            status = subprocess.run(command, shell=True, env={**os.environ, "MEASURE": str(results)}, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            sys.exit(f"FAIL: ran longer than {args.timeout} s: {command}")
+        if status.returncode != 0:
+            sys.exit(status.returncode)
     by_file = defaultdict(list)
     for line in map(json.loads, results.read_text().splitlines()):
         by_file[os.path.relpath(line["file"])].append(line)
