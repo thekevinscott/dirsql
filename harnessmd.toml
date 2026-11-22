@@ -1,6 +1,11 @@
 headings = ["test", "surface", "language"]
 
 [out]
-python = "tests/build/python/{surface}/{test}_test.py"
-typescript = "tests/build/typescript/{surface}/{test}.test.ts"
-rust = "tests/build/rust/{surface}/{test}.rs"
+python = "tests/build/{language}/{surface}/{test}_test.py"
+typescript = "tests/build/{language}/{surface}/{test}.test.ts"
+rust = "tests/build/{language}/{surface}/{test}.rs"
+
+[cli]
+python = ["uvx", "dirsql"]
+typescript = ["npx", "dirsql"]
+rust = ["dirsql"]

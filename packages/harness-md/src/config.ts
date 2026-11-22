@@ -6,6 +6,7 @@ import type { Language } from './assign.js';
 export interface Config {
   headings: string[];
   out: Partial<Record<Language, string>>;
+  cli?: Record<string, string[]>;
 }
 
 export const readConfig = async (root: string): Promise<Config> =>

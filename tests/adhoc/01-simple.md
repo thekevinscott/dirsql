@@ -1,6 +1,9 @@
 <data name="fixture">tests/fixtures/simple</data>
 
 ```python
+import json
+import subprocess
+
 import pytest
 from dirsql import DirSQL
 ```
@@ -16,7 +19,7 @@ use dirsql::{DirSQL, Value};
 
 # It runs a query
 
-<data language="json" name="ms">{"max": 500, "mean": 50}</data>
+<data language="json" name="ms">{"max": 500, "mean": 50, "times_baseline": 20}</data>
 
 <data language="json" name="mb">{"max": 50, "mean": 1}</data>
 
@@ -34,8 +37,6 @@ use dirsql::{DirSQL, Value};
 
 </data>
 
-## CLI
-
 <data name="baseline">
 
 ```bash
@@ -44,23 +45,14 @@ find . -maxdepth 1 -type f
 
 </data>
 
-### Python
+## CLI
 
-```bash
-uvx dirsql query
-```
-
-### Typescript
-
-```bash
-npx dirsql query
-```
-
-### Rust
-
-```bash
-cargo install dirsql --features cli
-dirsql query
+```python
+@pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)
+@pytest.mark.parametrize(("query", "expected"), cases_query)
+def test_it_runs_a_query(query, expected):
+  result = subprocess.run([*cli, "query", query], cwd=fixture, capture_output=True, text=True, check=True)
+  assert json.loads(result.stdout) == expected
 ```
 
 ## SDK
@@ -68,7 +60,7 @@ dirsql query
 ### Typescript
 
 ```typescript
-test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb } }, async ([query, expected]) => {
+test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb, baseline, cwd: fixture } }, async ([query, expected]) => {
   const db = new DirSQL({ root: fixture });
   await db.ready;
   expect(await db.query(query)).toEqual(expected);
@@ -78,7 +70,7 @@ test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query 
 ### Python
 
 ```python
-@pytest.mark.limits(ms_max=ms, mb_max=mb)
+@pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("query", "expected"), cases_query)
 async def test_it_runs_a_query(query, expected):
