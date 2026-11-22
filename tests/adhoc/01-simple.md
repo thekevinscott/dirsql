@@ -70,7 +70,7 @@ dirsql query
 ```typescript
 test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb } }, async ([query, expected]) => {
   const db = new DirSQL({ root: fixture });
-  await db.ready();
+  await db.ready;
   expect(await db.query(query)).toEqual(expected);
 });
 ```
