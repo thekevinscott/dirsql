@@ -31,23 +31,12 @@ find . -maxdepth 1 -type f
 
 ## CLI
 
-```python
-import json
-import subprocess
-
-import pytest
-```
+### Typescript
 
 ```typescript
 import { execFileSync } from 'node:child_process';
 import { test, expect } from 'vitest';
-```
 
-
-
-### Typescript
-
-```typescript
 test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb, baseline, cwd: fixture } }, ([query, expected]) => {
   const stdout = execFileSync(cli[0], [...cli.slice(1), 'query', query], { cwd: fixture, encoding: 'utf8' });
   expect(JSON.parse(stdout)).toEqual(expected);
@@ -76,6 +65,11 @@ fn it_runs_a_query() {
 ### Python
 
 ```python
+import json
+import subprocess
+
+import pytest
+
 @pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)
 @pytest.mark.parametrize(("query", "expected"), cases_query)
 def test_it_runs_a_query(query, expected):
@@ -85,25 +79,12 @@ def test_it_runs_a_query(query, expected):
 
 ## SDK
 
-
-```python
-import pytest
-from dirsql import DirSQL
-```
+### Typescript
 
 ```typescript
 import { test, expect } from 'vitest';
 import { DirSQL } from 'dirsql';
-```
 
-```rust
-use dirsql::{DirSQL, Value};
-```
-
-
-### Typescript
-
-```typescript
 test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query (%#): `%s`', { meta: { ms, mb, baseline, cwd: fixture } }, async ([query, expected]) => {
   const db = new DirSQL({ root: fixture });
   await db.ready;
@@ -114,6 +95,9 @@ test.for(cases_query as [string, Record<string, unknown>[]][])('It runs a query 
 ### Python
 
 ```python
+import pytest
+from dirsql import DirSQL
+
 @pytest.mark.limits(ms_max=ms, mb_max=mb, baseline=baseline, cwd=fixture)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("query", "expected"), cases_query)
@@ -126,6 +110,8 @@ async def test_it_runs_a_query(query, expected):
 ### Rust
 
 ```rust
+use dirsql::{DirSQL, Value};
+
 #[test]
 fn it_runs_a_query() {
   for case in cases_query.as_array().unwrap() {
