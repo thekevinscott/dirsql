@@ -79,3 +79,17 @@ test('writes into .harnessmd when there is no harnessmd.toml', async () => {
 
   expect(written).toEqual([path.join(root, '.harnessmd/python/sdk/it_runs_a_query_test.py')]);
 });
+
+test('data under a nearer heading replaces data of the same name above it', async () => {
+  const root = await project();
+  await write(path.join(fixtures, 'override.md'), { root });
+
+  expect(await readFile(path.join(root, 'build/python/sdk/it_runs_a_query_test.py'), 'utf8')).toBe(`mb = {
+  "max": 80,
+}
+
+def test_it_runs_a_query():
+  pass
+`);
+  expect(await readFile(path.join(root, 'build/typescript/sdk/it_runs_a_query.test.ts'), 'utf8')).toContain('"max": 50');
+});

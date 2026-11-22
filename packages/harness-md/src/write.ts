@@ -50,12 +50,16 @@ export const write = async (file: string, { root = process.cwd(), language, out:
       continue;
     }
     const pieces: string[] = leaf.cli ? [assign[leaf.fileLanguage]('cli', leaf.cli)] : [];
+    const placed = new Map<string, number>();
     for (const item of items) {
       if (!within(item.path, leaf.path)) {
         continue;
       }
       if (item.type === 'data') {
-        pieces.push(assign[leaf.fileLanguage](item.name, await evaluate(item)));
+        // Data under a nearer heading replaces data of the same name above it.
+        const at = placed.get(item.name) ?? pieces.length;
+        placed.set(item.name, at);
+        pieces[at] = assign[leaf.fileLanguage](item.name, await evaluate(item));
       } else if (item.language === leaf.fileLanguage) {
         pieces.push(item.content);
       }
