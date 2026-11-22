@@ -13,10 +13,32 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  new-commits:
+    name: New commits since the last run
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      # The hourly run is skipped when this workflow last ran on the same commit.
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow markdown-tests.yml --limit 5 \
+            --json databaseId,headSha --jq "map(select(.databaseId != $GITHUB_RUN_ID)) | .[0].headSha")
+          if [ "${{ github.event.schedule }}" = "7 * * * *" ] && [ "$last" = "$GITHUB_SHA" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   markdown-tests:
     name: ${{ matrix.language }}
+    needs: new-commits
+    if: needs.new-commits.outputs.run == 'true'
     runs-on: ubuntu-latest
     # One stop for a hung query; no per-test timeouts.
     timeout-minutes: 30
