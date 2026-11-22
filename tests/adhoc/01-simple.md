@@ -114,22 +114,31 @@ async def test_it_runs_a_query(query, expected):
 
 ```rust
 use dirsql::{DirSQL, Value};
+use serde_json::json;
+
+fn as_json(value: &Value) -> serde_json::Value {
+  match value {
+    Value::Null => json!(null),
+    Value::Integer(integer) => json!(integer),
+    Value::Real(real) => json!(real),
+    Value::Text(text) => json!(text),
+    Value::Blob(bytes) => json!(bytes),
+  }
+}
 
 #[test]
 fn it_runs_a_query() {
   let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(fixture);
   dirsql_md_tests::measured(&ms, &mb, baseline, &root, None, |_| {
     for case in cases_query.as_array().unwrap() {
-      let query = case[0].as_str().unwrap();
-      let expected = case[1].as_array().unwrap();
       let db = DirSQL::builder().root(&root).build().unwrap();
-      let rows = db.query(query).unwrap();
-      assert_eq!(rows.len(), expected.len());
-      for (row, want) in rows.iter().zip(expected) {
-        for (column, value) in want.as_object().unwrap() {
-          assert_eq!(row[column], Value::Text(value.as_str().unwrap().to_string()));
-        }
-      }
+      let rows: Vec<serde_json::Value> = db
+        .query(case[0].as_str().unwrap())
+        .unwrap()
+        .iter()
+        .map(|row| row.iter().map(|(column, value)| (column.clone(), as_json(value))).collect())
+        .collect();
+      assert_eq!(json!(rows), case[1]);
     }
   });
 }
