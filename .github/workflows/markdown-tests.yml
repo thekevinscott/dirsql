@@ -1,0 +1,229 @@
+name: Tests
+
+# State lives in state.json on the ci-state branch: red, red_sha, red_kind, fails,
+# last_green, last_plain, last_measured, last_measured_at.
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  # Only the fixing agent starts a run by hand, to confirm a fix while red.
+  workflow_dispatch:
+
+concurrency:
+  group: markdown-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FIXER: thekevinbot
+  NIGHTLY: "05:37"
+  GIVE_UP_AFTER: 3
+
+jobs:
+  decide:
+    name: Decide
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      kind: ${{ steps.decide.outputs.kind }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! state=$(gh api "repos/$GITHUB_REPOSITORY/contents/state.json?ref=ci-state" \
+            -H "Accept: application/vnd.github.raw" 2>/dev/null); then state='{}'; fi
+          get() { echo "$state" | jq -r "$1 // empty"; }
+          red=$(get .red)
+          out() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "kind=$2" >> "$GITHUB_OUTPUT"; echo "$3"; }
+
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ "$GITHUB_ACTOR" != "$FIXER" ]; then
+              echo "Only $FIXER may start this run by hand."
+              exit 1
+            fi
+            if [ "$red" != true ]; then out false plain "Not red: nothing to confirm."; exit 0; fi
+            out true "$(get .red_kind)" "Confirming run."
+            exit 0
+          fi
+
+          if [ "$red" = true ]; then out false plain "Red: no runs until the agent clears it."; exit 0; fi
+
+          now=$(date -u +%s)
+          nightly=$(date -u -d "today $NIGHTLY" +%s)
+          if [ "$now" -lt "$nightly" ]; then nightly=$(date -u -d "yesterday $NIGHTLY" +%s); fi
+          measured_at=$(get .last_measured_at)
+          kind=plain
+          if [ "${measured_at:-0}" -lt "$nightly" ]; then kind=measured; fi
+
+          if [ "$(get ".last_$kind")" = "$GITHUB_SHA" ]; then
+            out false "$kind" "No new commit since the last $kind run."
+          else
+            out true "$kind" "Starting a $kind run."
+          fi
+
+  tests:
+    name: ${{ matrix.language }}
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, typescript, rust]
+    env:
+      RECIPE: ${{ needs.decide.outputs.kind == 'measured' && 'measure-md' || 'test-md' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install dependencies
+        run: |
+          uv sync --project packages/python
+          pnpm install --dir packages/harness-md
+          pnpm install --dir packages/ts
+          pnpm install --dir tests/typescript
+
+      # A job that stops before this step uploads no result: setup failed, which is not red.
+      - name: Run
+        id: run
+        continue-on-error: true
+        # One stop for a hung query; no per-test timeouts.
+        timeout-minutes: 30
+        run: uvx --from rust-just just "$RECIPE-${{ matrix.language }}"
+
+      - name: Write the result
+        run: |
+          mkdir result
+          echo "${{ steps.run.outcome == 'success' && 'pass' || 'fail' }}" > "result/${{ matrix.language }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.language }}
+          path: result
+
+      - name: Keep the measurements
+        if: env.RECIPE == 'measure-md'
+        uses: actions/upload-artifact@v4
+        with:
+          name: measure-${{ matrix.language }}
+          path: tests/${{ matrix.language }}/.harnessmd/measure.report.json
+          include-hidden-files: true
+
+      - name: Fail the job when the tests failed
+        if: steps.run.outcome != 'success'
+        run: exit 1
+
+  record:
+    name: Record
+    needs: [decide, tests]
+    if: always() && needs.decide.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KIND: ${{ needs.decide.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/results
+
+      - name: Record the outcome
+        run: |
+          results="$RUNNER_TEMP/results"
+          count=$(ls "$results" 2>/dev/null | wc -l)
+          if grep -qsx fail "$results"/*; then outcome=fail
+          elif [ "$count" -eq 3 ]; then outcome=pass
+          else echo "Setup failed in a job. Not red; the next tick tries again."; exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          state_dir="$RUNNER_TEMP/state"
+          git worktree add -q --detach "$state_dir"
+          if git fetch -q origin ci-state; then
+            git -C "$state_dir" checkout -q -B ci-state FETCH_HEAD
+          else
+            git -C "$state_dir" checkout -q --orphan ci-state
+            git -C "$state_dir" rm -rfq .
+            echo '{}' > "$state_dir/state.json"
+          fi
+          state=$(cat "$state_dir/state.json")
+          was_red=$(echo "$state" | jq -r '.red // false')
+          edit() { state=$(echo "$state" | jq --arg sha "$GITHUB_SHA" --arg kind "$KIND" "$1"); }
+
+          ran='.["last_" + $kind] = $sha | if $kind == "measured" then .last_measured_at = (now | floor) else . end'
+          if [ "$outcome" = pass ]; then
+            edit "$ran | .red = false | .fails = 0 | .waiting = false | .last_green = \$sha"
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            edit '.fails = (.fails // 0) + 1'
+          else
+            edit "$ran | .red = true | .red_sha = \$sha | .red_kind = \$kind | .fails = 0"
+          fi
+
+          fails=$(echo "$state" | jq -r '.fails // 0')
+          last_green=$(echo "$state" | jq -r '.last_green // empty')
+          if [ "$outcome" = fail ] && [ "$fails" -ge "$GIVE_UP_AFTER" ] && [ -n "$last_green" ]; then
+            branch="ci-rollback/$GITHUB_RUN_ID"
+            git checkout -q -b "$branch" origin/main
+            git rm -rq .
+            git checkout "$last_green" -- .
+            git commit -qm "Roll back to the last green commit ${last_green:0:8}"
+            git push -q origin "$branch"
+            pr=$(gh pr create --base main --head "$branch" \
+              --title "Roll back to the last green commit ${last_green:0:8}" \
+              --body "The fixing agent failed $fails confirming runs. This returns main to $last_green.")
+            # A pull request opened with the workflow token starts no workflows, so the gate is reported here.
+            gh api "repos/$GITHUB_REPOSITORY/check-runs" -f name='CI Gate' \
+              -f head_sha="$(git rev-parse HEAD)" -f status=completed -f conclusion=success > /dev/null
+            gh pr merge "$pr" --squash --delete-branch
+            edit '.red = false | .fails = 0 | .waiting = false | .rolled_back_from = $sha'
+          fi
+
+          echo "$state" > "$state_dir/state.json"
+          git -C "$state_dir" add state.json
+          git -C "$state_dir" commit -qm "$KIND run on ${GITHUB_SHA:0:8}: $outcome"
+          git -C "$state_dir" push -q origin ci-state
+
+          # The gate on open pull requests reads the state, so it runs again when red changes.
+          if [ "$was_red" != "$(echo "$state" | jq -r '.red // false')" ]; then
+            gh pr list --state open --json headRefName --jq '.[].headRefName' | while read -r head; do
+              id=$(gh run list --workflow pr-monitor.yml --branch "$head" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+              if [ -n "$id" ]; then gh run rerun "$id" || true; fi
+            done
+          fi

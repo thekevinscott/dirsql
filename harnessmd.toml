@@ -1,0 +1,12 @@
+headings = ["test", "surface", "language"]
+
+[out]
+python = "tests/python/.harnessmd/{surface}/{test}_test.py"
+typescript = "tests/typescript/.harnessmd/{surface}/{test}.test.ts"
+# cargo only finds test files that sit directly in a crate's tests/ folder.
+rust = "tests/rust/tests/{surface}_{test}.rs"
+
+[cli]
+python = ["{root}/packages/python/.venv/bin/dirsql"]
+typescript = ["node", "{root}/packages/ts/dist/cli/dirsql.js"]
+rust = ["{root}/target/release/dirsql"]

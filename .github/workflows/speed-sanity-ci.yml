@@ -3,18 +3,9 @@ name: Speed sanity CI
 # Times this build against the previous published dirsql, never against a
 # native. Runs only when a change can move the CLI's speed: the core, the PyO3
 # glue, or the harness and the cases it runs.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    paths:
-      - 'packages/rust/src/**'
-      - 'packages/python/src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'packages/python/tests/e2e/speed_of_light.py'
-      - 'packages/python/tests/e2e/release_speed_test.py'
-      - 'packages/python/tests/e2e/glob_speed_recursive_test.py'
-      - 'packages/python/tests/e2e/stat_speed_test.py'
-      - '.github/workflows/speed-sanity-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

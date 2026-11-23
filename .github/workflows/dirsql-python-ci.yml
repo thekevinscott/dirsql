@@ -6,28 +6,9 @@ name: dirsql Python CI
 # The gate config is packages/python/testing-conventions.toml, not the root file:
 # [e2e] is per-config, so this lane's freshness scope (core + PyO3 glue) lives
 # with the package. No job here reads the root file, so it is not a trigger.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/python/**'
-      - 'packages/rust/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/dirsql-python-ci.yml'
-  pull_request:
-    paths:
-      - 'packages/python/**'
-      - '!packages/python/changelog.d/**'
-      - '!packages/python/migrations.d/**'
-      - '!packages/python/README.md'
-      - 'packages/rust/**'
-      - '!packages/rust/changelog.d/**'
-      - '!packages/rust/migrations.d/**'
-      - '!packages/rust/README.md'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/dirsql-python-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

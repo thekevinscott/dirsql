@@ -1,0 +1,51 @@
+{
+  "name": "harness-md",
+  "version": "0.0.1",
+  "description": "A shared set of tests with per-language implementations, written in markdown.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thekevinscott/dirsql.git",
+    "directory": "packages/harness-md"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@types/hast": "^3.0.5",
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.0",
+    "@typescript-eslint/parser": "^8.61.0",
+    "eslint": "^10.4.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "deepmerge": "^4.3.1",
+    "hast-util-from-html": "^2.1.0",
+    "mdast-util-from-markdown": "^2.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "smol-toml": "^1.9.1"
+  },
+  "bin": {
+    "harness-md": "./dist/cli.js"
+  }
+}

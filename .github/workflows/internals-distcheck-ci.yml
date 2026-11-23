@@ -3,19 +3,9 @@ name: Internals distcheck CI
 # Verification for the internals/distcheck uv package (the dirsql-distcheck
 # publishability flows). Consumers (the SDK test workflows' distcheck jobs)
 # are deliberately not fanned out to; this lane's own gates are the guard.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    paths:
-      - 'internals/distcheck/src/**'
-      - 'internals/distcheck/tests/**'
-      - 'internals/distcheck/pyproject.toml'
-      # The published-target table this lane's platform lookup reads.
-      - 'packages/ts/src/platforms.json'
-      # This lane passes no `config:`, so the reusable workflow's default
-      # applies and the ROOT testing-conventions.toml governs it -- an unknown
-      # key there fails this lane too.
-      - 'testing-conventions.toml'
-      - '.github/workflows/internals-distcheck-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

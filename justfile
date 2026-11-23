@@ -152,3 +152,36 @@ ci:
     just test-rust
     just test-ci
     just preflight
+
+# Markdown tests (tests/adhoc), one recipe per language. Each rebuilds what its
+# tests launch, so a run never checks a stale build, then has harness-md write
+# the test files and run them. `test-md-*` checks behavior only. `measure-md-*`
+# also measures: tests/measure.py runs the tests 5 times, a fresh process each
+# time, and checks each test's time and memory against its limits. Results land
+# in tests/<language>/.harnessmd/measure.report.json.
+build-harness-md:
+    cd packages/harness-md && pnpm run build
+
+test-md-python *args: build-harness-md
+    cd packages/python && uv run maturin develop --release
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language python "uv run --project packages/python pytest tests/python/.harnessmd {{args}}"
+
+test-md-typescript *args: build-harness-md
+    cd packages/ts && pnpm run build
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language typescript "tests/typescript/node_modules/.bin/vitest run --root tests/typescript {{args}}"
+
+test-md-rust *args: build-harness-md
+    cargo build --release -p dirsql --features cli
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language rust "cargo test -p dirsql-md-tests {{args}}"
+
+measure-md-python: build-harness-md
+    cd packages/python && uv run maturin develop --release
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language python "python3 tests/measure.py --results tests/python/.harnessmd/measure.jsonl --each 'tests/python/.harnessmd/**/*_test.py' 'uv run --project packages/python pytest -q {file}'"
+
+measure-md-typescript: build-harness-md
+    cd packages/ts && pnpm run build
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language typescript "python3 tests/measure.py --results tests/typescript/.harnessmd/measure.jsonl 'tests/typescript/node_modules/.bin/vitest run --root tests/typescript'"
+
+measure-md-rust: build-harness-md
+    cargo build --release -p dirsql --features cli
+    node packages/harness-md/dist/cli.js --input tests/adhoc --language rust "python3 tests/measure.py --results tests/rust/.harnessmd/measure.jsonl 'cargo test -q --release -p dirsql-md-tests'"

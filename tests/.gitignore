@@ -1,0 +1,3 @@
+.harnessmd/
+node_modules/
+rust/tests/

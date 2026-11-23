@@ -12,14 +12,9 @@ name: putitoutthere Config Check
 # reaches a publish job, no `id-token: write`. Pinned to `@v0` to match the
 # other putitoutthere workflows referenced by this repo.
 
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'putitoutthere.toml'
-      - '.github/workflows/release-ci.yml'
-      - 'internals/checks/src/checks/release_globs/**'
-      - '.github/workflows/putitoutthere-config-check.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

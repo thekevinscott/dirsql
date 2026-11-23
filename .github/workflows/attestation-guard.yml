@@ -15,12 +15,9 @@ env:
 # them all, and changelog-check.yml explicitly filters e2e-attestations out.
 # The `**` path filter is the point -- a deletion can ride in any diff, and the
 # only reliable trigger is the receipt path itself.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    paths:
-      - '**/e2e-attestations/**'
-      - 'internals/checks/src/checks/attestation_guard/**'
-      - '.github/workflows/attestation-guard.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

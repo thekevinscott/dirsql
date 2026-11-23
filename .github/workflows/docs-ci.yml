@@ -4,11 +4,9 @@ name: Docs Build
 # job consumes the Pages artifact its build job uploads in the same run, so
 # it cannot be reused here -- gating that deploy with `if:` would still
 # report a second, skipped check on every docs PR.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

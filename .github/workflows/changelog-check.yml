@@ -9,16 +9,9 @@ env:
 # the code that demands a fragment and the fragment dirs that satisfy it, so
 # the near-miss diagnostics (malformed fragment names) still run on
 # fragment-only PRs.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  pull_request:
-    paths:
-      - 'packages/**'
-      - 'plugins/**'
-      # Attestations are filtered out of the gate's code_touched, so they
-      # cannot alter its verdict.
-      - '!packages/*/e2e-attestations/**'
-      - '!plugins/*/e2e-attestations/**'
-      - '.github/workflows/changelog-check.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
