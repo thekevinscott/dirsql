@@ -8,14 +8,22 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  actions: read
   contents: read
-  pull-requests: read
 
 jobs:
   monitor:
     name: 'CI Gate'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     steps:
-      - uses: thekevinscott/pr-monitor@v1
+      # While main is red, only the fixing agent's branches and the rollback may merge.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if ! red=$(gh api "repos/$GITHUB_REPOSITORY/contents/state.json?ref=ci-state" \
+            -H "Accept: application/vnd.github.raw" --jq '.red // false' 2>/dev/null); then red=false; fi
+          case "$HEAD_REF" in ci-fix/*|ci-rollback/*) exit 0 ;; esac
+          if [ "$red" = true ]; then
+            echo "main is red. No merges until the tests are green again."
+            exit 1
+          fi
