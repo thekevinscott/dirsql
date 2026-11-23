@@ -1,7 +1,7 @@
 name: Tests
 
 # State lives in state.json on the ci-state branch: red, red_sha, red_kind, fails,
-# last_green, last_plain, last_measured, last_measured_at.
+# last_green, last_plain, last_measured, last_measured_at, waiting, question.
 
 on:
   schedule:
