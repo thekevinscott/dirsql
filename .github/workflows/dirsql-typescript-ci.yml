@@ -6,28 +6,9 @@ name: dirsql TypeScript CI
 # The gate config is packages/ts/testing-conventions.toml, not the root file:
 # [e2e] is per-config, so this lane's freshness scope (core + napi binding) lives
 # with the package. No job here reads the root file, so it is not a trigger.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/ts/**'
-      - 'packages/rust/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/dirsql-typescript-ci.yml'
-  pull_request:
-    paths:
-      - 'packages/ts/**'
-      - '!packages/ts/changelog.d/**'
-      - '!packages/ts/migrations.d/**'
-      - '!packages/ts/README.md'
-      - 'packages/rust/**'
-      - '!packages/rust/changelog.d/**'
-      - '!packages/rust/migrations.d/**'
-      - '!packages/rust/README.md'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/dirsql-typescript-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

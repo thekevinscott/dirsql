@@ -5,31 +5,9 @@ name: dirsql Rust CI
 # members, so the workspace-wide unit/lint jobs compile them.
 # The root testing-conventions.toml carries this lane's config and the
 # [rust.coverage] floors the coverage job reads.
+# Turned off: the hourly Tests workflow and CI Gate replace the pull request checks.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/rust/**'
-      - 'packages/ts/napi/**'
-      - 'packages/ts/Cargo.toml'
-      - 'packages/python/src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'testing-conventions.toml'
-      - '.github/workflows/dirsql-rust-ci.yml'
-  pull_request:
-    paths:
-      - 'packages/rust/**'
-      - '!packages/rust/changelog.d/**'
-      - '!packages/rust/migrations.d/**'
-      - '!packages/rust/README.md'
-      - 'packages/ts/napi/**'
-      - 'packages/ts/Cargo.toml'
-      - 'packages/python/src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'testing-conventions.toml'
-      - '.github/workflows/dirsql-rust-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
