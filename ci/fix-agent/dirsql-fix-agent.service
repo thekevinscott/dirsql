@@ -1,0 +1,8 @@
+[Unit]
+Description=dirsql fixing agent: one tick
+
+[Service]
+Type=oneshot
+# GH_TOKEN and GIT_SSH_COMMAND for the bot identity.
+EnvironmentFile=%h/.config/dirsql-fix-agent/env
+ExecStart=/usr/bin/env uv run --with %h/work/code/research/botbox/packages/python %h/work/code/projects/developer-tooling/dirsql/ci/fix-agent/fix_agent.py

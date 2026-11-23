@@ -1,0 +1,9 @@
+[Unit]
+Description=dirsql fixing agent: check the state every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

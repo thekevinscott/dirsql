@@ -189,7 +189,7 @@ jobs:
 
           ran='.["last_" + $kind] = $sha | if $kind == "measured" then .last_measured_at = (now | floor) else . end'
           if [ "$outcome" = pass ]; then
-            edit "$ran | .red = false | .fails = 0 | .last_green = \$sha"
+            edit "$ran | .red = false | .fails = 0 | .waiting = false | .last_green = \$sha"
           elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             edit '.fails = (.fails // 0) + 1'
           else
@@ -212,7 +212,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/check-runs" -f name='CI Gate' \
               -f head_sha="$(git rev-parse HEAD)" -f status=completed -f conclusion=success > /dev/null
             gh pr merge "$pr" --squash --delete-branch
-            edit '.red = false | .fails = 0 | .rolled_back_from = $sha'
+            edit '.red = false | .fails = 0 | .waiting = false | .rolled_back_from = $sha'
           fi
 
           echo "$state" > "$state_dir/state.json"
