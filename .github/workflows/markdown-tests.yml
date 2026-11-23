@@ -5,7 +5,7 @@ name: Tests
 
 on:
   schedule:
-    - cron: "7 * * * *"
+    - cron: "*/5 * * * *"
   # Only the fixing agent starts a run by hand, to confirm a fix while red.
   workflow_dispatch:
 
