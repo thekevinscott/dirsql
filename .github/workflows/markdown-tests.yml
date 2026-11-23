@@ -4,8 +4,6 @@ name: Tests
 # last_green, last_plain, last_measured, last_measured_at, waiting, question.
 
 on:
-  schedule:
-    - cron: "*/6 * * * *"
   # Only the fixing agent starts a run by hand, to confirm a fix while red.
   workflow_dispatch:
 
