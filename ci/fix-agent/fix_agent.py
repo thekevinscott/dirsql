@@ -87,6 +87,10 @@ async def tick(repo: str, owner: str, runs: Path, give_up_after: int) -> None:
     clone, output = work / "repo", runs / f"{sha[:8]}-{state.get('fails', 0)}"
     sh("git", "clone", "-q", f"git@github.com:{repo}.git", str(clone))
 
+    # The box's package installs leave a store in the mount.
+    with (clone / ".git/info/exclude").open("a") as exclude:
+        exclude.write(".pnpm-store/\n")
+
     log = clone / ".fix-agent-run.log"
     question = clone / ".fix-agent-question.md"
     failed = json.loads(sh("gh", "run", "list", "--repo", repo, "--workflow", WORKFLOW,
