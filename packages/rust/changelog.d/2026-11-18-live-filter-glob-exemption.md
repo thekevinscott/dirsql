@@ -1,0 +1,1 @@
+**Fixed** A file under a gitignored directory that a table glob spells out with no wildcard is now kept current while watching, as the startup scan indexes it: deleting or editing it updates the index instead of leaving a stale row.

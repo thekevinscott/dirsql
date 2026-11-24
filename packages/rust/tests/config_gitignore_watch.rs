@@ -47,3 +47,29 @@ fn a_gitignored_file_created_while_watching_is_not_indexed() {
 
     assert_eq!(names(&db), vec!["keep.md"], "events: {seen:?}");
 }
+
+#[test]
+fn a_file_a_glob_spells_under_a_gitignored_directory_leaves_the_index_when_deleted() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+    fs::create_dir(dir.path().join("build")).unwrap();
+    fs::write(dir.path().join("build/x.md"), "x").unwrap();
+    let table = Table::new("t", "CREATE TABLE t (name TEXT)", "build/x.md", |path| {
+        let name = path.rsplit(['/', '\\']).next().unwrap().to_string();
+        vec![HashMap::from([("name".into(), Value::Text(name))])]
+    });
+    let db = DirSQL::new(dir.path(), vec![table]).unwrap();
+    assert_eq!(names(&db), vec!["x.md"]);
+    thread::sleep(Duration::from_millis(250));
+
+    fs::remove_file(dir.path().join("build/x.md")).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen = Vec::new();
+    while Instant::now() < deadline && !seen.iter().any(|e| matches!(e, RowEvent::Delete { .. })) {
+        seen.extend(db.poll_events(Duration::from_millis(200)).unwrap());
+    }
+
+    assert!(names(&db).is_empty(), "events: {seen:?}");
+}
