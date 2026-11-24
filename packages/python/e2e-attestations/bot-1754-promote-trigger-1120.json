@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1795204458,
+  "exit_code": 0,
+  "commit": "c4692cc775fe000e6cfa35fa33d9b5549fcc7647",
+  "branch": "bot/1754-promote-trigger-1120"
+}
