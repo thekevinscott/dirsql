@@ -166,13 +166,13 @@ impl StatementScope {
     /// Hand `on_row` columns `columns` of every row of table `name`, in the
     /// order a full scan of it yields them, without stepping SQLite. False,
     /// having handed nothing, when no table here answers to `name` or its
-    /// rows do not hold one of `columns`.
+    /// rows do not hold one of `columns`; the scan's error when it failed.
     pub fn each_row(
         &self,
         name: &str,
         columns: &[usize],
         on_row: &mut dyn FnMut(&[ValueRef<'_>]),
-    ) -> bool {
+    ) -> std::result::Result<bool, String> {
         let cache = self
             .tables
             .lock()
@@ -180,7 +180,7 @@ impl StatementScope {
             .iter()
             .filter(|(table, _)| table == name)
             .find_map(|(_, cache)| cache.upgrade());
-        cache.is_some_and(|cache| cache.each_row(columns, on_row))
+        cache.map_or(Ok(false), |cache| cache.each_row(columns, on_row))
     }
 
     fn adopt(&self, name: String, cache: Weak<dyn Held + Send + Sync>) {
@@ -199,7 +199,11 @@ impl Drop for StatementGuard {
 trait Held {
     fn evict(&self);
     fn warm(&self);
-    fn each_row(&self, columns: &[usize], on_row: &mut dyn FnMut(&[ValueRef<'_>])) -> bool;
+    fn each_row(
+        &self,
+        columns: &[usize],
+        on_row: &mut dyn FnMut(&[ValueRef<'_>]),
+    ) -> std::result::Result<bool, String>;
 }
 
 /// One table's rows for the statement in progress, empty between statements.
@@ -278,12 +282,19 @@ impl<S: TableSource> Held for RowCache<S> {
         self.warm();
     }
 
-    fn each_row(&self, columns: &[usize], on_row: &mut dyn FnMut(&[ValueRef<'_>])) -> bool {
+    fn each_row(
+        &self,
+        columns: &[usize],
+        on_row: &mut dyn FnMut(&[ValueRef<'_>]),
+    ) -> std::result::Result<bool, String> {
         if !columns.iter().all(|&i| i < S::HELD_COLUMNS) {
-            return false;
+            return Ok(false);
         }
         let rows = self.rows();
-        for chunk in (0..).map_while(|n| rows.chunk(n)) {
+        for n in 0.. {
+            let Some(chunk) = rows.chunk(n)? else {
+                break;
+            };
             let mut cells = Vec::with_capacity(columns.len());
             for row in chunk.iter() {
                 cells.clear();
@@ -291,7 +302,7 @@ impl<S: TableSource> Held for RowCache<S> {
                 on_row(&cells);
             }
         }
-        true
+        Ok(true)
     }
 }
 
@@ -500,12 +511,12 @@ struct Reading<R> {
 }
 
 impl<R> Reading<R> {
-    fn from(rows: &RowStream<R>, n: usize, start: usize) -> Self {
-        Self {
+    fn from(rows: &RowStream<R>, n: usize, start: usize) -> Result<Self> {
+        Ok(Self {
             n,
             start,
-            chunk: rows.chunk(n),
-        }
+            chunk: rows.chunk(n).map_err(Error::ModuleError)?,
+        })
     }
 
     fn done() -> Self {
@@ -522,12 +533,12 @@ impl<R> Reading<R> {
 
     /// The reading that holds `step`, moving on a chunk once this one is
     /// read through.
-    fn advanced(self, rows: &RowStream<R>, step: usize) -> Self {
+    fn advanced(self, rows: &RowStream<R>, step: usize) -> Result<Self> {
         match &self.chunk {
             Some(chunk) if step >= self.start + chunk.len() => {
                 Self::from(rows, self.n + 1, self.start + chunk.len())
             }
-            _ => self,
+            _ => Ok(self),
         }
     }
 }
@@ -662,29 +673,37 @@ impl<S: TableSource> ScaffoldCursor<S> {
         Arc::clone(self.rows.get_or_insert_with(|| cache.rows()))
     }
 
-    fn settled(&mut self) -> &Settled<S::Row> {
-        let rows = self.rows();
-        self.settled.get_or_insert_with(|| rows.all())
+    fn settled(&mut self) -> Result<&Settled<S::Row>> {
+        if self.settled.is_none() {
+            let all = self.rows().all().map_err(Error::ModuleError)?;
+            self.settled = Some(all);
+        }
+        Ok(self.settled.as_ref().expect("settled above"))
     }
 
-    fn select_by_lookup(&mut self, column: usize, key: &[u8]) -> Selection<S::Row> {
+    fn select_by_lookup(&mut self, column: usize, key: &[u8]) -> Result<Selection<S::Row>> {
         let source = Arc::clone(&self.source);
-        self.settled();
+        self.settled()?;
         let rows = self.settled.as_ref().expect("settled above");
         if let Some(index) = &self.index
             && index.column == column
         {
-            return Selection::Only(index.matching(key));
+            return Ok(Selection::Only(index.matching(key)));
         }
         let row_key = |row, c| source.lookup_key(row, c);
         if self.scanned != Some(column) {
             self.scanned = Some(column);
-            return Selection::Only(scan_matching(rows.iter(), column, key, row_key));
+            return Ok(Selection::Only(scan_matching(
+                rows.iter(),
+                column,
+                key,
+                row_key,
+            )));
         }
         let index = self
             .index
             .insert(LookupIndex::build(rows.iter(), column, row_key));
-        Selection::Only(index.matching(key))
+        Ok(Selection::Only(index.matching(key)))
     }
 
     fn current(&self) -> Option<(usize, &S::Row)> {
@@ -698,18 +717,19 @@ impl<S: TableSource> ScaffoldCursor<S> {
     }
 
     /// Read the prefetch column ahead for every row the filter selected.
-    fn prefetch(&mut self) {
+    fn prefetch(&mut self) -> Result<()> {
         let positions = match &self.selection {
             Selection::Only(positions) => Some(positions.clone()),
             Selection::Every(_) => None,
         };
         let source = Arc::clone(&self.source);
-        let rows = self.settled();
+        let rows = self.settled()?;
         let selected: Vec<&S::Row> = match positions {
             Some(positions) => positions.iter().filter_map(|&p| rows.get(p)).collect(),
             None => rows.iter().collect(),
         };
         source.prefetch(&selected);
+        Ok(())
     }
 }
 
@@ -718,12 +738,12 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
     fn filter(&mut self, idx_num: c_int, _idx_str: Option<&str>, args: &Values<'_>) -> Result<()> {
         let key = args.iter().next().and_then(text_key);
         self.selection = match (lookup_column(idx_num), key) {
-            (Some(column), Some(key)) => self.select_by_lookup(column, key),
-            _ => Selection::Every(Reading::from(&self.rows(), 0, 0)),
+            (Some(column), Some(key)) => self.select_by_lookup(column, key)?,
+            _ => Selection::Every(Reading::from(&self.rows(), 0, 0)?),
         };
         self.step = 0;
         if prefetches(idx_num) {
-            self.prefetch();
+            self.prefetch()?;
         }
         Ok(())
     }
@@ -732,7 +752,7 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
         self.step += 1;
         if let (Selection::Every(reading), Some(rows)) = (&mut self.selection, &self.rows) {
             let current = std::mem::replace(reading, Reading::done());
-            *reading = current.advanced(rows, self.step);
+            *reading = current.advanced(rows, self.step)?;
         }
         Ok(())
     }
@@ -1121,10 +1141,10 @@ mod tests {
     #[test]
     fn a_reading_moves_through_every_chunk_in_order() {
         let stream = stream_of(&[&[1, 2], &[3]]);
-        let mut reading = Reading::from(&stream, 0, 0);
+        let mut reading = Reading::from(&stream, 0, 0).unwrap();
         let mut seen = Vec::new();
         for step in 0.. {
-            reading = reading.advanced(&stream, step);
+            reading = reading.advanced(&stream, step).unwrap();
             match reading.row(step) {
                 Some(row) => seen.push(*row),
                 None => break,
@@ -1136,9 +1156,12 @@ mod tests {
     #[test]
     fn a_reading_keeps_its_chunk_until_read_through() {
         let stream = stream_of(&[&[1, 2], &[3]]);
-        let reading = Reading::from(&stream, 0, 0).advanced(&stream, 1);
+        let reading = Reading::from(&stream, 0, 0)
+            .unwrap()
+            .advanced(&stream, 1)
+            .unwrap();
         assert_eq!((reading.n, reading.start), (0, 0));
-        let reading = reading.advanced(&stream, 2);
+        let reading = reading.advanced(&stream, 2).unwrap();
         assert_eq!((reading.n, reading.start), (1, 2));
         assert_eq!(reading.row(2), Some(&3));
     }
@@ -1146,9 +1169,21 @@ mod tests {
     #[test]
     fn a_reading_finds_no_row_before_its_chunk() {
         let stream = stream_of(&[&[1], &[2]]);
-        let reading = Reading::from(&stream, 1, 1);
+        let reading = Reading::from(&stream, 1, 1).unwrap();
         assert_eq!(reading.row(0), None);
         assert_eq!(reading.row(1), Some(&2));
+    }
+
+    #[test]
+    fn a_reading_past_the_rows_of_a_failed_scan_fails() {
+        let stream = RowStream::default();
+        stream.push(Arc::new(vec![1]));
+        stream.fail("cannot list".into());
+        stream.finish(false);
+        let reading = Reading::from(&stream, 0, 0).unwrap();
+        assert_eq!(reading.row(0), Some(&1));
+        let failed = reading.advanced(&stream, 1).err().unwrap();
+        assert!(failed.to_string().contains("cannot list"), "{failed}");
     }
 
     #[test]
@@ -1279,7 +1314,7 @@ mod tests {
     }
 
     fn contents(rows: &RowStream<usize>) -> Vec<usize> {
-        rows.all().iter().copied().collect()
+        rows.all().unwrap().iter().copied().collect()
     }
 
     #[test]
@@ -1457,7 +1492,7 @@ mod tests {
         let read = scope.each_row(name, columns, &mut |cells| {
             rows.push(cells.iter().map(|cell| cell.as_i64().unwrap()).collect());
         });
-        read.then_some(rows)
+        read.unwrap().then_some(rows)
     }
 
     #[test]
@@ -1664,7 +1699,7 @@ mod tests {
     }
 
     fn scan_every(cursor: &mut ScaffoldCursor<Words>) {
-        cursor.selection = Selection::Every(Reading::from(&cursor.rows(), 0, 0));
+        cursor.selection = Selection::Every(Reading::from(&cursor.rows(), 0, 0).unwrap());
         cursor.step = 0;
     }
 
@@ -1703,7 +1738,7 @@ mod tests {
     #[test]
     fn a_lookup_selects_only_the_rows_carrying_the_key() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, b"a");
+        cursor.selection = cursor.select_by_lookup(1, b"a").unwrap();
 
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
     }
@@ -1711,7 +1746,7 @@ mod tests {
     #[test]
     fn a_lookup_keeps_the_scan_position_as_the_rowid() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, b"a");
+        cursor.selection = cursor.select_by_lookup(1, b"a").unwrap();
         cursor.next().unwrap();
 
         assert_eq!(cursor.current().map(|(_, row)| *row), Some("ax"));
@@ -1721,7 +1756,7 @@ mod tests {
     #[test]
     fn a_lookup_for_an_absent_key_is_at_eof() {
         let mut cursor = cursor_over(vec!["ab"]);
-        cursor.selection = cursor.select_by_lookup(1, b"z");
+        cursor.selection = cursor.select_by_lookup(1, b"z").unwrap();
         assert!(cursor.eof());
     }
 
@@ -1729,8 +1764,8 @@ mod tests {
     fn a_cursor_scans_its_source_once() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
         cursor.rows();
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(1, b"c");
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(1, b"c").unwrap();
 
         assert_eq!(
             cursor
@@ -1744,7 +1779,7 @@ mod tests {
     #[test]
     fn a_single_lookup_builds_no_index() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.selection = cursor.select_by_lookup(1, b"a");
+        cursor.selection = cursor.select_by_lookup(1, b"a").unwrap();
 
         assert!(cursor.index.is_none());
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
@@ -1753,8 +1788,8 @@ mod tests {
     #[test]
     fn a_second_lookup_on_a_column_builds_its_index() {
         let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
-        cursor.select_by_lookup(1, b"c");
-        cursor.selection = cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"c").unwrap();
+        cursor.selection = cursor.select_by_lookup(1, b"a").unwrap();
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 1);
         assert_eq!(selected(&cursor), vec!["ab", "ax"]);
@@ -1763,10 +1798,10 @@ mod tests {
     #[test]
     fn a_cursor_builds_its_index_once_per_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(1, b"a");
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(1, b"a").unwrap();
         let first = cursor.index.as_ref().unwrap() as *const LookupIndex;
-        cursor.select_by_lookup(1, b"c");
+        cursor.select_by_lookup(1, b"c").unwrap();
         let second = cursor.index.as_ref().unwrap() as *const LookupIndex;
 
         assert_eq!(first, second);
@@ -1776,10 +1811,10 @@ mod tests {
     #[test]
     fn a_cursor_rebuilds_its_index_for_a_different_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(0, b"a");
-        cursor.selection = cursor.select_by_lookup(0, b"a");
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(0, b"a").unwrap();
+        cursor.selection = cursor.select_by_lookup(0, b"a").unwrap();
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 0);
         assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
@@ -1788,9 +1823,9 @@ mod tests {
     #[test]
     fn a_single_lookup_on_another_column_keeps_the_index() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(1, b"a");
-        cursor.selection = cursor.select_by_lookup(0, b"a");
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.selection = cursor.select_by_lookup(0, b"a").unwrap();
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 1);
         assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
@@ -1881,9 +1916,9 @@ mod tests {
     fn a_second_lookup_on_the_same_column_reuses_the_index() {
         let mut cursor = cursor_over(vec!["ant", "bat", "bee"]);
 
-        cursor.select_by_lookup(1, b"b");
-        cursor.select_by_lookup(1, b"a");
-        cursor.select_by_lookup(1, b"b");
+        cursor.select_by_lookup(1, b"b").unwrap();
+        cursor.select_by_lookup(1, b"a").unwrap();
+        cursor.select_by_lookup(1, b"b").unwrap();
 
         let keyed = cursor
             .source

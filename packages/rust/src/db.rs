@@ -1880,7 +1880,7 @@ impl Db {
             }
         });
         not_utf8?;
-        if read {
+        if read? {
             return Ok(state);
         }
         bind(&mut stmt, params)?;
@@ -1969,14 +1969,20 @@ impl Db {
         sql: &str,
         reads: &HashSet<String>,
         on_row: &mut dyn FnMut(&[ValueRef<'_>]),
-    ) -> bool {
+    ) -> Result<bool> {
         let mut tables = reads.iter();
         let (Some(table), None) = (tables.next(), tables.next()) else {
-            return false;
+            return Ok(false);
         };
-        self.program(sql)
+        let Some(columns) = self
+            .program(sql)
             .and_then(|program| scanned_columns(&program))
-            .is_some_and(|columns| self.scope.each_row(table, &columns, on_row))
+        else {
+            return Ok(false);
+        };
+        self.scope
+            .each_row(table, &columns, on_row)
+            .map_err(|message| DbError::Sqlite(rusqlite::Error::ModuleError(message)))
     }
 
     /// The program SQLite compiles `sql` to, as `EXPLAIN` lists it.
@@ -2711,8 +2717,14 @@ mod tests {
         let (_limited_stmt, _, limited_reads) = db.prepare_reading(limited).unwrap();
         let mut rows = 0;
 
-        assert!(db.read_directly(plain, &plain_reads, &mut |_| rows += 1));
-        assert!(!db.read_directly(limited, &limited_reads, &mut |_| rows += 1));
+        assert!(
+            db.read_directly(plain, &plain_reads, &mut |_| rows += 1)
+                .unwrap()
+        );
+        assert!(
+            !db.read_directly(limited, &limited_reads, &mut |_| rows += 1)
+                .unwrap()
+        );
         assert_eq!(rows, 0);
     }
 
@@ -2724,8 +2736,14 @@ mod tests {
 
         assert!(db.program("SELECT a FROM t").is_some());
         assert!(db.program("SELECT a FROM").is_none());
-        assert!(!db.read_directly("SELECT a FROM t", &reads, &mut |_| {}));
-        assert!(!db.read_directly("SELECT 1", &HashSet::new(), &mut |_| {}));
+        assert!(
+            !db.read_directly("SELECT a FROM t", &reads, &mut |_| {})
+                .unwrap()
+        );
+        assert!(
+            !db.read_directly("SELECT 1", &HashSet::new(), &mut |_| {})
+                .unwrap()
+        );
     }
 
     #[test]

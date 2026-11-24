@@ -156,3 +156,82 @@ fn a_config_table_through_a_link_to_an_unlistable_folder_fails_its_build_naming_
         .to_string();
     assert_names(&message, &index.join("link"));
 }
+
+fn streamed(root: &Path) -> DirSQL {
+    DirSQL::builder().root(root).build().unwrap()
+}
+
+#[test]
+fn a_path_table_over_an_unlistable_folder_fails_naming_it() {
+    let Some((root, locked)) = tree() else {
+        return;
+    };
+    let result = streamed(root.path()).query("SELECT path FROM './data/**/*.ndjson'");
+    make_listable(&locked);
+
+    let message = result
+        .expect_err("an unlistable folder must fail the query")
+        .to_string();
+    assert_names(&message, &locked);
+}
+
+#[test]
+fn a_path_table_read_straight_through_fails_naming_an_unlistable_folder() {
+    let Some((root, locked)) = tree() else {
+        return;
+    };
+    let result = streamed(root.path()).query_each(
+        "SELECT * FROM './data/**/*.ndjson'",
+        |_| 0,
+        |n, _| *n += 1,
+    );
+    make_listable(&locked);
+
+    let message = result
+        .expect_err("an unlistable folder must fail the query")
+        .to_string();
+    assert_names(&message, &locked);
+}
+
+#[test]
+fn a_path_table_lookup_fails_naming_an_unlistable_folder() {
+    let Some((root, locked)) = tree() else {
+        return;
+    };
+    let result = streamed(root.path())
+        .query("SELECT path FROM './data/**/*.ndjson' WHERE path = 'data/open/a.ndjson'");
+    make_listable(&locked);
+
+    let message = result
+        .expect_err("an unlistable folder must fail the query")
+        .to_string();
+    assert_names(&message, &locked);
+}
+
+#[test]
+fn a_path_table_literal_path_inside_an_unlistable_folder_fails_naming_it() {
+    let Some((root, locked)) = tree() else {
+        return;
+    };
+    let result = streamed(root.path()).query("SELECT path FROM './data/locked/b.ndjson'");
+    make_listable(&locked);
+
+    let message = result
+        .expect_err("an unlistable folder must fail the query")
+        .to_string();
+    assert_names(&message, &locked);
+}
+
+#[test]
+fn a_path_table_over_a_missing_folder_is_still_a_listable_one() {
+    let Some((root, locked)) = tree() else {
+        return;
+    };
+    let rows = streamed(root.path()).query("SELECT path FROM './data/{open,missing}/*.ndjson'");
+    make_listable(&locked);
+
+    assert_eq!(
+        rows.unwrap()[0]["path"],
+        Value::Text("data/open/a.ndjson".into())
+    );
+}
